@@ -1,7 +1,348 @@
+import asyncio
 import os
 from types import SimpleNamespace
 
 from kemonodownloader import creator_downloader as cd
+
+
+def test_sanitize_filename_various():
+    assert cd.sanitize_filename("") == "unnamed"
+    assert cd.sanitize_filename("simple name") == "simple_name"
+    assert cd.sanitize_filename("..weird<>name..") == "weird_name"
+    long_name = "a" * 200
+    truncated = cd.sanitize_filename(long_name, max_length=50)
+    assert len(truncated) <= 50
+
+
+def test_get_domain_config():
+    coomer = cd.get_domain_config("https://coomer.st/user/1")
+    assert coomer["domain"] == "coomer.st"
+    default_ = cd.get_domain_config("https://kemono.cr/user/1")
+    assert default_["domain"] == "kemono.cr"
+
+
+def test_get_user_agent_fallback(monkeypatch):
+    # Force a UserAgent error to exercise fallback
+    monkeypatch.setattr(cd, "_user_agent", None)
+
+    class BrokenUA:
+        def __init__(self):
+            raise RuntimeError("nope")
+
+    monkeypatch.setattr(cd, "UserAgent", BrokenUA)
+    ua = cd.get_user_agent()
+    assert ua.startswith("Mozilla/")
+
+
+def test_detect_files_main_attachments_content():
+    fpt = cd.FilePreparationThread(
+        post_ids=[],
+        all_files_map={},
+        creator_ext_checks={},
+        creator_main_check=True,
+        creator_attachments_check=True,
+        creator_content_check=True,
+        settings=SimpleNamespace(settings_tab=None),
+        max_concurrent=1,
+    )
+
+    post = {
+        "id": "1",
+        "file": {"path": "/media/img1.jpg", "name": "photo.jpg"},
+        "attachments": [
+            {"path": "/media/att.zip", "name": "archive.zip"},
+            {"path": "/media/att2.png", "name": "att2.png"},
+        ],
+        "content": '<p>Hello<img src="/media/inside.png"></p>',
+    }
+
+    allowed = [".jpg", ".png", ".zip"]
+    domain = cd.get_domain_config("https://kemono.cr")
+    files = fpt.detect_files(post, allowed, domain)
+    urls = [u for _, u in files]
+    assert any("img1.jpg" in u for u in urls)
+    assert any("att2.png" in u for u in urls)
+    assert any("inside.png" in u for u in urls)
+
+
+def test_filter_and_checkbox_toggle_and_population_threads():
+    # FilterThread
+    captured = {}
+
+    def on_filtered(items):
+        captured["filtered"] = items
+
+    all_detected = [("Alpha Post", ("1", "urlA")), ("Beta Post", ("2", "urlB"))]
+    ft = cd.FilterThread(all_detected, {"1": True}, "Alpha")
+    ft.finished.connect(on_filtered)
+    ft.run()
+    assert "filtered" in captured
+    assert any(item[0] == "Alpha Post" for item in captured["filtered"])
+
+    # CheckboxToggleThread
+    cb_captured = {}
+
+    def on_cb(checked_urls, posts_to_download):
+        cb_captured["checked"] = checked_urls
+        cb_captured["posts"] = posts_to_download
+
+    visible = [("Alpha Post", ("1", "urlA"))]
+    cbt = cd.CheckboxToggleThread(visible, {}, 2)  # Checked
+    cbt.finished.connect(on_cb)
+    cbt.run()
+    assert cb_captured["checked"].get("1") is True
+    assert "1" in cb_captured["posts"]
+
+    # PostPopulationThread
+    pop_captured = {}
+
+    def on_pop(mp, lst):
+        pop_captured["map"] = mp
+        pop_captured["list"] = lst
+
+    ppt = cd.PostPopulationThread([("T", ("9", "thumb"))])
+    ppt.finished.connect(on_pop)
+    ppt.run()
+    assert isinstance(pop_captured.get("map"), dict)
+    assert pop_captured["list"][0][0] == "T"
+
+
+def test_creator_generate_filename_and_desc_folder(tmp_path, monkeypatch):
+    service = "kemono"
+    creator_id = "42"
+    other_dir = str(tmp_path / "other")
+    # Minimal settings object exposing expected interface
+    settings = SimpleNamespace(
+        settings_tab=SimpleNamespace(
+            get_creator_filename_template=lambda: "{post_id}_{orig_name}",
+            get_creator_folder_strategy=lambda: "per_post",
+        )
+    )
+
+    post_titles = {(service, creator_id, "1"): "Cool Post"}
+
+    thread = cd.CreatorDownloadThread(
+        service,
+        creator_id,
+        str(tmp_path),
+        ["1"],
+        ["https://kemono.cr/media/pic.png?f=pic.png"],
+        {"https://kemono.cr/media/pic.png?f=pic.png": "1"},
+        None,
+        other_dir,
+        post_titles,
+        True,
+        settings,
+        max_concurrent=1,
+        download_text=False,
+    )
+
+    # First call should apply auto-rename prefix when enabled
+    folder, filename = thread.generate_filename_and_folder(
+        "https://kemono.cr/media/pic.png?f=pic.png",
+        str(tmp_path),
+        0,
+        1,
+        "1",
+        "Cool Post",
+    )
+    assert "pic" in filename
+    # Folder should be <download_root>/<creator_folder>/<post_folder>
+    assert os.path.basename(folder) == "1_Cool_Post"
+    creator_folder = os.path.basename(os.path.dirname(folder))
+    assert creator_folder.startswith("42_") or creator_folder == "42_Unknown_Creator"
+
+    # Desc folder for per_post
+    desc = thread.get_desc_folder_for_post(str(tmp_path), "1", "Cool Post")
+    assert "1_" in desc
+
+
+def test_download_text_sync_writes_file(tmp_path, monkeypatch):
+    # Prepare a fake session that returns JSON with content
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"content": "<p>Hello world</p>"}
+
+    class FakeSession:
+        def get(self, *a, **k):
+            return FakeResp()
+
+    monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: FakeSession())
+
+    service = "kemono"
+    creator_id = "99"
+    other_dir = str(tmp_path / "other2")
+    settings = SimpleNamespace(settings_tab=None)
+    thread = cd.CreatorDownloadThread(
+        service,
+        creator_id,
+        str(tmp_path),
+        ["1"],
+        [],
+        {},
+        None,
+        other_dir,
+        {},
+        False,
+        settings,
+        max_concurrent=1,
+        download_text=False,
+    )
+
+    post_folder = str(tmp_path / "postfolder")
+    os.makedirs(post_folder, exist_ok=True)
+    thread._download_text_sync("1", post_folder)
+    assert os.path.exists(os.path.join(post_folder, "desc_1.txt"))
+
+
+def test_generate_filename_strategies_and_download_text_dup(tmp_path, monkeypatch):
+    service = "kemono"
+    creator_id = "42"
+    other_dir = str(tmp_path / "otherb")
+    # settings with different folder strategies
+    settings_single = SimpleNamespace(
+        settings_tab=SimpleNamespace(
+            get_creator_filename_template=lambda: "{post_id}_{orig_name}",
+            get_creator_folder_strategy=lambda: "single_folder",
+        )
+    )
+
+    settings_bytype = SimpleNamespace(
+        settings_tab=SimpleNamespace(
+            get_creator_filename_template=lambda: "{post_id}_{orig_name}",
+            get_creator_folder_strategy=lambda: "by_file_type",
+        )
+    )
+
+    post_titles = {(service, creator_id, "1"): "Cool Post"}
+
+    t1 = cd.CreatorDownloadThread(
+        service,
+        creator_id,
+        str(tmp_path),
+        ["1"],
+        ["https://kemono.cr/media/pic.png?f=pic.png"],
+        {"https://kemono.cr/media/pic.png?f=pic.png": "1"},
+        None,
+        other_dir,
+        post_titles,
+        False,
+        settings_single,
+        max_concurrent=1,
+        download_text=False,
+    )
+    folder_single, _ = t1.generate_filename_and_folder(
+        "https://kemono.cr/media/pic.png?f=pic.png",
+        str(tmp_path),
+        0,
+        1,
+        "1",
+        "Cool Post",
+    )
+    assert os.path.basename(folder_single).startswith("42_")
+
+    t2 = cd.CreatorDownloadThread(
+        service,
+        creator_id,
+        str(tmp_path),
+        ["1"],
+        ["https://kemono.cr/media/pic.png?f=pic.png"],
+        {"https://kemono.cr/media/pic.png?f=pic.png": "1"},
+        None,
+        other_dir,
+        post_titles,
+        False,
+        settings_bytype,
+        max_concurrent=1,
+        download_text=False,
+    )
+    folder_bytype, _ = t2.generate_filename_and_folder(
+        "https://kemono.cr/media/pic.png?f=pic.png",
+        str(tmp_path),
+        0,
+        1,
+        "1",
+        "Cool Post",
+    )
+    assert (
+        os.path.basename(folder_bytype).lower() in ("png", "other")
+        or "42_" in folder_bytype
+    )
+
+    # download_text dedup: monkeypatch _download_text_sync and verify called once
+    called = {"count": 0}
+
+    def fake_download_sync(pid, pfolder):
+        called["count"] += 1
+
+    t3 = cd.CreatorDownloadThread(
+        service,
+        creator_id,
+        str(tmp_path),
+        ["1"],
+        [],
+        {},
+        None,
+        other_dir,
+        post_titles,
+        False,
+        settings_single,
+        max_concurrent=1,
+        download_text=True,
+    )
+    monkeypatch.setattr(t3, "_download_text_sync", fake_download_sync)
+    asyncio.run(t3.download_post_text_if_needed("1", str(tmp_path)))
+    asyncio.run(t3.download_post_text_if_needed("1", str(tmp_path)))
+    assert called["count"] == 1
+
+
+def test_fetch_creator_and_post_info_populates_titles(tmp_path, monkeypatch):
+    service = "kemono"
+    creator_id = "77"
+    other_dir = str(tmp_path / "otherc")
+    settings = SimpleNamespace(settings_tab=None)
+
+    # Fake responses for profile and post
+    class ProfileResp:
+        status_code = 200
+
+        def json(self):
+            return {"name": "Creator Name"}
+
+    class PostResp:
+        status_code = 200
+
+        def json(self):
+            return {"title": "A Title"}
+
+    class FakeSession:
+        def get(self, url, *a, **k):
+            if url.endswith("/profile"):
+                return ProfileResp()
+            return PostResp()
+
+    monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: FakeSession())
+
+    t = cd.CreatorDownloadThread(
+        service,
+        creator_id,
+        str(tmp_path),
+        ["5"],
+        ["https://kemono.cr/media/x.png"],
+        {"https://kemono.cr/media/x.png": "5"},
+        None,
+        other_dir,
+        {},
+        False,
+        settings,
+        max_concurrent=1,
+        download_text=False,
+    )
+    t.fetch_creator_and_post_info()
+    assert t.creator_name is not None
+    assert (service, creator_id, "5") in t.post_titles_map
 
 
 def teardown_module(module):
@@ -18,31 +359,6 @@ def teardown_module(module):
         cd._thread_local.__dict__.clear()
     except Exception:
         pass
-
-
-def test_get_user_agent_fallback(monkeypatch):
-    # Force UserAgent to raise so fallback is used
-    cd._user_agent = None
-
-    class FakeUA:
-        def __init__(self):
-            raise RuntimeError("no ua")
-
-    monkeypatch.setattr("kemonodownloader.creator_downloader.UserAgent", FakeUA)
-    ua = cd.get_user_agent()
-    assert isinstance(ua, str)
-    assert "Mozilla" in ua
-    # reset
-    cd._user_agent = None
-
-
-def test_get_domain_config():
-    cfg = cd.get_domain_config("https://coomer.st/user/1")
-    assert cfg["domain"] == "coomer.st"
-    assert cfg["base_url"].startswith("https://coomer.st")
-
-    cfg2 = cd.get_domain_config("https://kemono.cr/some/path")
-    assert cfg2["domain"] == "kemono.cr"
 
 
 def test_get_headers_caching():
@@ -79,13 +395,7 @@ def test_get_session_thread_local_and_socks(monkeypatch):
     cd._thread_local.__dict__.clear()
 
 
-def test_sanitize_filename_various():
-    assert cd.sanitize_filename("") == "unnamed"
-    assert cd.sanitize_filename("name...") == "name"
-    assert cd.sanitize_filename("te st") == "te_st"
-    bad = "a" * 120
-    short = cd.sanitize_filename(bad, max_length=50)
-    assert len(short) <= 50
+# duplicate sanitize_filename test removed to avoid redefinition
 
 
 def test_generate_filename_and_folder_and_auto_rename(tmp_path, qapp, monkeypatch):

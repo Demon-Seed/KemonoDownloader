@@ -1,8 +1,182 @@
+import asyncio
 import gzip
+import hashlib
 import json
+import os
 from types import SimpleNamespace
 
 from kemonodownloader import creator_downloader as cd
+
+
+def test_get_headers_and_session_proxy_behavior(monkeypatch):
+    # Reset cached headers and user agent
+    monkeypatch.setattr(cd, "HEADERS", None)
+    monkeypatch.setattr(cd, "_user_agent", "test-agent")
+    headers = cd.get_headers()
+    assert headers["User-Agent"] == "test-agent"
+
+    # Clear thread-local sessions if present
+    try:
+        delattr(cd._thread_local, "session")
+    except Exception:
+        pass
+    try:
+        delattr(cd._thread_local, "socks_session")
+    except Exception:
+        pass
+
+    # HTTP proxy
+    settings_tab = SimpleNamespace(
+        get_proxy_settings=lambda: {"http": "http://127.0.0.1:8080"}
+    )
+    sess = cd.get_session(settings_tab)
+    assert sess.proxies.get("http") == "http://127.0.0.1:8080"
+
+    # SOCKS proxy uses socks_session
+    try:
+        delattr(cd._thread_local, "session")
+    except Exception:
+        pass
+    try:
+        delattr(cd._thread_local, "socks_session")
+    except Exception:
+        pass
+    settings_tab2 = SimpleNamespace(
+        get_proxy_settings=lambda: {"http": "socks5://127.0.0.1:1080"}
+    )
+    socks = cd.get_session(settings_tab2)
+    assert hasattr(cd._thread_local, "socks_session")
+    assert "socks5" in list(socks.proxies.values())[0]
+
+
+def test_preview_thread_uses_cache(tmp_path):
+    # Create a small valid image via QPixmap and save as the cache file
+    from PyQt6.QtGui import QColor, QPixmap
+
+    url = "https://example.com/image.jpg"
+    cache_key = hashlib.md5(url.encode()).hexdigest() + os.path.splitext(url)[1]
+    cache_dir = str(tmp_path / "cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, cache_key)
+    pix = QPixmap(8, 8)
+    pix.fill(QColor("red"))
+    # Save using the extension-derived format
+    pix.save(cache_path)
+
+    captured = {}
+
+    def on_preview(u, pix):
+        captured["url"] = u
+        captured["pix"] = pix
+
+    pt = cd.PreviewThread(url, cache_dir, settings_tab=None)
+    pt.preview_ready.connect(on_preview)
+    pt.run()
+    assert captured.get("url") == url
+    assert captured.get("pix") is not None
+
+
+def test_validation_thread_detects_invalid_url():
+    settings = SimpleNamespace(settings_tab=None)
+    vt = cd.ValidationThread("https://kemono.cr/bad", settings)
+    captured = {}
+
+    def on_result(val):
+        captured["result"] = val
+
+    vt.result.connect(on_result)
+    vt.run()
+    assert captured.get("result") is False
+
+
+def test_post_detection_thread_invalid_url_emits_error():
+    settings = cd.ThreadSettings(1, 1, 1, 1, 1, settings_tab=None)
+    captured = {}
+
+    def on_error(msg):
+        captured["error"] = msg
+
+    pdt = cd.PostDetectionThread("https://kemono.cr/invalid", {}, settings)
+    pdt.error.connect(on_error)
+    pdt.run()
+    assert captured.get("error")
+
+
+def test_fetch_and_detect_files_respects_response(monkeypatch):
+    # Fake session that returns a post payload
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "post": {"id": "7", "file": {"path": "/media/x.jpg", "name": "x.jpg"}}
+            }
+
+    class FakeSession:
+        def get(self, *a, **k):
+            return FakeResp()
+
+    monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: FakeSession())
+
+    # fake checkboxes mapping
+    class Box:
+        def __init__(self, v):
+            self._v = v
+
+        def isChecked(self):
+            return self._v
+
+    fpt = cd.FilePreparationThread(
+        [],
+        {},
+        {".jpg": Box(True)},
+        True,
+        True,
+        True,
+        cd.ThreadSettings(1, 1, 1, 1, 1, settings_tab=None),
+        max_concurrent=1,
+    )
+    res = fpt.fetch_and_detect_files("7", "https://kemono.cr/user/42")
+    assert res is not None
+    pid, files = res
+    assert pid == "7"
+    assert any("x.jpg" in u for _, u in files)
+
+
+def test_download_file_short_circuit_with_hash(tmp_path):
+    service = "kemono"
+    creator_id = "8"
+    other_dir = str(tmp_path / "hdb")
+    settings = SimpleNamespace(settings_tab=None)
+
+    file_url = "https://kemono.cr/media/file.bin"
+    thread = cd.CreatorDownloadThread(
+        service,
+        creator_id,
+        str(tmp_path),
+        ["1"],
+        [file_url],
+        {file_url: "1"},
+        None,
+        other_dir,
+        {},
+        False,
+        settings,
+        max_concurrent=1,
+        download_text=False,
+    )
+
+    # create an existing file and register it in the hash DB
+    existing = tmp_path / "existing.bin"
+    existing.write_bytes(b"hello world")
+    file_hash = hashlib.md5(existing.read_bytes()).hexdigest()
+    url_hash = hashlib.md5(file_url.encode()).hexdigest()
+    thread.hash_db.store(
+        url_hash, str(existing), file_hash, file_url, existing.stat().st_size
+    )
+
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1))
+    assert file_url in thread.completed_files
 
 
 def make_gzipped_json(obj):
