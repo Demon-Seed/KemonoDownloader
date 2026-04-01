@@ -3845,6 +3845,33 @@ class CreatorDownloaderTab(QWidget):
 
     def cleanup_thread(self, thread, remaining_urls):
         """Clean up a download thread and proceed to the next creator or finish."""
+        # Transfer failed files from thread to tab if present (handle threads
+        # that weren't tracked in active_threads as well)
+        try:
+            thread_failed = getattr(thread, "failed_files", None)
+            if thread_failed:
+                try:
+                    with self.failed_files_lock:
+                        if isinstance(thread_failed, dict):
+                            self.failed_files.update(thread_failed)
+                        else:
+                            for k, v in dict(thread_failed).items():
+                                self.failed_files[k] = v
+                    self.append_log_to_console(
+                        translate(
+                            "log_debug",
+                            translate(
+                                "transferred_from",
+                                len(thread_failed),
+                                thread.__class__.__name__,
+                            ),
+                        ),
+                        "INFO",
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
         if thread in self.active_threads:
             self.active_threads.remove(thread)
             self.append_log_to_console(
@@ -3853,20 +3880,34 @@ class CreatorDownloaderTab(QWidget):
                 ),
                 "INFO",
             )
-            # Transfer failed files from thread to tab
-            if isinstance(thread, CreatorDownloadThread):
-                self.failed_files.update(thread.failed_files)
-                self.append_log_to_console(
-                    translate(
-                        "log_debug",
-                        translate(
-                            "transferred_from",
-                            len(thread.failed_files),
-                            thread.__class__.__name__,
-                        ),
-                    ),
-                    "INFO",
-                )
+            # Transfer failed files from thread to tab if present
+            try:
+                thread_failed = getattr(thread, "failed_files", None)
+                if thread_failed:
+                    try:
+                        with self.failed_files_lock:
+                            # Prefer dict-like update but handle other mappings gracefully
+                            if isinstance(thread_failed, dict):
+                                self.failed_files.update(thread_failed)
+                            else:
+                                for k, v in dict(thread_failed).items():
+                                    self.failed_files[k] = v
+                        self.append_log_to_console(
+                            translate(
+                                "log_debug",
+                                translate(
+                                    "transferred_from",
+                                    len(thread_failed),
+                                    thread.__class__.__name__,
+                                ),
+                            ),
+                            "INFO",
+                        )
+                    except Exception:
+                        # Ignore failures during transfer to avoid breaking cleanup
+                        pass
+            except Exception:
+                pass
 
         # Ensure the native thread has fully exited before we let the object
         # be garbage-collected — otherwise Qt prints
@@ -3938,6 +3979,26 @@ class CreatorDownloaderTab(QWidget):
                 ),
                 "INFO",
             )
+
+        # Ensure failed files from the thread are preserved in the tab
+        try:
+            thread_failed = getattr(thread, "failed_files", None)
+            if thread_failed:
+                try:
+                    with self.failed_files_lock:
+                        if isinstance(thread_failed, dict):
+                            for k, v in thread_failed.items():
+                                # Preserve any failures not already recorded
+                                if k not in self.failed_files:
+                                    self.failed_files[k] = v
+                        else:
+                            for k, v in dict(thread_failed).items():
+                                if k not in self.failed_files:
+                                    self.failed_files[k] = v
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def cancel_creator_download(self):
         # Stop fast-mode processing loop
