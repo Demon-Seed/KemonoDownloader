@@ -203,7 +203,12 @@ class PreviewThread(QThread):
                 self.url, headers=get_headers(), stream=True
             )
             response.raise_for_status()
-            self.total_size = int(response.headers.get("content-length", 0)) or 1
+            header = response.headers.get("content-length")
+            try:
+                total_size = int(header) if header is not None else 0
+            except Exception:
+                total_size = 0
+            self.total_size = total_size
             downloaded_data = bytearray()
             with open(cache_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
@@ -211,7 +216,12 @@ class PreviewThread(QThread):
                         downloaded_data.extend(chunk)
                         f.write(chunk)
                         self.downloaded_size += len(chunk)
-                        progress = int((self.downloaded_size / self.total_size) * 100)
+                        if self.total_size > 0:
+                            progress = int(
+                                (self.downloaded_size / self.total_size) * 100
+                            )
+                        else:
+                            progress = 0
                         self.progress.emit(min(progress, 100))
 
             if ext in [".jpg", ".jpeg", ".png"]:
@@ -1584,7 +1594,11 @@ class DownloadThread(QThread):
                 # After headers are received each thread has its own
                 # SSL connection and can stream data concurrently.
                 response.raise_for_status()
-                file_size = int(response.headers.get("content-length", 0)) or 1
+                header = response.headers.get("content-length")
+                try:
+                    file_size = int(header) if header is not None else 0
+                except Exception:
+                    file_size = 0
                 downloaded_size = 0
 
                 with open(full_path, "wb") as f:
@@ -1602,8 +1616,11 @@ class DownloadThread(QThread):
                         if chunk:
                             f.write(chunk)
                             downloaded_size += len(chunk)
-                            progress = int((downloaded_size / file_size) * 100)
-                            self.file_progress.emit(file_index, progress)
+                            if file_size > 0:
+                                progress = int((downloaded_size / file_size) * 100)
+                            else:
+                                progress = 0
+                            self.file_progress.emit(file_index, min(progress, 100))
 
                 # Validate downloaded size matches content-length
                 if file_size > 0 and downloaded_size != file_size:

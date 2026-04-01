@@ -242,13 +242,23 @@ class PreviewThread(QThread):
                     self.url, headers=get_headers(), stream=True
                 )
                 response.raise_for_status()
-                self.total_size = int(response.headers.get("content-length", 0)) or 1
+                header = response.headers.get("content-length")
+                try:
+                    total_size = int(header) if header is not None else 0
+                except Exception:
+                    total_size = 0
+                self.total_size = total_size
                 downloaded_data = bytearray()
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         downloaded_data.extend(chunk)
                         self.downloaded_size += len(chunk)
-                        progress = int((self.downloaded_size / self.total_size) * 100)
+                        if self.total_size > 0:
+                            progress = int(
+                                (self.downloaded_size / self.total_size) * 100
+                            )
+                        else:
+                            progress = 0
                         self.progress.emit(min(progress, 100))
                 pixmap = QPixmap()
                 if not pixmap.loadFromData(QByteArray(bytes(downloaded_data))):
@@ -1811,7 +1821,11 @@ class CreatorDownloadThread(QThread):
                     # SSL connection and can stream data concurrently.
                     try:
                         response.raise_for_status()
-                        file_size = int(response.headers.get("content-length", 0)) or 1
+                        header = response.headers.get("content-length")
+                        try:
+                            file_size = int(header) if header is not None else 0
+                        except Exception:
+                            file_size = 0
                         downloaded_size = 0
 
                         file_handle = open(full_path, "wb")
@@ -1822,9 +1836,16 @@ class CreatorDownloadThread(QThread):
                                 if chunk:
                                     file_handle.write(chunk)
                                     downloaded_size += len(chunk)
-                                    progress = int((downloaded_size / file_size) * 100)
+                                    if file_size > 0:
+                                        progress = int(
+                                            (downloaded_size / file_size) * 100
+                                        )
+                                    else:
+                                        progress = 0
                                     self._safe_emit(
-                                        self.file_progress, file_index, progress
+                                        self.file_progress,
+                                        file_index,
+                                        min(progress, 100),
                                     )
                         finally:
                             file_handle.close()

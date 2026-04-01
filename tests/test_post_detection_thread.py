@@ -1,7 +1,61 @@
 import gzip
 import json
+from types import SimpleNamespace
 
 from kemonodownloader import creator_downloader as cd
+from kemonodownloader.creator_downloader import PostDetectionThread, ThreadSettings
+
+
+class FakeResponse:
+    def __init__(self, content_bytes):
+        self.content = content_bytes
+        self.status_code = 200
+
+
+class FakeSession:
+    def __init__(self, content_bytes):
+        self._content = content_bytes
+
+    def get(self, *args, **kwargs):
+        return FakeResponse(self._content)
+
+
+def make_settings():
+    settings_tab = SimpleNamespace(get_proxy_settings=lambda: None)
+    return ThreadSettings(
+        creator_posts_max_attempts=1,
+        post_data_max_retries=1,
+        file_download_max_retries=1,
+        api_request_max_retries=1,
+        simultaneous_downloads=1,
+        settings_tab=settings_tab,
+    )
+
+
+def test_post_detection_handles_gzipped_json(monkeypatch):
+    # Prepare gzipped JSON body representing a list of posts
+    posts = [{"id": "101", "title": "Gzipped Post", "file": {"path": "/media/img.png"}}]
+    gzipped = gzip.compress(json.dumps(posts).encode("utf-8"))
+
+    # Monkeypatch get_session to return a session that yields the gzipped response
+    monkeypatch.setattr(
+        "kemonodownloader.creator_downloader.get_session",
+        lambda settings_tab=None: FakeSession(gzipped),
+    )
+
+    post_titles_map = {}
+    settings = make_settings()
+    thread = PostDetectionThread(
+        "https://kemono.cr/fanbox/user/12345", post_titles_map, settings
+    )
+
+    # Run the detection synchronously
+    thread.run()
+
+    # The shared post_titles_map should have the detected post title stored
+    key = ("fanbox", "12345", "101")
+    assert key in post_titles_map
+    assert post_titles_map[key] == "Gzipped_Post"
 
 
 def _make_gz_resp(obj):
