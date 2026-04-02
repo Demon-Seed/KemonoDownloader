@@ -1,3 +1,4 @@
+import gc
 import os
 import sys
 from pathlib import Path
@@ -64,3 +65,71 @@ def isolated_settings(tmp_path):
 def isolated_hash_dir(tmp_path):
     """Return a temp directory suitable for HashDB tests."""
     return str(tmp_path / "hash_store")
+
+
+@pytest.fixture(autouse=True)
+def cleanup_qt_threads_after_test():
+    """Best-effort cleanup for leaked QThreads.
+
+    Some tests intentionally exercise cancellation/error paths and may leave
+    thread objects alive briefly. On Linux CI, a surviving running QThread can
+    trigger a native abort ("QThread: Destroyed while thread is still running").
+    This fixture aggressively stops and joins any running QThread wrappers
+    after each test to keep the process stable.
+    """
+    yield
+
+    try:
+        from PyQt6.QtCore import QCoreApplication, QThread
+    except Exception:
+        return
+
+    app = QCoreApplication.instance()
+    if app is not None:
+        try:
+            app.processEvents()
+        except Exception:
+            pass
+
+    for obj in list(gc.get_objects()):
+        try:
+            if not isinstance(obj, QThread):
+                continue
+            if not obj.isRunning():
+                continue
+
+            # Cooperatively request shutdown first.
+            try:
+                if hasattr(obj, "stop"):
+                    obj.stop()
+            except Exception:
+                pass
+            try:
+                obj.requestInterruption()
+            except Exception:
+                pass
+            try:
+                obj.quit()
+            except Exception:
+                pass
+            try:
+                obj.wait(2000)
+            except Exception:
+                pass
+
+            # Last resort: terminate stubborn workers.
+            try:
+                if obj.isRunning():
+                    obj.terminate()
+                    obj.wait(1000)
+            except Exception:
+                pass
+        except Exception:
+            # Ignore invalid/deleted sip wrappers during GC traversal.
+            pass
+
+    if app is not None:
+        try:
+            app.processEvents()
+        except Exception:
+            pass
