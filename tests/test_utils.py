@@ -303,3 +303,76 @@ class TestTranslationKeys:
             assert key not in result or "{" in language_manager.translations.get(
                 key, {}
             ).get("english", ""), f"Translation key '{key}' not found"
+
+
+class TestCleanFileUrl:
+    """Tests for the clean_file_url utility function."""
+
+    def test_relative_url(self):
+        """Test relative path conversion."""
+        from kemonodownloader.domain_config import clean_file_url
+
+        domain_config = {
+            "domain": "kemono.cr",
+            "base_url": "https://kemono.cr",
+            "file_base_url": "https://kemono.cr",
+        }
+        url = clean_file_url("/data/123.png", domain_config)
+        assert url == "https://kemono.cr/data/123.png"
+
+    def test_pawchive_relative_url(self):
+        """Test pawchive.st relative path uses file.pawchive.st."""
+        from kemonodownloader.domain_config import clean_file_url
+
+        domain_config = {
+            "domain": "pawchive.st",
+            "base_url": "https://pawchive.st",
+            "file_base_url": "https://file.pawchive.st",
+        }
+        url = clean_file_url("/data/123.png", domain_config)
+        assert url == "https://file.pawchive.st/data/123.png"
+
+    def test_pawchive_absolute_url(self):
+        """Test pawchive.st absolute path is rewritten to file.pawchive.st."""
+        from kemonodownloader.domain_config import clean_file_url
+
+        domain_config = {
+            "domain": "pawchive.st",
+            "base_url": "https://pawchive.st",
+            "file_base_url": "https://file.pawchive.st",
+        }
+        url = clean_file_url("https://pawchive.st/data/123.png", domain_config)
+        assert url == "https://file.pawchive.st/data/123.png"
+
+    def test_pawchive_domain_config_has_file_base_url(self):
+        """Test that get_domain_config for pawchive returns correct file_base_url."""
+        from kemonodownloader.domain_config import get_domain_config
+
+        config = get_domain_config("https://pawchive.st/patreon/user/123")
+        assert config["domain"] == "pawchive.st"
+        assert config["base_url"] == "https://pawchive.st"
+        assert config["file_base_url"] == "https://file.pawchive.st"
+
+    def test_pawchive_relative_url_missing_data(self):
+        """Test pawchive.st relative path without /data/ gets /data/ prepended."""
+        from kemonodownloader.domain_config import clean_file_url
+
+        domain_config = {
+            "domain": "pawchive.st",
+            "base_url": "https://pawchive.st",
+            "file_base_url": "https://file.pawchive.st",
+        }
+        url = clean_file_url("/35/c3/123.png", domain_config)
+        assert url == "https://file.pawchive.st/data/35/c3/123.png"
+
+    def test_pawchive_absolute_url_missing_data(self):
+        """Test pawchive.st absolute path without /data/ gets /data/ prepended and rewritten."""
+        from kemonodownloader.domain_config import clean_file_url
+
+        domain_config = {
+            "domain": "pawchive.st",
+            "base_url": "https://pawchive.st",
+            "file_base_url": "https://file.pawchive.st",
+        }
+        url = clean_file_url("https://pawchive.st/35/c3/123.png", domain_config)
+        assert url == "https://file.pawchive.st/data/35/c3/123.png"
