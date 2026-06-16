@@ -1,5 +1,25 @@
 # Kemono Downloader Release Notes
 
+## v5.11.0 (17 June 2026)
+**feat: dynamic domain configuration and pawchive.st support**
+
+- Add dynamic domain configuration and pawchive.st support
+  Introduces a new `assets/config/domain` file to centralize domain names (kemono.cr, coomer.st, pawchive.st). The application now dynamically loads these domains, improving maintainability and allowing for easier updates to supported sites.
+
+- Update license definitions to use PEP 639 format
+  Refactored `pyproject.toml` to comply with PEP 639 for license metadata, ensuring better compatibility with modern Python packaging standards.
+
+- Improve download reliability and system compatibility
+  - Introduce `XDG_DATA_HOME` fallback on Linux for reliable data storage.
+  - Improve download interruption handling: partial files are now removed only after the file handle is closed, preventing potential crashes and ensuring cleaner state recovery.
+  - Removal of failed/interrupted files now gracefully handles `OSError`.
+
+- Comprehensive test suite expansion and CI stability improvements
+  - Mock `QMediaPlayer` and `QAudioOutput` to prevent native multimedia backend crashes in headless CI.
+  - Add an autouse fixture to reliably clean up leaked `QThreads` after each test.
+  - Add over 100 new unit tests covering `Creator Downloader`, fast-mode UI flows, file/download edge cases, preview caching, and post detection threads (including gzipped responses).
+  - Silenced `urllib3` OpenSSL/LibreSSL warnings in `pytest` configuration.
+
 ## v5.10.0 (10 February 2026)
 **feat: Fast Mode, SQLite hash storage, and customizable font settings**
 
