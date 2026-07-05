@@ -52,7 +52,7 @@ _LOCAL_DOMAIN_FILE = os.path.join(_HERE, "..", "..", "assets", "config", "domain
 _FALLBACK_DOMAINS: List[str] = [
     "kemono.cr",
     "coomer.st",
-    "pawchive.st",
+    "pawchive.pw",
 ]
 
 # ---------------------------------------------------------------------------
@@ -121,11 +121,16 @@ def get_domains() -> List[str]:
     return _domains_cache
 
 
+def _is_pawchive_domain(domain: str) -> bool:
+    """Return True when *domain* is a pawchive domain (any suffix)."""
+    return domain.startswith("pawchive.")
+
+
 def _build_config(domain: str) -> Dict[str, str]:
     """Build a domain config dict for the given domain string."""
-    # Special case for file download servers, e.g. pawchive.st -> file.pawchive.st
-    if domain == "pawchive.st":
-        file_base_url = "https://file.pawchive.st"
+    # Special case for file download servers, e.g. pawchive.<suffix> -> file.pawchive.<suffix>
+    if _is_pawchive_domain(domain):
+        file_base_url = f"https://file.{domain}"
     else:
         file_base_url = f"https://{domain}"
 
@@ -141,28 +146,34 @@ def _build_config(domain: str) -> Dict[str, str]:
 def clean_file_url(file_url: str, domain_config: Dict[str, str]) -> str:
     """Ensure that the file URL uses the correct download server.
 
-    For example, pawchive.st uses file.pawchive.st for file downloads.
+    For example, pawchive.<suffix> uses file.pawchive.<suffix> for file downloads.
     """
-    from urllib.parse import urljoin
+    from urllib.parse import urljoin, urlparse, urlunparse
 
     base = domain_config.get("base_url", "")
     file_base_url = domain_config.get("file_base_url") or base
     full_url = urljoin(file_base_url, file_url)
+    domain = str(domain_config.get("domain", "") or "")
 
-    # Rewrite pawchive.st URLs if they got mapped to the main domain
-    if "://pawchive.st" in full_url:
-        full_url = full_url.replace("://pawchive.st", "://file.pawchive.st")
-
-    # For pawchive.st, the file path must contain /data/
-    if "pawchive.st" in full_url:
-        from urllib.parse import urlparse, urlunparse
-
+    if _is_pawchive_domain(domain):
         parsed = urlparse(full_url)
+        pawchive_file_host = f"file.{domain}"
+
+        # Rewrite direct pawchive.<suffix> URLs to file.pawchive.<suffix>.
+        if parsed.netloc == domain:
+            parsed = parsed._replace(netloc=pawchive_file_host)
+        elif parsed.netloc.startswith(f"{domain}:"):
+            parsed = parsed._replace(
+                netloc=parsed.netloc.replace(domain, pawchive_file_host, 1)
+            )
+
+        # For pawchive domains, the file path must contain /data/.
         path = parsed.path
         if not path.startswith("/data/"):
             cleaned_path = "/data/" + path.lstrip("/")
             parsed = parsed._replace(path=cleaned_path)
-            full_url = urlunparse(parsed)
+
+        full_url = urlunparse(parsed)
 
     return full_url
 

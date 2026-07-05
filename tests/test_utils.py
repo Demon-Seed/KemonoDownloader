@@ -321,58 +321,59 @@ class TestCleanFileUrl:
         assert url == "https://kemono.cr/data/123.png"
 
     def test_pawchive_relative_url(self):
-        """Test pawchive.st relative path uses file.pawchive.st."""
+        """Test pawchive relative path uses file.pawchive.<suffix>."""
         from kemonodownloader.domain_config import clean_file_url
 
         domain_config = {
-            "domain": "pawchive.st",
-            "base_url": "https://pawchive.st",
-            "file_base_url": "https://file.pawchive.st",
+            "domain": "pawchive.pw",
+            "base_url": "https://pawchive.pw",
+            "file_base_url": "https://file.pawchive.pw",
         }
         url = clean_file_url("/data/123.png", domain_config)
-        assert url == "https://file.pawchive.st/data/123.png"
+        assert url == "https://file.pawchive.pw/data/123.png"
 
     def test_pawchive_absolute_url(self):
-        """Test pawchive.st absolute path is rewritten to file.pawchive.st."""
+        """Test pawchive absolute path is rewritten to file.pawchive.<suffix>."""
         from kemonodownloader.domain_config import clean_file_url
 
         domain_config = {
-            "domain": "pawchive.st",
-            "base_url": "https://pawchive.st",
-            "file_base_url": "https://file.pawchive.st",
+            "domain": "pawchive.pw",
+            "base_url": "https://pawchive.pw",
+            "file_base_url": "https://file.pawchive.pw",
         }
-        url = clean_file_url("https://pawchive.st/data/123.png", domain_config)
-        assert url == "https://file.pawchive.st/data/123.png"
+        url = clean_file_url("https://pawchive.pw/data/123.png", domain_config)
+        assert url == "https://file.pawchive.pw/data/123.png"
 
     def test_pawchive_domain_config_has_file_base_url(self):
-        """Test that get_domain_config for pawchive returns correct file_base_url."""
-        from kemonodownloader.domain_config import get_domain_config
+        """Test that get_domain_config for pawchive returns suffix-matched file_base_url."""
+        from kemonodownloader.domain_config import get_domain_config, get_domains
 
-        config = get_domain_config("https://pawchive.st/patreon/user/123")
-        assert config["domain"] == "pawchive.st"
-        assert config["base_url"] == "https://pawchive.st"
-        assert config["file_base_url"] == "https://file.pawchive.st"
+        pawchive_domain = next(d for d in get_domains() if d.startswith("pawchive."))
+        config = get_domain_config(f"https://{pawchive_domain}/patreon/user/123")
+        assert config["domain"] == pawchive_domain
+        assert config["base_url"] == f"https://{pawchive_domain}"
+        assert config["file_base_url"] == f"https://file.{pawchive_domain}"
 
     def test_pawchive_relative_url_missing_data(self):
-        """Test pawchive.st relative path without /data/ gets /data/ prepended."""
+        """Test pawchive relative path without /data/ gets /data/ prepended."""
         from kemonodownloader.domain_config import clean_file_url
 
         domain_config = {
-            "domain": "pawchive.st",
-            "base_url": "https://pawchive.st",
-            "file_base_url": "https://file.pawchive.st",
+            "domain": "pawchive.pw",
+            "base_url": "https://pawchive.pw",
+            "file_base_url": "https://file.pawchive.pw",
         }
         url = clean_file_url("/35/c3/123.png", domain_config)
-        assert url == "https://file.pawchive.st/data/35/c3/123.png"
+        assert url == "https://file.pawchive.pw/data/35/c3/123.png"
 
     def test_pawchive_absolute_url_missing_data(self):
-        """Test pawchive.st absolute path without /data/ gets /data/ prepended and rewritten."""
+        """Test pawchive absolute path without /data/ gets /data/ prepended and rewritten."""
         from kemonodownloader.domain_config import clean_file_url
 
         domain_config = {
-            "domain": "pawchive.st",
-            "base_url": "https://pawchive.st",
-            "file_base_url": "https://file.pawchive.st",
+            "domain": "pawchive.pw",
+            "base_url": "https://pawchive.pw",
+            "file_base_url": "https://file.pawchive.pw",
         }
-        url = clean_file_url("https://pawchive.st/35/c3/123.png", domain_config)
-        assert url == "https://file.pawchive.st/data/35/c3/123.png"
+        url = clean_file_url("https://pawchive.pw/35/c3/123.png", domain_config)
+        assert url == "https://file.pawchive.pw/data/35/c3/123.png"

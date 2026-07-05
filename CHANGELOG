@@ -1,5 +1,17 @@
 # Kemono Downloader Release Notes
 
+## v5.11.1 (05 July 2026)
+**fix: dynamic pawchive domain suffix resolution and documentation refresh**
+
+- Replace hardcoded `pawchive.st` handling with dynamic `pawchive.<suffix>` support.
+  The downloader now derives the active pawchive suffix from the domain list configuration and builds file hosts dynamically (`file.pawchive.<suffix>`), avoiding breakage when pawchive domains rotate.
+
+- Improve pawchive file URL normalization for dynamic domains.
+  URL cleanup now rewrites direct pawchive links to the correct file host based on the active suffix and still enforces `/data/` path normalization for compatibility.
+
+- Update tests and release documentation for v5.11.1.
+  Refreshed pawchive URL tests to be suffix-agnostic and updated version metadata/docs for this patch release.
+
 ## v5.11.0 (17 June 2026)
 **feat: dynamic domain configuration and pawchive.st support**
 
