@@ -40,7 +40,7 @@
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" alt="Platforms">
   </a>
   <a href="https://github.com/VoxDroid/KemonoDownloader/releases">
-    <img src="https://img.shields.io/badge/version-v5.11.0-brightgreen" alt="Version">
+    <img src="https://img.shields.io/badge/version-v5.11.1-brightgreen" alt="Version">
   </a>
   <a>
     <img src="https://img.shields.io/github/v/release/VoxDroid/KemonoDownloader?label=Latest%20Release" alt="Latest Release">
@@ -87,19 +87,19 @@
 
 <hr style="border: 1px dashed #4A6B9A; margin: 20px 0;">
 
-Welcome to **$\color{#546e7a}{\sf{\text{KemonoDownloader}}}$**, a versatile Python-based desktop application built with PyQt6, designed to download content from [Kemono.cr](https://kemono.cr), [Coomer.st](https://coomer.st), and [Pawchive.st](https://pawchive.st). This tool enables users to archive individual posts or entire creator profiles from services like Patreon, Fanbox, and more, supporting a wide range of file types with customizable settings and advanced features.
+Welcome to **$\color{#546e7a}{\sf{\text{KemonoDownloader}}}$**, a versatile Python-based desktop application built with PyQt6, designed to download content from [Kemono.cr](https://kemono.cr), [Coomer.st](https://coomer.st), and [Pawchive.pw](https://pawchive.pw). This tool enables users to archive individual posts or entire creator profiles from services like Patreon, Fanbox, and more, supporting a wide range of file types with customizable settings and advanced features.
 
 ## $\color{#546e7a}{\sf{\text{Important Notices}}}$ <a name="important-notices"></a>
 
 ### $\color{#90a4ae}{\sf{\text{Disclaimer}}}$ <a name="disclaimer"></a>
 
-KemonoDownloader is a tool designed for personal and educational use only, to assist users in downloading content from Kemono.cr, Coomer.st, and Pawchive.st. The maintainers of this project **do not condone or support the unauthorized distribution of copyrighted material**. Users are solely responsible for ensuring they have the legal right to access and download content from Kemono.cr, Coomer.st, and Pawchive.st, and for complying with all applicable laws, as well as the terms of service of the original platforms from which the content originates (e.g., Patreon, Pixiv Fanbox, Gumroad).
+KemonoDownloader is a tool designed for personal and educational use only, to assist users in downloading content from Kemono.cr, Coomer.st, and Pawchive.pw. The maintainers of this project **do not condone or support the unauthorized distribution of copyrighted material**. Users are solely responsible for ensuring they have the legal right to access and download content from Kemono.cr, Coomer.st, and Pawchive.pw, and for complying with all applicable laws, as well as the terms of service of the original platforms from which the content originates (e.g., Patreon, Pixiv Fanbox, Gumroad).
 
 **Misuse of this tool to infringe on creators’ rights, violate copyright laws, or breach terms of service is strictly prohibited.** The maintainers are not liable for any misuse of KemonoDownloader or any consequences arising from its use, including but not limited to legal action, financial loss, or damage to third parties.
 
 ### $\color{#90a4ae}{\sf{\text{Ethical Use Guidelines}}}$ <a name="ethical-use-guidelines"></a>
 
-KemonoDownloader interacts with content from Kemono.cr, Coomer.st, and Pawchive.st, which may include material originally posted on paywalled platforms like Patreon, Pixiv Fanbox, and Gumroad. Many creators on these platforms rely on paid subscriptions for their livelihood. Downloading and redistributing their content without permission can harm their ability to continue creating.
+KemonoDownloader interacts with content from Kemono.cr, Coomer.st, and Pawchive.pw, which may include material originally posted on paywalled platforms like Patreon, Pixiv Fanbox, and Gumroad. Many creators on these platforms rely on paid subscriptions for their livelihood. Downloading and redistributing their content without permission can harm their ability to continue creating.
 
 We strongly encourage users to:
 - Use KemonoDownloader responsibly and only for content you have the legal right to access.
@@ -108,19 +108,19 @@ We strongly encourage users to:
 
 ### $\color{#90a4ae}{\sf{\text{Risks and Limitations}}}$ <a name="risks-and-limitations"></a>
 
-- **Legal Risks**: Downloading content from Kemono.cr, Coomer.st, and Pawchive.st may violate copyright laws or the terms of service of the original platforms. Users assume all legal risks associated with using this tool.
-- **Dependency on Kemono.cr, Coomer.st, and Pawchive.st**: KemonoDownloader relies on Kemono.cr, Coomer.st, and Pawchive.st, which have a history of inconsistent updates and downtime. If these sites become unavailable, this tool will lose its functionality.
-- **Rate Limits and Errors**: Kemono.cr, Coomer.st, and Pawchive.st may impose rate limits or other restrictions that affect download performance. The maintainers cannot guarantee uninterrupted access to these sites' content.
+- **Legal Risks**: Downloading content from Kemono.cr, Coomer.st, and Pawchive.pw may violate copyright laws or the terms of service of the original platforms. Users assume all legal risks associated with using this tool.
+- **Dependency on Kemono.cr, Coomer.st, and Pawchive.pw**: KemonoDownloader relies on Kemono.cr, Coomer.st, and Pawchive.pw, which have a history of inconsistent updates and downtime. If these sites become unavailable, this tool will lose its functionality.
+- **Rate Limits and Errors**: Kemono.cr, Coomer.st, and Pawchive.pw may impose rate limits or other restrictions that affect download performance. The maintainers cannot guarantee uninterrupted access to these sites' content.
 
 ### $\color{#90a4ae}{\sf{\text{Site Availability Status}}}$ <a name="site-availability-status"></a>
 
-As of **June 17, 2026**, the media download servers for **Kemono.cr** and **Coomer.st** are currently unavailable or not being updated. To ensure continued functionality, **Pawchive.st** has been added as an alternative source for content.
+As of **June 17, 2026**, the media download servers for **Kemono.cr** and **Coomer.st** are currently unavailable or not being updated. To ensure continued functionality, **Pawchive.pw** has been added as an alternative source for content.
 
 | Site | Status | Last Checked |
 | :--- | :---: | :--- |
-| [Kemono.cr](https://kemono.cr) | 🔴 Unavailable | June 17, 2026 |
-| [Coomer.st](https://coomer.st) | 🔴 Unavailable | June 17, 2026 |
-| [Pawchive.st](https://pawchive.st) | 🟢 Available | June 17, 2026 |
+| [Kemono.cr](https://kemono.cr) | 🔴 Unavailable | July, 5 2026 |
+| [Coomer.st](https://coomer.st) | 🔴 Unavailable | July, 5 2026 |
+| [Pawchive.pw](https://pawchive.pw) | 🟢 Available | July, 5 2026 |
 
 *Note: Status reflects the availability of media download servers. Front-end availability may vary.*
 
@@ -161,7 +161,7 @@ We are committed to fostering a welcoming and respectful community around Kemono
 
 ## $\color{#546e7a}{\sf{\text{Features}}}$ <a name="features"></a>
 
-KemonoDownloader offers a comprehensive set of features designed to efficiently download and manage content from Kemono.cr, Coomer.st, and Pawchive.st. Below is a detailed breakdown organized by category.
+KemonoDownloader offers a comprehensive set of features designed to efficiently download and manage content from Kemono.cr, Coomer.st, and Pawchive.pw. Below is a detailed breakdown organized by category.
 
 ### $\color{#90a4ae}{\sf{\text{Downloading Capabilities}}}$
 
@@ -244,7 +244,7 @@ KemonoDownloader offers a comprehensive set of features designed to efficiently 
 |---------|-------------|
 | **Local Storage** | All data stored locally with user-specified paths |
 | **No Data Collection** | No transmission of user data or download history |
-| **HTTPS Only** | Secure connections to Kemono.cr, Coomer.st, and Pawchive.st APIs |
+| **HTTPS Only** | Secure connections to Kemono.cr, Coomer.st, and Pawchive.pw APIs |
 | **Ethical Design** | Promotes legal and responsible content access |
 
 ## $\color{#546e7a}{\sf{\text{Browser Extension}}}$ <a name="browser-extension"></a>
@@ -340,18 +340,18 @@ Support ongoing development and get access here: **[Ko-fi Binaries Page](https:/
    - **macOS**: `briefcase run macos`
    - **Linux**: `briefcase run linux`
    - **General**: `briefcase dev` *(Recommended)*
-   - **Note**: An internet connection is required to fetch content from Kemono.cr, Coomer.st, and Pawchive.st.
+   - **Note**: An internet connection is required to fetch content from Kemono.cr, Coomer.st, and Pawchive.pw.
 
 ## $\color{#546e7a}{\sf{\text{Usage}}}$ <a name="usage"></a>
 Upon launching, you’ll see an introductory screen with a "Launch" button. Click it to enter the main interface, featuring four tabs: **Post Downloader**, **Creator Downloader**, **Settings**, and **Help**. The in-app Help tab contains a comprehensive user manual.
 
 ### $\color{#90a4ae}{\sf{\text{Getting Started}}}$ <a name="getting-started"></a>
 - The application creates default directories (`Downloads`, `Cache`, `Other Files`) in the specified save location.
-- Ensure an active internet connection to access Kemono.cr, Coomer.st, and Pawchive.st content.
+- Ensure an active internet connection to access Kemono.cr, Coomer.st, and Pawchive.pw content.
 - Explore the Help tab for detailed instructions and troubleshooting tips.
 
 ### $\color{#90a4ae}{\sf{\text{Post Downloader Tab}}}$ <a name="post-downloader-tab"></a>
-- **Purpose**: Download files from individual Kemono.cr, Coomer.st, and Pawchive.st posts.
+- **Purpose**: Download files from individual Kemono.cr, Coomer.st, and Pawchive.pw posts.
 - **How to Use**:
   1. Enter a post URL (e.g., `https://kemono.cr/patreon/user/123456789/post/123456789` or `https://coomer.st/patreon/user/123456789/post/123456789`) in the "Enter post URL" field.
   2. Click "Add to Queue" to add it to the list.
