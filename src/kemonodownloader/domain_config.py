@@ -163,7 +163,9 @@ def clean_file_url(file_url: str, domain_config: Dict[str, str]) -> str:
         if parsed.netloc == domain:
             parsed = parsed._replace(netloc=pawchive_file_host)
         elif parsed.netloc.startswith(f"{domain}:"):
-            parsed = parsed._replace(netloc=parsed.netloc.replace(domain, pawchive_file_host, 1))
+            parsed = parsed._replace(
+                netloc=parsed.netloc.replace(domain, pawchive_file_host, 1)
+            )
 
         # For pawchive domains, the file path must contain /data/.
         path = parsed.path
