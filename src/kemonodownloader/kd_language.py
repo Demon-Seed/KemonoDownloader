@@ -929,10 +929,22 @@ class KDLanguage:
                 "chinese-simplified": "跳过帖子帮助",
             },
             "skip_posts_keywords_help_text": {
-                "english": "Enter comma-separated words or phrases (e.g. JP, ZH). Any post matching one of these as a whole word (case-insensitive) will be excluded from the Creator Downloader's search results, so it won't be downloaded. Use 'Search In' to choose whether matching looks at the post title, file names (main file and attachments), or both. Leave the keyword field blank to disable this filter.",
-                "japanese": "カンマ区切りで単語やフレーズを入力します（例: JP, ZH）。これらのいずれかに単語として一致する投稿（大文字小文字を区別しない）は、クリエイターダウンローダーの検索結果から除外され、ダウンロードされません。「検索対象」でタイトル、ファイル名（メインファイルと添付ファイル）、または両方のどこで一致を検索するかを選択できます。このフィルターを無効にするにはキーワード欄を空欄のままにしてください。",
-                "korean": "쉼표로 구분된 단어나 구문을 입력하세요 (예: JP, ZH). 이 중 하나와 단어 단위로 일치하는 게시물(대소문자 구분 없음)은 크리에이터 다운로더의 검색 결과에서 제외되어 다운로드되지 않습니다. '검색 대상'에서 제목, 파일 이름(메인 파일 및 첨부 파일) 또는 둘 다에서 일치를 검색할지 선택하세요. 이 필터를 비활성화하려면 키워드 필드를 비워 두세요.",
-                "chinese-simplified": "输入以逗号分隔的单词或短语（例如: JP, ZH）。与这些词之一作为完整单词匹配的帖子（不区分大小写）将从创作者下载器的搜索结果中排除，因此不会被下载。使用“搜索范围”选择在标题、文件名（主文件和附件）或两者中进行匹配。留空关键词字段可禁用此过滤器。",
+                "english": "Comma-separated keywords (e.g. JP, ZH). Posts matching any keyword (case-insensitive, whole word) are excluded entirely. Use 'Filter By' to choose: Title only, Filenames only, or Skip if either match. Leave blank to disable.",
+                "japanese": "カンマ区切りキーワード（例: JP, ZH）。いずれかのキーワードに一致する投稿（大文字小文字不区別、単語単位）は完全に除外されます。「フィルター対象」で選択: タイトルのみ、ファイル名のみ、またはいずれか一致でスキップ。空欄で無効。",
+                "korean": "쉼표로 구분된 키워드 (예: JP, ZH). 키워드와 일치하는 게시물(대소문자 구분 없음, 단어 단위)은 완전히 제외됩니다. '필터 기준'에서 선택: 제목만, 파일명만, 또는 하나라도 일치하면 건너뜀. 빈칸으로 비활성화.",
+                "chinese-simplified": "逗号分隔的关键词（例如: JP, ZH）。匹配任一关键词的帖子（不区分大小写，整词匹配）将被完全排除。使用\"过滤依据\"选择: 仅标题、仅文件名、或任一匹配即跳过。留空禁用。",
+            },
+            "skip_files_keywords_help_title": {
+                "english": "Skip Files Help",
+                "japanese": "ファイル除外のヘルプ",
+                "korean": "파일 제외 도움말",
+                "chinese-simplified": "跳过文件帮助",
+            },
+            "skip_files_keywords_help_text": {
+                "english": "Comma-separated keywords (e.g. JP, ZH). Individual files matching any keyword (case-insensitive, whole word) are excluded from download. Only the matched file is skipped — never the whole post. Independent from 'Skip Posts Containing' above. Leave blank to disable.",
+                "japanese": "カンマ区切りキーワード（例: JP, ZH）。いずれかのキーワードに一致する個別ファイル（大文字小文字不区別、単語単位）はダウンロードから除外されます。一致したファイルのみスキップされ、投稿全体は除外されません。上の「投稿除外」とは独立して動作します。空欄で無効。",
+                "korean": "쉼표로 구분된 키워드 (예: JP, ZH). 키워드와 일치하는 개별 파일(대소문자 구분 없음, 단어 단위)이 다운로드에서 제외됩니다. 일치하는 파일만 건너뛰며 게시물 전체는 제외되지 않습니다. 위의 '게시물 제외'와 독립적으로 작동합니다. 빈칸으로 비활성화.",
+                "chinese-simplified": "逗号分隔的关键词（例如: JP, ZH）。匹配任一关键词的个别文件（不区分大小写，整词匹配）将从下载中排除。仅跳过匹配的文件 — 不跳过整个帖子。与上方的\"跳过帖子\"独立运行。留空禁用。",
             },
             "posts_skipped_by_keyword": {
                 "english": "Skipped {0} post(s) matching skip-keywords: {1}",
@@ -940,11 +952,17 @@ class KDLanguage:
                 "korean": "제외 키워드와 일치하는 게시물 {0}개를 건너뛰었습니다: {1}",
                 "chinese-simplified": "已跳过 {0} 个匹配跳过关键词的帖子: {1}",
             },
+            "files_skipped_by_keyword": {
+                "english": "Skipped {0} file(s) matching skip-keywords: {1}",
+                "japanese": "除外キーワードに一致するファイルを {0} 件スキップしました: {1}",
+                "korean": "제외 키워드와 일치하는 파일 {0}개를 건너뛰었습니다: {1}",
+                "chinese-simplified": "已跳过 {0} 个匹配跳过关键词的文件: {1}",
+            },
             "skip_keywords_scope": {
-                "english": "Search In",
-                "japanese": "検索対象",
-                "korean": "검색 대상",
-                "chinese-simplified": "搜索范围",
+                "english": "Filter By",
+                "japanese": "フィルター対象",
+                "korean": "필터 기준",
+                "chinese-simplified": "过滤依据",
             },
             "skip_scope_title": {
                 "english": "Title only",
@@ -959,17 +977,12 @@ class KDLanguage:
                 "chinese-simplified": "仅文件名",
             },
             "skip_scope_both_or": {
-                "english": "Both (skip if either matches)",
-                "japanese": "両方（いずれか一致でスキップ）",
-                "korean": "둘 다 (하나라도 일치하면 건너뜀)",
-                "chinese-simplified": "两者（任一匹配即跳过）",
+                "english": "Skip if either match",
+                "japanese": "いずれか一致でスキップ",
+                "korean": "하나라도 일치하면 건너뜀",
+                "chinese-simplified": "任一匹配即跳过",
             },
-            "skip_scope_both_and": {
-                "english": "Both (skip only if both match)",
-                "japanese": "両方（両方一致した場合のみスキップ）",
-                "korean": "둘 다 (둘 다 일치해야 건너뜀)",
-                "chinese-simplified": "两者（两者都匹配才跳过）",
-            },
+
             "per_post_folders": {
                 "english": "Per-post folders (default)",
                 "japanese": "投稿ごとのフォルダ（デフォルト）",

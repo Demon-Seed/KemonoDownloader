@@ -337,13 +337,42 @@ class ImageModal(QDialog):
         QMessageBox.critical(self, translate("image_load_error"), error_message)
 
 
+def _keyword_matches_text(keywords, text):
+    """Case-insensitive whole-word match of any keyword in *text*, treating
+    underscores, dots, hyphens, and other common filename separators as
+    valid word boundaries (in addition to string start/end). Shared by
+    PostDetectionThread (post/title-level skip) and FilePreparationThread
+    (individual-file-level skip).
+    """
+    if not keywords or not text:
+        return False
+    for keyword in keywords:
+        if not keyword:
+            continue
+        try:
+            pattern = r"(?<![A-Za-z0-9])" + re.escape(keyword) + r"(?![A-Za-z0-9])"
+            if re.search(pattern, text, re.IGNORECASE):
+                return True
+        except re.error:
+            if keyword.lower() in text.lower():
+                return True
+    return False
+
+
 class PostDetectionThread(QThread):
     finished = pyqtSignal(list)
     posts_batch = pyqtSignal(list)
     log = pyqtSignal(str, str)
     error = pyqtSignal(str)
 
-    def __init__(self, url, post_titles_map, settings, skip_keywords=None, skip_keywords_scope="title"):
+    def __init__(
+        self,
+        url,
+        post_titles_map,
+        settings,
+        skip_keywords=None,
+        skip_keywords_scope="title",
+    ):
         super().__init__()
         self.url = url
         self.post_titles_map = post_titles_map  # Shared dictionary to store post titles
@@ -353,14 +382,6 @@ class PostDetectionThread(QThread):
         self.skip_keywords = skip_keywords if skip_keywords is not None else []
         self.skip_keywords_scope = skip_keywords_scope if skip_keywords_scope else "title"
         self._skipped_count = 0
-
-    def _load_skip_keywords(self):
-        """Return the skip-keywords list passed via the constructor."""
-        return self.skip_keywords
-
-    def _load_skip_keywords_scope(self):
-        """Return the skip-keywords scope passed via the constructor."""
-        return self.skip_keywords_scope
 
     def _gather_post_filenames(self, post):
         """Collect candidate filenames for a post: the main file and any
@@ -392,30 +413,6 @@ class PostDetectionThread(QThread):
             pass
         return filenames
 
-    def _text_matches_any_keyword(self, text):
-        """Return True if *text* contains any configured skip-keyword as a
-        standalone "word" (case-insensitive). Unlike a plain regex \\b
-        boundary, this also treats underscores, dots, hyphens, and other
-        common filename separators as valid boundaries -- important since
-        filenames typically use "main_JP.zip" rather than "main JP.zip",
-        and \\b alone does not treat "_" as a boundary.
-        """
-        if not self.skip_keywords or not text:
-            return False
-        for keyword in self.skip_keywords:
-            if not keyword:
-                continue
-            try:
-                pattern = (
-                    r"(?<![A-Za-z0-9])" + re.escape(keyword) + r"(?![A-Za-z0-9])"
-                )
-                if re.search(pattern, text, re.IGNORECASE):
-                    return True
-            except re.error:
-                if keyword.lower() in text.lower():
-                    return True
-        return False
-
     def _title_matches_skip_keyword(self, title, post=None):
         """Return True if this post should be skipped, based on the
         configured skip-keywords and search scope (title, filenames, or
@@ -426,12 +423,12 @@ class PostDetectionThread(QThread):
             return False
 
         scope = self.skip_keywords_scope
-        title_match = self._text_matches_any_keyword(title) if title else False
+        title_match = _keyword_matches_text(self.skip_keywords, title) if title else False
 
         filenames_match = False
-        if scope in ("filenames", "both_or", "both_and") and post is not None:
+        if scope in ("filenames", "both_or") and post is not None:
             for fname in self._gather_post_filenames(post):
-                if self._text_matches_any_keyword(fname):
+                if _keyword_matches_text(self.skip_keywords, fname):
                     filenames_match = True
                     break
 
@@ -439,8 +436,6 @@ class PostDetectionThread(QThread):
             return title_match
         if scope == "filenames":
             return filenames_match
-        if scope == "both_and":
-            return title_match and filenames_match
         # Default / "both_or"
         return title_match or filenames_match
 
@@ -542,7 +537,8 @@ class PostDetectionThread(QThread):
                 translate("log_info", f"Search query detected: {search_query}"), "INFO"
             )
 
-        all_posts = []
+        all_posts = []  # Accumulate raw post dicts for final processing
+        all_processed_posts = []  # Accumulate (title, (post_id, thumbnail_url)) tuples
         offset = start_offset
         page_size = 50
         max_attempts = self.settings.creator_posts_max_attempts
@@ -865,7 +861,11 @@ class PostDetectionThread(QThread):
                     )
                 batch_posts.append((title, (post_id, thumbnail_url)))
 
+            # Accumulate raw posts for final processing
             all_posts.extend(posts_data)
+
+            # Accumulate processed tuples for the final finished.emit()
+            all_processed_posts.extend(batch_posts)
 
             # Emit batch of processed posts
             if batch_posts:
@@ -899,52 +899,12 @@ class PostDetectionThread(QThread):
             time.sleep(0.5)
 
         if self.is_running:
-            detected_posts = []
-            for post in all_posts:
-                post_id = post.get("id")
-                title = post.get("title", f"Post {post_id}")
-                if self._title_matches_skip_keyword(title, post):
-                    continue
-                thumbnail_url = None
-                if "file" in post and post["file"] and "path" in post["file"]:
-                    if (
-                        post["file"]["path"]
-                        .lower()
-                        .endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
-                    ):
-                        thumbnail_url = clean_file_url(
-                            post["file"]["path"], self.domain_config
-                        )
-                if not thumbnail_url and "attachments" in post:
-                    for attachment in post["attachments"]:
-                        if (
-                            isinstance(attachment, dict)
-                            and "path" in attachment
-                            and attachment["path"]
-                            .lower()
-                            .endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
-                        ):
-                            thumbnail_url = clean_file_url(
-                                attachment["path"], self.domain_config
-                            )
-                            break
-                if (
-                    not thumbnail_url
-                    and "file" in post
-                    and post["file"]
-                    and "path" in post["file"]
-                ):
-                    thumbnail_url = clean_file_url(
-                        post["file"]["path"], self.domain_config
-                    )
-                detected_posts.append((title, (post_id, thumbnail_url)))
-
-            # Store summary info for later emission (after population & filtering
-            # are done) so these INFO lines appear at the very end of the log.
-            self.filtered_count = len(all_posts) - len(detected_posts)
-            self.total_detected = len(detected_posts)
-            self.finished.emit(detected_posts)
-
+            # All posts were already processed (thumbnail extraction + skip
+            # filtering) incrementally in the batch loop above and
+            # accumulated into all_processed_posts.  Emit the full list.
+            self.filtered_count = self._skipped_count
+            self.total_detected = len(all_processed_posts)
+            self.finished.emit(all_processed_posts)
 
 class PostPopulationThread(QThread):
     finished = pyqtSignal(dict, list)
@@ -1032,6 +992,7 @@ class FilePreparationThread(QThread):
         creator_content_check,
         settings,
         max_concurrent=20,
+        file_skip_keywords=None,
     ):
         super().__init__()
         self.post_ids = post_ids
@@ -1043,9 +1004,31 @@ class FilePreparationThread(QThread):
         self.settings = settings
         self.max_concurrent = max_concurrent
         self.is_running = True
+        # Independent, always-on, filename-only skip list. This list is
+        # never used to remove a whole post -- it only ever excludes
+        # individual files by name, and it applies regardless of scope,
+        # so it can be combined freely with whole-post skipping via a
+        # different keyword list.
+        self.file_skip_keywords = file_skip_keywords if file_skip_keywords is not None else []
+        self._files_skipped_count = 0
+        self._files_skipped_lock = threading.Lock()
 
     def stop(self):
         self.is_running = False
+
+    def _file_matches_skip_keyword(self, file_name):
+        """Return True if *file_name* should be excluded individually.
+
+        Only file_skip_keywords are checked here -- these are always
+        matched against the filename, regardless of any other setting.
+        Whole-post skip keywords are handled upstream in
+        PostDetectionThread.
+        """
+        if self.file_skip_keywords and _keyword_matches_text(
+            self.file_skip_keywords, file_name
+        ):
+            return True
+        return False
 
     def detect_files(self, post, allowed_extensions, domain_config):
         files_to_download = []
@@ -1080,7 +1063,16 @@ class FilePreparationThread(QThread):
                 ),
                 "INFO",
             )
-            if ".jpg" in allowed_extensions and file_ext in [".jpg", ".jpeg"]:
+            if self._file_matches_skip_keyword(file_name):
+                with self._files_skipped_lock:
+                    self._files_skipped_count += 1
+                self.log.emit(
+                    translate(
+                        "log_debug", _t("skipped_individual_file", f"Skipped main file (keyword match): {file_name}")
+                    ),
+                    "INFO",
+                )
+            elif ".jpg" in allowed_extensions and file_ext in [".jpg", ".jpeg"]:
                 self.log.emit(
                     translate("log_debug", translate("added_main_file", file_name)),
                     "INFO",
@@ -1114,7 +1106,20 @@ class FilePreparationThread(QThread):
                         ),
                         "INFO",
                     )
-                    if ".jpg" in allowed_extensions and attachment_ext in [
+                    if self._file_matches_skip_keyword(attachment_name):
+                        with self._files_skipped_lock:
+                            self._files_skipped_count += 1
+                        self.log.emit(
+                            translate(
+                                "log_debug",
+                                _t(
+                                    "skipped_individual_file",
+                                    f"Skipped attachment (keyword match): {attachment_name}",
+                                ),
+                            ),
+                            "INFO",
+                        )
+                    elif ".jpg" in allowed_extensions and attachment_ext in [
                         ".jpg",
                         ".jpeg",
                     ]:
@@ -1150,7 +1155,20 @@ class FilePreparationThread(QThread):
                     ),
                     "INFO",
                 )
-                if ".jpg" in allowed_extensions and img_ext in [".jpg", ".jpeg"]:
+                if self._file_matches_skip_keyword(img_name):
+                    with self._files_skipped_lock:
+                        self._files_skipped_count += 1
+                    self.log.emit(
+                        translate(
+                            "log_debug",
+                            _t(
+                                "skipped_individual_file",
+                                f"Skipped content image (keyword match): {img_name}",
+                            ),
+                        ),
+                        "INFO",
+                    )
+                elif ".jpg" in allowed_extensions and img_ext in [".jpg", ".jpeg"]:
                     self.log.emit(
                         translate(
                             "log_debug", translate("added_content_image", img_name)
@@ -1410,6 +1428,9 @@ class FilePreparationThread(QThread):
                 ),
                 "INFO",
             )
+            # File-skip summary is emitted by CreatorDownloaderTab in
+            # creator_download_finished() so it appears as the LAST line
+            # in the log, not buried behind subsequent messages.
             self.finished.emit(files_to_download, files_to_posts_map)
 
 
@@ -2642,7 +2663,6 @@ class CreatorDownloaderTab(QWidget):
         self.creator_queue = []
         self.downloading = False
         self.current_preview_url = None
-        self.previous_selected_widget = None
         self.cache_dir = self._parent.cache_folder if self._parent else ""
         self.other_files_dir = self._parent.other_files_folder if self._parent else ""
         self.current_creator_url = None
@@ -2678,6 +2698,10 @@ class CreatorDownloaderTab(QWidget):
         self.fast_mode = False
         self._fast_mode_downloading = False
         self._fast_mode_pending_urls: list[str] = []
+        self._pending_detection_summary = False
+        self._last_detection_thread = None
+        self._file_skip_count = 0
+        self._file_skip_keywords = []
         os.makedirs(self.cache_dir, exist_ok=True)
         os.makedirs(self.other_files_dir, exist_ok=True)
         self.setup_ui()
@@ -2974,7 +2998,7 @@ class CreatorDownloaderTab(QWidget):
         skip_scope_layout = QHBoxLayout()
         skip_scope_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.skip_scope_label = QLabel(_t("skip_keywords_scope", "Search In"))
+        self.skip_scope_label = QLabel(_t("skip_keywords_scope", "Filter By"))
         self.skip_scope_label.setStyleSheet("color: white;")
         skip_scope_layout.addWidget(self.skip_scope_label)
 
@@ -2982,8 +3006,7 @@ class CreatorDownloaderTab(QWidget):
         self._skip_scope_options = [
             ("skip_scope_title", "title", "Title only"),
             ("skip_scope_filenames", "filenames", "Filenames only"),
-            ("skip_scope_both_or", "both_or", "Both (skip if either matches)"),
-            ("skip_scope_both_and", "both_and", "Both (skip only if both match)"),
+            ("skip_scope_both_or", "both_or", "Skip if either match"),
         ]
         for label_key, value, fallback_label in self._skip_scope_options:
             self.skip_scope_combo.addItem(_t(label_key, fallback_label), value)
@@ -2992,6 +3015,39 @@ class CreatorDownloaderTab(QWidget):
         skip_scope_layout.addStretch()
 
         post_list_layout.addLayout(skip_scope_layout)
+
+        # Independent, always-on file-level skip keyword list. This is
+        # separate from "Skip Posts Containing" above -- it never removes
+        # a whole post, it only ever excludes individual files by name,
+        # and it applies on top of (in addition to) whole-post skipping,
+        # so the two can be combined with different keyword lists.
+        file_skip_filter_layout = QHBoxLayout()
+        file_skip_filter_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.file_skip_keywords_label = QLabel(
+            _t("skip_files_keywords", "Skip Files Containing")
+        )
+        self.file_skip_keywords_label.setStyleSheet("color: white;")
+        file_skip_filter_layout.addWidget(self.file_skip_keywords_label)
+
+        self.file_skip_keywords_edit = QLineEdit()
+        self.file_skip_keywords_edit.setPlaceholderText(
+            _t(
+                "skip_files_keywords_placeholder",
+                "e.g. JP, ZH (comma-separated, optional)",
+            )
+        )
+        self.file_skip_keywords_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
+        file_skip_filter_layout.addWidget(self.file_skip_keywords_edit, stretch=1)
+
+        self.file_skip_keywords_help_btn = QPushButton("?")
+        self.file_skip_keywords_help_btn.setStyleSheet(
+            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+        )
+        self.file_skip_keywords_help_btn.clicked.connect(self.show_file_skip_keywords_help)
+        file_skip_filter_layout.addWidget(self.file_skip_keywords_help_btn)
+
+        post_list_layout.addLayout(file_skip_filter_layout)
 
         self.creator_search_input = QLineEdit()
         self.creator_search_input.setStyleSheet("padding: 5px; border-radius: 5px;")
@@ -3160,7 +3216,18 @@ class CreatorDownloaderTab(QWidget):
                 )
             )
         if hasattr(self, "skip_scope_label"):
-            self.skip_scope_label.setText(_t("skip_keywords_scope", "Search In"))
+            self.skip_scope_label.setText(_t("skip_keywords_scope", "Filter By"))
+        if hasattr(self, "file_skip_keywords_label"):
+            self.file_skip_keywords_label.setText(
+                _t("skip_files_keywords", "Skip Files Containing")
+            )
+        if hasattr(self, "file_skip_keywords_edit"):
+            self.file_skip_keywords_edit.setPlaceholderText(
+                _t(
+                    "skip_files_keywords_placeholder",
+                    "e.g. JP, ZH (comma-separated, optional)",
+                )
+            )
         if hasattr(self, "skip_scope_combo"):
             current_scope_data = self.skip_scope_combo.currentData()
             self.skip_scope_combo.blockSignals(True)
@@ -3383,7 +3450,6 @@ class CreatorDownloaderTab(QWidget):
                         self.checked_urls = {}
                         self.all_files_map = {}
                         self.current_creator_url = None
-                        self.previous_selected_widget = None
                         self.update_checked_posts()
                         self.filter_items()
                 else:
@@ -3454,7 +3520,6 @@ class CreatorDownloaderTab(QWidget):
 
         self.creator_post_list.clear()
         self.post_widget_cache.clear()
-        self.previous_selected_widget = None
         self.update_pagination_controls()  # Reset pagination UI
 
         # Reset queue status to allow refetching
@@ -3621,6 +3686,8 @@ class CreatorDownloaderTab(QWidget):
         self.skip_keywords_edit.setEnabled(not is_fetching)
         self.skip_scope_combo.setEnabled(not is_fetching)
         self.skip_keywords_help_btn.setEnabled(not is_fetching)
+        self.file_skip_keywords_edit.setEnabled(not is_fetching)
+        self.file_skip_keywords_help_btn.setEnabled(not is_fetching)
 
         # Pagination controls
         self.prev_page_btn.setEnabled(not is_fetching and self.current_page > 1)
@@ -3683,6 +3750,8 @@ class CreatorDownloaderTab(QWidget):
         self.skip_keywords_edit.setEnabled(enabled)
         self.skip_scope_combo.setEnabled(enabled)
         self.skip_keywords_help_btn.setEnabled(enabled)
+        self.file_skip_keywords_edit.setEnabled(enabled)
+        self.file_skip_keywords_help_btn.setEnabled(enabled)
 
         # Pagination
         self.prev_page_btn.setEnabled(enabled and self.current_page > 1)
@@ -3725,7 +3794,6 @@ class CreatorDownloaderTab(QWidget):
         """Display the current page of posts"""
         self.creator_post_list.clear()
         self.post_widget_cache.clear()
-        self.previous_selected_widget = None
 
         start_idx = (self.current_page - 1) * self.posts_per_page
         end_idx = min(start_idx + self.posts_per_page, len(self.filtered_posts))
@@ -4062,6 +4130,13 @@ class CreatorDownloaderTab(QWidget):
             self.creator_download_finished()
             return
 
+        raw_file_keywords = self.file_skip_keywords_edit.text().strip()
+        file_skip_keywords = (
+            [kw.strip() for kw in raw_file_keywords.split(",") if kw.strip()]
+            if raw_file_keywords
+            else []
+        )
+
         self.file_preparation_thread = FilePreparationThread(
             post_ids,
             self.all_files_map,
@@ -4071,6 +4146,7 @@ class CreatorDownloaderTab(QWidget):
             self.creator_content_check.isChecked(),
             self._create_thread_settings(),
             max_concurrent=5,
+            file_skip_keywords=file_skip_keywords,
         )
         self.file_preparation_thread.progress.connect(self.update_background_progress)
         self.file_preparation_thread.finished.connect(
@@ -4098,6 +4174,14 @@ class CreatorDownloaderTab(QWidget):
 
     def on_file_preparation_finished(self, urls, files_to_download, files_to_posts_map):
         self.total_files_to_download = len(files_to_download)
+        # Store file-skip info from the FilePreparationThread so it can be
+        # emitted as the LAST line in creator_download_finished().
+        self._file_skip_count = getattr(
+            self.file_preparation_thread, "_files_skipped_count", 0
+        )
+        self._file_skip_keywords = getattr(
+            self.file_preparation_thread, "file_skip_keywords", []
+        )
         self.append_log_to_console(
             translate(
                 "log_debug",
@@ -4229,34 +4313,6 @@ class CreatorDownloaderTab(QWidget):
                 ),
                 "INFO",
             )
-            # Transfer failed files from thread to tab if present
-            try:
-                thread_failed = getattr(thread, "failed_files", None)
-                if thread_failed:
-                    try:
-                        with self.failed_files_lock:
-                            # Prefer dict-like update but handle other mappings gracefully
-                            if isinstance(thread_failed, dict):
-                                self.failed_files.update(thread_failed)
-                            else:
-                                for k, v in dict(thread_failed).items():
-                                    self.failed_files[k] = v
-                        self.append_log_to_console(
-                            translate(
-                                "log_debug",
-                                translate(
-                                    "transferred_from",
-                                    len(thread_failed),
-                                    thread.__class__.__name__,
-                                ),
-                            ),
-                            "INFO",
-                        )
-                    except Exception:
-                        # Ignore failures during transfer to avoid breaking cleanup
-                        pass
-            except Exception:
-                pass
 
         # Ensure the native thread has fully exited before we let the object
         # be garbage-collected — otherwise Qt prints
@@ -4328,26 +4384,6 @@ class CreatorDownloaderTab(QWidget):
                 ),
                 "INFO",
             )
-
-        # Ensure failed files from the thread are preserved in the tab
-        try:
-            thread_failed = getattr(thread, "failed_files", None)
-            if thread_failed:
-                try:
-                    with self.failed_files_lock:
-                        if isinstance(thread_failed, dict):
-                            for k, v in thread_failed.items():
-                                # Preserve any failures not already recorded
-                                if k not in self.failed_files:
-                                    self.failed_files[k] = v
-                        else:
-                            for k, v in dict(thread_failed).items():
-                                if k not in self.failed_files:
-                                    self.failed_files[k] = v
-                except Exception:
-                    pass
-        except Exception:
-            pass
 
     def cancel_creator_download(self):
         # Stop fast-mode processing loop
@@ -4657,6 +4693,22 @@ class CreatorDownloaderTab(QWidget):
             translate("log_info", translate("download_process_completed")), "INFO"
         )
 
+        # Emit file-level skip-keyword summary as the VERY LAST line so
+        # it never gets buried behind subsequent messages.
+        file_skip_kws = getattr(self, "_file_skip_keywords", [])
+        if file_skip_kws:
+            self.append_log_to_console(
+                translate(
+                    "log_info",
+                    translate(
+                        "files_skipped_by_keyword",
+                        getattr(self, "_file_skip_count", 0),
+                        ", ".join(file_skip_kws),
+                    ),
+                ),
+                "INFO",
+            )
+
         # Always show Downloads Complete, even if some files failed
         self.creator_file_progress.setStyleSheet(
             "QProgressBar { border: 1px solid #4A5B7A; border-radius: 5px; background: #2A3B5A; } QProgressBar::chunk { background: green; }"
@@ -4701,14 +4753,25 @@ class CreatorDownloaderTab(QWidget):
             _t("skip_posts_keywords_help_title", "Skip Posts Help"),
             _t(
                 "skip_posts_keywords_help_text",
-                "Enter comma-separated words or phrases (e.g. JP, ZH). "
-                "Any post matching one of these as a whole word "
-                "(case-insensitive) will be excluded from the Creator "
-                "Downloader's search results, so it won't be downloaded. "
-                "Use 'Search In' to choose whether matching looks at the "
-                "post title, file names (main file and attachments), or "
-                "both. Leave the keyword field blank to disable this filter. "
-                "Changes take effect on the next post fetch.",
+                "Comma-separated keywords (e.g. JP, ZH). Posts matching any "
+                "keyword (case-insensitive, whole word) are excluded "
+                "entirely. Use 'Filter By' to choose: Title only, Filenames "
+                "only, or Skip if either match. Leave blank to disable.",
+            ),
+        )
+
+    def show_file_skip_keywords_help(self):
+        """Show help text explaining the inline skip-keywords file filter."""
+        QMessageBox.information(
+            self,
+            _t("skip_files_keywords_help_title", "Skip Files Help"),
+            _t(
+                "skip_files_keywords_help_text",
+                "Comma-separated keywords (e.g. JP, ZH). Individual files "
+                "matching any keyword (case-insensitive, whole word) are "
+                "excluded from download. Only the matched file is skipped — "
+                "never the whole post. Independent from 'Skip Posts "
+                "Containing' above. Leave blank to disable.",
             ),
         )
 
@@ -4978,22 +5041,6 @@ class CreatorDownloaderTab(QWidget):
         item.setData(Qt.UserRole, url)
         post_id = self.post_url_map[text][0]
         item.setData(Qt.UserRole + 1, post_id)
-        widget = QWidget()
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(5)
-
-        check_box = QCheckBox()
-        check_box.setStyleSheet("color: white;")
-        check_box.setChecked(is_checked)
-        check_box.clicked.connect(lambda: self.toggle_checkbox_state(text))
-        layout.addWidget(check_box)
-
-        label = QLabel(text)
-        label.setStyleSheet("color: white;")
-        label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        layout.addWidget(label, stretch=1)
-
         widget = QWidget()
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
