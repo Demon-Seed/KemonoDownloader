@@ -1383,6 +1383,11 @@ class CreatorDownloadThread(QThread):
         # Locks for thread-safe access to shared dictionaries
         self.failed_files_lock = threading.Lock()
         self.post_file_counters_lock = threading.Lock()
+        # Cache of resolved per-post folder names (post_id -> folder name),
+        # so repeated calls for the same post always resolve to the same
+        # folder, and so we only need to check disk collisions once per post.
+        self._post_folder_names = {}
+        self._post_folder_names_lock = threading.Lock()
 
         self.completed_files_lock = threading.Lock()
         self.fetched_texts_lock = threading.Lock()
@@ -1504,6 +1509,93 @@ class CreatorDownloadThread(QThread):
         except RuntimeError:
             pass
 
+    def get_post_folder_name(self, post_id, post_title, creator_folder):
+        """Render the per-post folder name using the configurable
+        ``creator_folder_name_template`` setting (default
+        "{post_id}_{post_title}", preserving prior behavior). Falls back to
+        that default if the setting is unavailable or the template fails
+        to render (e.g. references an unknown placeholder).
+
+        If the rendered name collides with an existing folder that belongs
+        to a *different* post (tracked via a hidden ``.post_id`` marker file),
+        a numeric suffix (_1, _2, ...) is appended until a free or matching
+        name is found. The result is cached per post_id so repeated calls
+        (once per file in the post) always resolve to the same folder.
+        """
+        with self._post_folder_names_lock:
+            if post_id in self._post_folder_names:
+                return self._post_folder_names[post_id]
+
+            template = None
+            try:
+                if self.settings and getattr(self.settings, "settings_tab", None):
+                    template = (
+                        self.settings.settings_tab.get_creator_folder_name_template()
+                    )
+            except Exception:
+                template = None
+
+            if not template:
+                template = "{post_id}_{post_title}"
+
+            context = {
+                "post_id": post_id,
+                "post_title": sanitize_filename(post_title),
+                "creator_id": self.creator_id,
+                "creator_name": sanitize_filename(
+                    self.creator_name or "Unknown_Creator"
+                ),
+            }
+
+            try:
+                rendered = template.format(**context)
+            except Exception:
+                try:
+                    self._safe_emit(
+                        self.log,
+                        translate(
+                            "log_warning",
+                            translate("folder_name_template_error", template),
+                        ),
+                        "WARNING",
+                    )
+                except Exception:
+                    pass
+                rendered = f"{context['post_id']}_{context['post_title']}"
+
+            base_name = sanitize_filename(rendered)
+
+            # Resolve collisions against what's already on disk
+            candidate = base_name
+            counter = 1
+            while True:
+                candidate_path = os.path.join(creator_folder, candidate)
+                if not os.path.exists(candidate_path):
+                    break
+                marker_path = os.path.join(candidate_path, ".post_id")
+                if os.path.exists(marker_path):
+                    try:
+                        with open(marker_path, "r", encoding="utf-8") as f:
+                            if f.read().strip() == str(post_id):
+                                break
+                    except Exception:
+                        pass
+                candidate = f"{base_name}_{counter}"
+                counter += 1
+
+            self._post_folder_names[post_id] = candidate
+            return candidate
+
+    def mark_post_folder(self, post_folder, post_id):
+        """Write a hidden marker file recording which post owns this folder."""
+        marker_path = os.path.join(post_folder, ".post_id")
+        if not os.path.exists(marker_path):
+            try:
+                with open(marker_path, "w", encoding="utf-8") as f:
+                    f.write(str(post_id))
+            except Exception:
+                pass
+
     def generate_filename_and_folder(
         self, file_url, folder, file_index, total_files, post_id, post_title
     ):
@@ -1604,7 +1696,9 @@ class CreatorDownloadThread(QThread):
             ext_folder = (file_ext.lstrip(".") or "other").lower()
             target_folder = os.path.join(creator_folder, ext_folder)
         else:  # per_post (default)
-            post_folder_name = f"{post_id}_{post_title_safe}"
+            post_folder_name = self.get_post_folder_name(
+                post_id, post_title_safe, creator_folder
+            )
             target_folder = os.path.join(creator_folder, post_folder_name)
 
         return target_folder, final_filename
@@ -1626,8 +1720,10 @@ class CreatorDownloadThread(QThread):
         elif strategy == "single_folder":
             return creator_folder
         else:  # per_post
-            safe_title = sanitize_filename(post_title)
-            return os.path.join(creator_folder, f"{post_id}_{safe_title}")
+            return os.path.join(
+                creator_folder,
+                self.get_post_folder_name(post_id, post_title, creator_folder),
+            )
 
     async def download_post_text_if_needed(self, post_id, post_folder):
         should_download = False
@@ -1711,6 +1807,11 @@ class CreatorDownloadThread(QThread):
             self.check_post_completion(file_url)
             return
 
+        # If this post got a resolved per-post folder name (only populated
+        # when folder strategy is "per_post"), record which post owns it.
+        if post_id in self._post_folder_names:
+            self.mark_post_folder(target_folder, post_id)
+
         # Download text if enabled (only once per post)
         if self.download_text:
             # Determine destination for description files depending on folder strategy
@@ -1718,6 +1819,8 @@ class CreatorDownloadThread(QThread):
             desc_folder = self.get_desc_folder_for_post(folder, post_id, post_title)
             try:
                 os.makedirs(desc_folder, exist_ok=True)
+                if post_id in self._post_folder_names:
+                    self.mark_post_folder(desc_folder, post_id)
             except Exception:
                 pass
             await self.download_post_text_if_needed(post_id, desc_folder)

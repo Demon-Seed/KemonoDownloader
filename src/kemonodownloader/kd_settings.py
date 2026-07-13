@@ -26,6 +26,20 @@ from PyQt6.QtWidgets import (
 from kemonodownloader.kd_language import language_manager, translate
 
 
+def _t(key, fallback):
+    """Translate *key*, falling back to *fallback* text if the key hasn't
+    been added to kd_language.py yet (translate() returns the raw key
+    string when no translation is found for it).
+    """
+    try:
+        value = translate(key)
+    except Exception:
+        value = None
+    if not value or value == key:
+        return fallback
+    return value
+
+
 class SettingsTab(QWidget):
     settings_applied = pyqtSignal()
     language_changed = pyqtSignal()
@@ -54,6 +68,7 @@ class SettingsTab(QWidget):
             # Creator downloader filename/folder customization
             "creator_filename_template": "{post_id}_{orig_name}",
             "creator_folder_strategy": "per_post",  # per_post|single_folder|by_file_type
+            "creator_folder_name_template": "{post_id}_{post_title}",
             # Font setting
             "font": "JetBrains Mono",  # "JetBrains Mono", "Poppins"
         }
@@ -149,6 +164,13 @@ class SettingsTab(QWidget):
             self.default_settings.get("creator_folder_strategy", "per_post"),
             type=str,
         )
+        settings_dict["creator_folder_name_template"] = self.qsettings.value(
+            "creator_folder_name_template",
+            self.default_settings.get(
+                "creator_folder_name_template", "{post_id}_{post_title}"
+            ),
+            type=str,
+        )
         # Font setting
         settings_dict["font"] = self.qsettings.value(
             "font", self.default_settings.get("font", "JetBrains Mono"), type=str
@@ -188,6 +210,10 @@ class SettingsTab(QWidget):
         self.qsettings.setValue(
             "creator_folder_strategy",
             self.settings.get("creator_folder_strategy", "per_post"),
+        )
+        self.qsettings.setValue(
+            "creator_folder_name_template",
+            self.settings.get("creator_folder_name_template", "{post_id}_{post_title}"),
         )
         # Font setting
         self.qsettings.setValue(
@@ -413,8 +439,68 @@ class SettingsTab(QWidget):
         self.creator_template_help_btn.clicked.connect(self.show_template_help)
         creator_custom_layout.addWidget(self.creator_template_help_btn, 0, 2)
 
+        self.creator_folder_name_label = QLabel(_t("folder_name_template", "Folder Name Template"))
+        creator_custom_layout.addWidget(self.creator_folder_name_label, 1, 0)
+
+        # Folder name template combo (preset selections + editable custom)
+        self.creator_folder_name_combo = QComboBox()
+        self.creator_folder_name_combo.setEditable(True)
+        self._folder_name_presets = [
+            ("tmpl_postid_posttitle_folder", "{post_id}_{post_title}", "Post ID + Title (default)"),
+            ("tmpl_posttitle_only", "{post_title}", "Title only (no ID)"),
+            ("tmpl_posttitle_postid_folder", "{post_title}-{post_id}", "Title - Post ID"),
+            ("tmpl_posttitle_id_paren", "{post_title} (ID {post_id})", "Title (ID Post ID)"),
+        ]
+        for label_key, tpl, fallback_label in self._folder_name_presets:
+            self.creator_folder_name_combo.addItem(_t(label_key, fallback_label), tpl)
+        self.creator_folder_name_combo.addItem(
+            _t("tmpl_custom", "Custom..."), "{post_id}_{post_title}"
+        )
+        current_folder_tpl = self.temp_settings.get(
+            "creator_folder_name_template", "{post_id}_{post_title}"
+        )
+        found_folder_index = None
+        for i in range(self.creator_folder_name_combo.count()):
+            if self.creator_folder_name_combo.itemData(i) == current_folder_tpl:
+                found_folder_index = i
+                break
+        if found_folder_index is not None:
+            self.creator_folder_name_combo.setCurrentIndex(found_folder_index)
+        else:
+            self.creator_folder_name_combo.setCurrentIndex(
+                self.creator_folder_name_combo.count() - 1
+            )
+            self.creator_folder_name_combo.setEditText(current_folder_tpl)
+
+        self.creator_folder_name_combo.setStyleSheet(
+            "padding: 5px; border-radius: 5px;"
+        )
+        self.creator_folder_name_combo.currentIndexChanged.connect(
+            lambda idx: self.update_temp_setting(
+                "creator_folder_name_template",
+                (
+                    self.creator_folder_name_combo.itemData(idx)
+                    if idx < self.creator_folder_name_combo.count() - 1
+                    else self.creator_folder_name_combo.currentText()
+                ),
+            )
+        )
+        self.creator_folder_name_combo.lineEdit().textChanged.connect(
+            lambda text: self.update_temp_setting("creator_folder_name_template", text)
+        )
+        creator_custom_layout.addWidget(self.creator_folder_name_combo, 1, 1)
+
+        self.creator_folder_name_help_btn = QPushButton("?")
+        self.creator_folder_name_help_btn.setStyleSheet(
+            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+        )
+        self.creator_folder_name_help_btn.clicked.connect(
+            self.show_folder_name_template_help
+        )
+        creator_custom_layout.addWidget(self.creator_folder_name_help_btn, 1, 2)
+
         self.creator_folder_strategy_label = QLabel()
-        creator_custom_layout.addWidget(self.creator_folder_strategy_label, 1, 0)
+        creator_custom_layout.addWidget(self.creator_folder_strategy_label, 2, 0)
 
         self.creator_folder_strategy_combo = QComboBox()
         self.creator_folder_strategy_combo.addItem(
@@ -441,7 +527,7 @@ class SettingsTab(QWidget):
                 self.creator_folder_strategy_combo.itemData(idx),
             )
         )
-        creator_custom_layout.addWidget(self.creator_folder_strategy_combo, 1, 1)
+        creator_custom_layout.addWidget(self.creator_folder_strategy_combo, 2, 1)
 
         self.creator_custom_group.setLayout(creator_custom_layout)
         layout.addWidget(self.creator_custom_group)
@@ -783,6 +869,23 @@ class SettingsTab(QWidget):
                 "Use placeholders like {post_title}, {post_id}, {orig_name}, {ext}, {creator_name}, {creator_id}, {file_index}, {total_files}",
             )
 
+    def show_folder_name_template_help(self):
+        """Show help text explaining the available folder name template placeholders."""
+        try:
+            QMessageBox.information(
+                self,
+                translate("folder_name_template_help_title"),
+                translate("folder_name_template_help_text"),
+            )
+        except Exception:
+            QMessageBox.information(
+                self,
+                "Folder Name Template Help",
+                "Use placeholders like {post_title}, {post_id}, {creator_name}, {creator_id}. "
+                "Example: {post_title} drops the post ID from the folder name. "
+                "Only applies when Folder Structure is 'Per-post folders'.",
+            )
+
     def browse_directory(self):
         directory = QFileDialog.getExistingDirectory(
             self, translate("browse"), self.temp_settings["base_directory"]
@@ -1063,6 +1166,9 @@ class SettingsTab(QWidget):
         filename_template_display = self.temp_settings.get(
             "creator_filename_template", "{post_id}_{orig_name}"
         )
+        folder_name_template_display = self.temp_settings.get(
+            "creator_folder_name_template", "{post_id}_{post_title}"
+        )
         folder_strategy_key = self.temp_settings.get(
             "creator_folder_strategy", "per_post"
         )
@@ -1091,6 +1197,7 @@ class SettingsTab(QWidget):
                 filename_template_display,
                 folder_strategy_display,
                 self.temp_settings.get("font", "JetBrains Mono"),
+                folder_name_template_display,
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -1175,6 +1282,9 @@ class SettingsTab(QWidget):
         filename_template_display = self.settings.get(
             "creator_filename_template", "{post_id}_{orig_name}"
         )
+        folder_name_template_display = self.settings.get(
+            "creator_folder_name_template", "{post_id}_{post_title}"
+        )
         folder_strategy_key = self.settings.get("creator_folder_strategy", "per_post")
         folder_strategy_display = translate(
             "per_post_folders"
@@ -1201,6 +1311,7 @@ class SettingsTab(QWidget):
                 filename_template_display,
                 folder_strategy_display,
                 self.settings.get("font", "JetBrains Mono"),
+                folder_name_template_display,
             ),
         )
 
@@ -1296,6 +1407,9 @@ class SettingsTab(QWidget):
         # Creator downloader customization texts
         self.creator_custom_group.setTitle(translate("creator_downloader_settings"))
         self.creator_custom_label.setText(translate("filename_template"))
+        self.creator_folder_name_label.setText(
+            _t("folder_name_template", "Folder Name Template")
+        )
         self.creator_folder_strategy_label.setText(translate("folder_strategy"))
 
         # Update template presets display (support language change)
@@ -1335,6 +1449,38 @@ class SettingsTab(QWidget):
         except Exception:
             pass
 
+        # Ensure folder name template combo labels are localized
+        try:
+            if hasattr(self, "creator_folder_name_combo"):
+                current_folder_text = self.creator_folder_name_combo.currentText()
+                current_folder_data = self.creator_folder_name_combo.itemData(
+                    self.creator_folder_name_combo.currentIndex()
+                )
+                self.creator_folder_name_combo.blockSignals(True)
+                self.creator_folder_name_combo.clear()
+                for label_key, tpl, fallback_label in self._folder_name_presets:
+                    self.creator_folder_name_combo.addItem(
+                        _t(label_key, fallback_label), tpl
+                    )
+                self.creator_folder_name_combo.addItem(
+                    _t("tmpl_custom", "Custom..."), "{post_id}_{post_title}"
+                )
+                found_folder_index = None
+                for i in range(self.creator_folder_name_combo.count()):
+                    if self.creator_folder_name_combo.itemData(i) == current_folder_data:
+                        found_folder_index = i
+                        break
+                if found_folder_index is not None:
+                    self.creator_folder_name_combo.setCurrentIndex(found_folder_index)
+                else:
+                    self.creator_folder_name_combo.setCurrentIndex(
+                        self.creator_folder_name_combo.count() - 1
+                    )
+                    self.creator_folder_name_combo.setEditText(current_folder_text)
+                self.creator_folder_name_combo.blockSignals(False)
+        except Exception:
+            pass
+
         # Ensure folder strategy combo labels are localized
         try:
             if hasattr(self, "creator_folder_strategy_combo"):
@@ -1367,6 +1513,10 @@ class SettingsTab(QWidget):
         if hasattr(self, "creator_template_help_btn"):
             self.creator_template_help_btn.setToolTip(
                 translate("filename_template_help_title")
+            )
+        if hasattr(self, "creator_folder_name_help_btn"):
+            self.creator_folder_name_help_btn.setToolTip(
+                _t("folder_name_template_help_title", "Folder name template variables")
             )
 
         # Update proxy and other text
@@ -1420,6 +1570,11 @@ class SettingsTab(QWidget):
 
     def get_creator_folder_strategy(self):
         return self.settings.get("creator_folder_strategy", "per_post")
+
+    def get_creator_folder_name_template(self):
+        return self.settings.get(
+            "creator_folder_name_template", "{post_id}_{post_title}"
+        )
 
     def get_font(self):
         return self.settings.get("font", "JetBrains Mono")
