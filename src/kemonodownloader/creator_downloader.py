@@ -20,6 +20,7 @@ from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QDialog,
     QFileDialog,
     QGridLayout,
@@ -45,7 +46,20 @@ from kemonodownloader.domain_config import (
     get_domains,
 )
 from kemonodownloader.hash_db import HashDB
-from kemonodownloader.kd_language import translate
+from kemonodownloader.kd_language import language_manager, translate
+
+
+def _t(key, fallback):
+    """Translate *key*, falling back to *fallback* text if the key hasn't
+    been added to kd_language.py yet.
+    """
+    try:
+        value = translate(key)
+    except Exception:
+        value = None
+    if not value or value == key:
+        return fallback
+    return value
 
 
 class ThreadSettings:
@@ -329,34 +343,24 @@ class PostDetectionThread(QThread):
     log = pyqtSignal(str, str)
     error = pyqtSignal(str)
 
-    def __init__(self, url, post_titles_map, settings):
+    def __init__(self, url, post_titles_map, settings, skip_keywords=None, skip_keywords_scope="title"):
         super().__init__()
         self.url = url
         self.post_titles_map = post_titles_map  # Shared dictionary to store post titles
         self.settings = settings
         self.is_running = True
         self.domain_config = get_domain_config(url)
-        self.skip_keywords = self._load_skip_keywords()
-        self.skip_keywords_scope = self._load_skip_keywords_scope()
+        self.skip_keywords = skip_keywords if skip_keywords is not None else []
+        self.skip_keywords_scope = skip_keywords_scope if skip_keywords_scope else "title"
         self._skipped_count = 0
 
     def _load_skip_keywords(self):
-        """Load the configured skip-keywords list (whole-word, case-insensitive)."""
-        try:
-            if self.settings and getattr(self.settings, "settings_tab", None):
-                return self.settings.settings_tab.get_creator_skip_keywords()
-        except Exception:
-            pass
-        return []
+        """Return the skip-keywords list passed via the constructor."""
+        return self.skip_keywords
 
     def _load_skip_keywords_scope(self):
-        """Load where skip-keywords should be matched: title|filenames|both_or|both_and."""
-        try:
-            if self.settings and getattr(self.settings, "settings_tab", None):
-                return self.settings.settings_tab.get_creator_skip_keywords_scope()
-        except Exception:
-            pass
-        return "title"
+        """Return the skip-keywords scope passed via the constructor."""
+        return self.skip_keywords_scope
 
     def _gather_post_filenames(self, post):
         """Collect candidate filenames for a post: the main file and any
@@ -935,27 +939,10 @@ class PostDetectionThread(QThread):
                     )
                 detected_posts.append((title, (post_id, thumbnail_url)))
 
-            self.log.emit(
-                translate(
-                    "log_info",
-                    translate(
-                        "total_posts_fetched_for_creator", self.url, len(detected_posts)
-                    ),
-                ),
-                "INFO",
-            )
-            if self.skip_keywords:
-                self.log.emit(
-                    translate(
-                        "log_info",
-                        translate(
-                            "posts_skipped_by_keyword",
-                            len(all_posts) - len(detected_posts),
-                            ", ".join(self.skip_keywords),
-                        ),
-                    ),
-                    "INFO",
-                )
+            # Store summary info for later emission (after population & filtering
+            # are done) so these INFO lines appear at the very end of the log.
+            self.filtered_count = len(all_posts) - len(detected_posts)
+            self.total_detected = len(detected_posts)
             self.finished.emit(detected_posts)
 
 
@@ -1026,12 +1013,6 @@ class FilterThread(QThread):
             if not self.search_text or self.search_text in post_title.lower():
                 is_checked = self.checked_urls.get(post_id, False)
                 filtered_items.append((post_title, post_id, thumbnail_url, is_checked))
-                self.log.emit(
-                    translate(
-                        "log_debug", translate("filtered_post", post_title, post_id)
-                    ),
-                    "INFO",
-                )
         self.finished.emit(filtered_items)
 
 
@@ -2963,6 +2944,55 @@ class CreatorDownloaderTab(QWidget):
         )
         post_list_layout = QVBoxLayout()
 
+        # Inline skip-keywords filter row (above search bar)
+        skip_filter_layout = QHBoxLayout()
+        skip_filter_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.skip_keywords_label = QLabel(
+            _t("skip_posts_keywords", "Skip Posts Containing")
+        )
+        self.skip_keywords_label.setStyleSheet("color: white;")
+        skip_filter_layout.addWidget(self.skip_keywords_label)
+
+        self.skip_keywords_edit = QLineEdit()
+        self.skip_keywords_edit.setPlaceholderText(
+            _t("skip_posts_keywords_placeholder", "e.g. JP, ZH (comma-separated, optional)")
+        )
+        self.skip_keywords_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
+        skip_filter_layout.addWidget(self.skip_keywords_edit, stretch=1)
+
+        self.skip_keywords_help_btn = QPushButton("?")
+        self.skip_keywords_help_btn.setStyleSheet(
+            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+        )
+        self.skip_keywords_help_btn.clicked.connect(self.show_skip_keywords_help)
+        skip_filter_layout.addWidget(self.skip_keywords_help_btn)
+
+        post_list_layout.addLayout(skip_filter_layout)
+
+        # Skip scope combo row
+        skip_scope_layout = QHBoxLayout()
+        skip_scope_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.skip_scope_label = QLabel(_t("skip_keywords_scope", "Search In"))
+        self.skip_scope_label.setStyleSheet("color: white;")
+        skip_scope_layout.addWidget(self.skip_scope_label)
+
+        self.skip_scope_combo = QComboBox()
+        self._skip_scope_options = [
+            ("skip_scope_title", "title", "Title only"),
+            ("skip_scope_filenames", "filenames", "Filenames only"),
+            ("skip_scope_both_or", "both_or", "Both (skip if either matches)"),
+            ("skip_scope_both_and", "both_and", "Both (skip only if both match)"),
+        ]
+        for label_key, value, fallback_label in self._skip_scope_options:
+            self.skip_scope_combo.addItem(_t(label_key, fallback_label), value)
+        self.skip_scope_combo.setStyleSheet("padding: 5px; border-radius: 5px;")
+        skip_scope_layout.addWidget(self.skip_scope_combo, stretch=1)
+        skip_scope_layout.addStretch()
+
+        post_list_layout.addLayout(skip_scope_layout)
+
         self.creator_search_input = QLineEdit()
         self.creator_search_input.setStyleSheet("padding: 5px; border-radius: 5px;")
         self.creator_search_input.textChanged.connect(self.filter_items)
@@ -3116,6 +3146,34 @@ class CreatorDownloaderTab(QWidget):
         self.creator_expand_logs_btn.setText(translate("expand_logs"))
 
         self.creator_search_input.setPlaceholderText(translate("search_posts"))
+
+        # Update inline skip-keywords filter labels
+        if hasattr(self, "skip_keywords_label"):
+            self.skip_keywords_label.setText(
+                _t("skip_posts_keywords", "Skip Posts Containing")
+            )
+        if hasattr(self, "skip_keywords_edit"):
+            self.skip_keywords_edit.setPlaceholderText(
+                _t(
+                    "skip_posts_keywords_placeholder",
+                    "e.g. JP, ZH (comma-separated, optional)",
+                )
+            )
+        if hasattr(self, "skip_scope_label"):
+            self.skip_scope_label.setText(_t("skip_keywords_scope", "Search In"))
+        if hasattr(self, "skip_scope_combo"):
+            current_scope_data = self.skip_scope_combo.currentData()
+            self.skip_scope_combo.blockSignals(True)
+            self.skip_scope_combo.clear()
+            for label_key, value, fallback_label in self._skip_scope_options:
+                self.skip_scope_combo.addItem(
+                    _t(label_key, fallback_label), value
+                )
+            for i in range(self.skip_scope_combo.count()):
+                if self.skip_scope_combo.itemData(i) == current_scope_data:
+                    self.skip_scope_combo.setCurrentIndex(i)
+                    break
+            self.skip_scope_combo.blockSignals(False)
 
         self.update_creator_queue_list()
 
@@ -3424,8 +3482,17 @@ class CreatorDownloaderTab(QWidget):
         # Disable UI elements during fetching
         self.set_fetching_ui_state(True)
 
+        # Read skip-keywords and scope directly from the inline UI widgets
+        raw_keywords = self.skip_keywords_edit.text().strip()
+        skip_keywords = [kw.strip() for kw in raw_keywords.split(",") if kw.strip()] if raw_keywords else []
+        skip_keywords_scope = self.skip_scope_combo.currentData() or "title"
+
         self.post_detection_thread = PostDetectionThread(
-            url, self.post_titles_map, self._create_thread_settings()
+            url,
+            self.post_titles_map,
+            self._create_thread_settings(),
+            skip_keywords=skip_keywords,
+            skip_keywords_scope=skip_keywords_scope,
         )
         self.post_detection_thread.finished.connect(self.on_post_detection_finished)
         self.post_detection_thread.posts_batch.connect(self.on_posts_batch_received)
@@ -3448,6 +3515,9 @@ class CreatorDownloaderTab(QWidget):
         # Ensure all_detected_posts is set (should already be set from batches)
         if not self.all_detected_posts:
             self.all_detected_posts = detected_posts
+        # Store reference to the detection thread for summary emission later
+        self._last_detection_thread = self.post_detection_thread
+        self._pending_detection_summary = True
         self.start_population_thread(self.all_detected_posts)
 
     def on_posts_batch_received(self, batch_posts):
@@ -3547,6 +3617,11 @@ class CreatorDownloaderTab(QWidget):
         self.creator_check_all_all.setEnabled(not is_fetching)
         self.creator_post_list.setEnabled(not is_fetching)
 
+        # Inline skip-keywords filter
+        self.skip_keywords_edit.setEnabled(not is_fetching)
+        self.skip_scope_combo.setEnabled(not is_fetching)
+        self.skip_keywords_help_btn.setEnabled(not is_fetching)
+
         # Pagination controls
         self.prev_page_btn.setEnabled(not is_fetching and self.current_page > 1)
         self.next_page_btn.setEnabled(
@@ -3603,6 +3678,11 @@ class CreatorDownloaderTab(QWidget):
         self.creator_check_all_all.setEnabled(enabled)
         self.creator_post_list.setEnabled(enabled)
         self.creator_view_button.setEnabled(enabled)
+
+        # Inline skip-keywords filter
+        self.skip_keywords_edit.setEnabled(enabled)
+        self.skip_scope_combo.setEnabled(enabled)
+        self.skip_keywords_help_btn.setEnabled(enabled)
 
         # Pagination
         self.prev_page_btn.setEnabled(enabled and self.current_page > 1)
@@ -4114,7 +4194,7 @@ class CreatorDownloaderTab(QWidget):
 
     def cleanup_thread(self, thread, remaining_urls):
         """Clean up a download thread and proceed to the next creator or finish."""
-        # Transfer failed files from thread to tab if present (handle threads
+        # Transfer failed file from thread to tab if present (handle threads
         # that weren't tracked in active_threads as well)
         try:
             thread_failed = getattr(thread, "failed_files", None)
@@ -4614,6 +4694,24 @@ class CreatorDownloaderTab(QWidget):
         # Normal mode: fully restore UI
         self.set_downloading_ui_state(False)
 
+    def show_skip_keywords_help(self):
+        """Show help text explaining the inline skip-keywords post filter."""
+        QMessageBox.information(
+            self,
+            _t("skip_posts_keywords_help_title", "Skip Posts Help"),
+            _t(
+                "skip_posts_keywords_help_text",
+                "Enter comma-separated words or phrases (e.g. JP, ZH). "
+                "Any post matching one of these as a whole word "
+                "(case-insensitive) will be excluded from the Creator "
+                "Downloader's search results, so it won't be downloaded. "
+                "Use 'Search In' to choose whether matching looks at the "
+                "post title, file names (main file and attachments), or "
+                "both. Leave the keyword field blank to disable this filter. "
+                "Changes take effect on the next post fetch.",
+            ),
+        )
+
     def expand_logs(self):
         """Open the full logs window"""
         if not hasattr(self, "logs_window") or not self.logs_window.isVisible():
@@ -4831,6 +4929,41 @@ class CreatorDownloaderTab(QWidget):
             ),
             "INFO",
         )
+
+        # Emit skip-keywords summary INFO lines LAST — after all detection,
+        # population, and filtering logs are done — so they appear at the
+        # very end of the log.
+        if getattr(self, "_pending_detection_summary", False):
+            self._pending_detection_summary = False
+            detection_thread = getattr(self, "_last_detection_thread", None)
+            if detection_thread is not None:
+                filtered_count = getattr(detection_thread, "filtered_count", 0)
+                total_detected = getattr(detection_thread, "total_detected", 0)
+                skip_kws = getattr(detection_thread, "skip_keywords", [])
+                self.append_log_to_console(
+                    translate(
+                        "log_info",
+                        translate(
+                            "total_posts_fetched_for_creator",
+                            self.current_creator_url or "",
+                            total_detected,
+                            filtered_count,
+                        ),
+                    ),
+                    "INFO",
+                )
+                if skip_kws:
+                    self.append_log_to_console(
+                        translate(
+                            "log_info",
+                            translate(
+                                "posts_skipped_by_keyword",
+                                filtered_count,
+                                ", ".join(skip_kws),
+                            ),
+                        ),
+                        "INFO",
+                    )
 
     def cleanup_filter_thread(self):
         """Clean up the filter thread after it finishes."""

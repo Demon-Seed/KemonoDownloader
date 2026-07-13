@@ -437,10 +437,10 @@ class KDLanguage:
                 "chinese-simplified": "为填充准备了 {0} 个帖子，唯一标题数：{1}",
             },
             "total_posts_fetched_for_creator": {
-                "english": "Total posts fetched for creator {0}: {1}",
-                "japanese": "クリエイター {0} のために取得した投稿の合計：{1}",
-                "korean": "크리에이터 {0}에 대해 가져온 총 게시물 수: {1}",
-                "chinese-simplified": "为创建者 {0} 获取的帖子总数：{1}",
+                "english": "Total posts fetched for creator {0}: {1} (filtered out: {2})",
+                "japanese": "クリエイター {0} のために取得した投稿の合計：{1}（除外：{2}）",
+                "korean": "크리에이터 {0}에 대해 가져온 총 게시물 수: {1} (제외됨: {2})",
+                "chinese-simplified": "为创建者 {0} 获取的帖子总数：{1}（已过滤：{2}）",
             },
             "checking_content_image": {
                 "english": "Checking content image: {0} ({1})",

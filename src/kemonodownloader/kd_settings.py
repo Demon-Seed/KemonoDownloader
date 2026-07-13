@@ -69,12 +69,6 @@ class SettingsTab(QWidget):
             "creator_filename_template": "{post_id}_{orig_name}",
             "creator_folder_strategy": "per_post",  # per_post|single_folder|by_file_type
             "creator_folder_name_template": "{post_id}_{post_title}",
-            # Comma-separated keywords; posts whose title contains any of
-            # these (as a whole word, case-insensitive) are skipped from
-            # the Creator Downloader's search results. Empty by default.
-            "creator_skip_keywords": "",
-            # Where to look for skip-keywords: title|filenames|both_or|both_and
-            "creator_skip_keywords_scope": "title",
             # Font setting
             "font": "JetBrains Mono",  # "JetBrains Mono", "Poppins"
         }
@@ -177,16 +171,6 @@ class SettingsTab(QWidget):
             ),
             type=str,
         )
-        settings_dict["creator_skip_keywords"] = self.qsettings.value(
-            "creator_skip_keywords",
-            self.default_settings.get("creator_skip_keywords", ""),
-            type=str,
-        )
-        settings_dict["creator_skip_keywords_scope"] = self.qsettings.value(
-            "creator_skip_keywords_scope",
-            self.default_settings.get("creator_skip_keywords_scope", "title"),
-            type=str,
-        )
         # Font setting
         settings_dict["font"] = self.qsettings.value(
             "font", self.default_settings.get("font", "JetBrains Mono"), type=str
@@ -230,14 +214,6 @@ class SettingsTab(QWidget):
         self.qsettings.setValue(
             "creator_folder_name_template",
             self.settings.get("creator_folder_name_template", "{post_id}_{post_title}"),
-        )
-        self.qsettings.setValue(
-            "creator_skip_keywords",
-            self.settings.get("creator_skip_keywords", ""),
-        )
-        self.qsettings.setValue(
-            "creator_skip_keywords_scope",
-            self.settings.get("creator_skip_keywords_scope", "title"),
         )
         # Font setting
         self.qsettings.setValue(
@@ -552,65 +528,6 @@ class SettingsTab(QWidget):
             )
         )
         creator_custom_layout.addWidget(self.creator_folder_strategy_combo, 2, 1)
-
-        self.creator_skip_keywords_label = QLabel(
-            _t("skip_posts_keywords", "Skip Posts Containing")
-        )
-        creator_custom_layout.addWidget(self.creator_skip_keywords_label, 3, 0)
-
-        self.creator_skip_keywords_edit = QLineEdit()
-        self.creator_skip_keywords_edit.setPlaceholderText(
-            _t("skip_posts_keywords_placeholder", "e.g. JP, ZH (comma-separated, optional)")
-        )
-        self.creator_skip_keywords_edit.setText(
-            self.temp_settings.get("creator_skip_keywords", "")
-        )
-        self.creator_skip_keywords_edit.setStyleSheet(
-            "padding: 5px; border-radius: 5px;"
-        )
-        self.creator_skip_keywords_edit.textChanged.connect(
-            lambda text: self.update_temp_setting("creator_skip_keywords", text)
-        )
-        creator_custom_layout.addWidget(self.creator_skip_keywords_edit, 3, 1)
-
-        self.creator_skip_keywords_help_btn = QPushButton("?")
-        self.creator_skip_keywords_help_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
-        )
-        self.creator_skip_keywords_help_btn.clicked.connect(
-            self.show_skip_keywords_help
-        )
-        creator_custom_layout.addWidget(self.creator_skip_keywords_help_btn, 3, 2)
-
-        self.creator_skip_scope_label = QLabel(
-            _t("skip_keywords_scope", "Search In")
-        )
-        creator_custom_layout.addWidget(self.creator_skip_scope_label, 4, 0)
-
-        self.creator_skip_scope_combo = QComboBox()
-        self._skip_scope_options = [
-            ("skip_scope_title", "title", "Title only"),
-            ("skip_scope_filenames", "filenames", "Filenames only"),
-            ("skip_scope_both_or", "both_or", "Both (skip if either matches)"),
-            ("skip_scope_both_and", "both_and", "Both (skip only if both match)"),
-        ]
-        for label_key, value, fallback_label in self._skip_scope_options:
-            self.creator_skip_scope_combo.addItem(_t(label_key, fallback_label), value)
-        self.creator_skip_scope_combo.setStyleSheet(
-            "padding: 5px; border-radius: 5px;"
-        )
-        current_scope = self.temp_settings.get("creator_skip_keywords_scope", "title")
-        for i in range(self.creator_skip_scope_combo.count()):
-            if self.creator_skip_scope_combo.itemData(i) == current_scope:
-                self.creator_skip_scope_combo.setCurrentIndex(i)
-                break
-        self.creator_skip_scope_combo.currentIndexChanged.connect(
-            lambda idx: self.update_temp_setting(
-                "creator_skip_keywords_scope",
-                self.creator_skip_scope_combo.itemData(idx),
-            )
-        )
-        creator_custom_layout.addWidget(self.creator_skip_scope_combo, 4, 1)
 
         self.creator_custom_group.setLayout(creator_custom_layout)
         layout.addWidget(self.creator_custom_group)
@@ -968,23 +885,6 @@ class SettingsTab(QWidget):
                 "Example: {post_title} drops the post ID from the folder name. "
                 "Only applies when Folder Structure is 'Per-post folders'.",
             )
-
-    def show_skip_keywords_help(self):
-        """Show help text explaining the skip-keywords post filter."""
-        QMessageBox.information(
-            self,
-            _t("skip_posts_keywords_help_title", "Skip Posts Help"),
-            _t(
-                "skip_posts_keywords_help_text",
-                "Enter comma-separated words or phrases (e.g. JP, ZH). "
-                "Any post matching one of these as a whole word "
-                "(case-insensitive) will be excluded from the Creator "
-                "Downloader's search results, so it won't be downloaded. "
-                "Use 'Search In' to choose whether matching looks at the "
-                "post title, file names (main file and attachments), or "
-                "both. Leave the keyword field blank to disable this filter.",
-            ),
-        )
 
     def browse_directory(self):
         directory = QFileDialog.getExistingDirectory(
@@ -1511,35 +1411,6 @@ class SettingsTab(QWidget):
             _t("folder_name_template", "Folder Name Template")
         )
         self.creator_folder_strategy_label.setText(translate("folder_strategy"))
-        if hasattr(self, "creator_skip_keywords_label"):
-            self.creator_skip_keywords_label.setText(
-                _t("skip_posts_keywords", "Skip Posts Containing")
-            )
-        if hasattr(self, "creator_skip_keywords_edit"):
-            self.creator_skip_keywords_edit.setPlaceholderText(
-                _t(
-                    "skip_posts_keywords_placeholder",
-                    "e.g. JP, ZH (comma-separated, optional)",
-                )
-            )
-        if hasattr(self, "creator_skip_scope_label"):
-            self.creator_skip_scope_label.setText(_t("skip_keywords_scope", "Search In"))
-        if hasattr(self, "creator_skip_scope_combo"):
-            current_scope_data = self.creator_skip_scope_combo.itemData(
-                self.creator_skip_scope_combo.currentIndex()
-            )
-            self.creator_skip_scope_combo.blockSignals(True)
-            self.creator_skip_scope_combo.clear()
-            for label_key, value, fallback_label in self._skip_scope_options:
-                self.creator_skip_scope_combo.addItem(
-                    _t(label_key, fallback_label), value
-                )
-            for i in range(self.creator_skip_scope_combo.count()):
-                if self.creator_skip_scope_combo.itemData(i) == current_scope_data:
-                    self.creator_skip_scope_combo.setCurrentIndex(i)
-                    break
-            self.creator_skip_scope_combo.blockSignals(False)
-
         # Update template presets display (support language change)
         try:
             current_text = (
@@ -1703,20 +1574,6 @@ class SettingsTab(QWidget):
         return self.settings.get(
             "creator_folder_name_template", "{post_id}_{post_title}"
         )
-
-    def get_creator_skip_keywords(self):
-        """Return the configured skip-keywords as a list of non-empty,
-        stripped strings. Empty by default (no filtering)."""
-        raw = self.settings.get("creator_skip_keywords", "")
-        if not raw:
-            return []
-        return [kw.strip() for kw in raw.split(",") if kw.strip()]
-
-    def get_creator_skip_keywords_scope(self):
-        """Return where skip-keywords are matched: 'title', 'filenames',
-        'both_or' (skip if either location matches), or 'both_and' (skip
-        only if both title and at least one filename match)."""
-        return self.settings.get("creator_skip_keywords_scope", "title")
 
     def get_font(self):
         return self.settings.get("font", "JetBrains Mono")
