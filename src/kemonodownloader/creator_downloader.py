@@ -336,6 +336,109 @@ class PostDetectionThread(QThread):
         self.settings = settings
         self.is_running = True
         self.domain_config = get_domain_config(url)
+        self.skip_keywords = self._load_skip_keywords()
+        self.skip_keywords_scope = self._load_skip_keywords_scope()
+        self._skipped_count = 0
+
+    def _load_skip_keywords(self):
+        """Load the configured skip-keywords list (whole-word, case-insensitive)."""
+        try:
+            if self.settings and getattr(self.settings, "settings_tab", None):
+                return self.settings.settings_tab.get_creator_skip_keywords()
+        except Exception:
+            pass
+        return []
+
+    def _load_skip_keywords_scope(self):
+        """Load where skip-keywords should be matched: title|filenames|both_or|both_and."""
+        try:
+            if self.settings and getattr(self.settings, "settings_tab", None):
+                return self.settings.settings_tab.get_creator_skip_keywords_scope()
+        except Exception:
+            pass
+        return "title"
+
+    def _gather_post_filenames(self, post):
+        """Collect candidate filenames for a post: the main file and any
+        attachments. Prefers the original 'name' field, falling back to the
+        basename of 'path' if 'name' is missing."""
+        filenames = []
+        try:
+            file_info = post.get("file")
+            if isinstance(file_info, dict):
+                name = file_info.get("name") or os.path.basename(
+                    file_info.get("path", "")
+                )
+                if name:
+                    filenames.append(name)
+        except Exception:
+            pass
+        try:
+            attachments = post.get("attachments")
+            if isinstance(attachments, list):
+                for attachment in attachments:
+                    if not isinstance(attachment, dict):
+                        continue
+                    name = attachment.get("name") or os.path.basename(
+                        attachment.get("path", "")
+                    )
+                    if name:
+                        filenames.append(name)
+        except Exception:
+            pass
+        return filenames
+
+    def _text_matches_any_keyword(self, text):
+        """Return True if *text* contains any configured skip-keyword as a
+        standalone "word" (case-insensitive). Unlike a plain regex \\b
+        boundary, this also treats underscores, dots, hyphens, and other
+        common filename separators as valid boundaries -- important since
+        filenames typically use "main_JP.zip" rather than "main JP.zip",
+        and \\b alone does not treat "_" as a boundary.
+        """
+        if not self.skip_keywords or not text:
+            return False
+        for keyword in self.skip_keywords:
+            if not keyword:
+                continue
+            try:
+                pattern = (
+                    r"(?<![A-Za-z0-9])" + re.escape(keyword) + r"(?![A-Za-z0-9])"
+                )
+                if re.search(pattern, text, re.IGNORECASE):
+                    return True
+            except re.error:
+                if keyword.lower() in text.lower():
+                    return True
+        return False
+
+    def _title_matches_skip_keyword(self, title, post=None):
+        """Return True if this post should be skipped, based on the
+        configured skip-keywords and search scope (title, filenames, or
+        both). *post* is the raw post dict, needed to inspect filenames;
+        if omitted, filename matching is skipped even if scope requires it.
+        """
+        if not self.skip_keywords:
+            return False
+
+        scope = self.skip_keywords_scope
+        title_match = self._text_matches_any_keyword(title) if title else False
+
+        filenames_match = False
+        if scope in ("filenames", "both_or", "both_and") and post is not None:
+            for fname in self._gather_post_filenames(post):
+                if self._text_matches_any_keyword(fname):
+                    filenames_match = True
+                    break
+
+        if scope == "title":
+            return title_match
+        if scope == "filenames":
+            return filenames_match
+        if scope == "both_and":
+            return title_match and filenames_match
+        # Default / "both_or"
+        return title_match or filenames_match
 
     def stop(self):
         self.is_running = False
@@ -721,6 +824,9 @@ class PostDetectionThread(QThread):
                 if not post_id:
                     continue
                 title = post.get("title", f"Post {post_id}")
+                if self._title_matches_skip_keyword(title, post):
+                    self._skipped_count += 1
+                    continue
                 thumbnail_url = None
                 if "file" in post and post["file"] and "path" in post["file"]:
                     if (
@@ -793,6 +899,8 @@ class PostDetectionThread(QThread):
             for post in all_posts:
                 post_id = post.get("id")
                 title = post.get("title", f"Post {post_id}")
+                if self._title_matches_skip_keyword(title, post):
+                    continue
                 thumbnail_url = None
                 if "file" in post and post["file"] and "path" in post["file"]:
                     if (
@@ -836,6 +944,18 @@ class PostDetectionThread(QThread):
                 ),
                 "INFO",
             )
+            if self.skip_keywords:
+                self.log.emit(
+                    translate(
+                        "log_info",
+                        translate(
+                            "posts_skipped_by_keyword",
+                            len(all_posts) - len(detected_posts),
+                            ", ".join(self.skip_keywords),
+                        ),
+                    ),
+                    "INFO",
+                )
             self.finished.emit(detected_posts)
 
 
