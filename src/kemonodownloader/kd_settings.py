@@ -448,8 +448,6 @@ class SettingsTab(QWidget):
         self._folder_name_presets = [
             ("tmpl_postid_posttitle_folder", "{post_id}_{post_title}", "Post ID + Title (default)"),
             ("tmpl_posttitle_only", "{post_title}", "Title only (no ID)"),
-            ("tmpl_posttitle_postid_folder", "{post_title}-{post_id}", "Title - Post ID"),
-            ("tmpl_posttitle_id_paren", "{post_title} (ID {post_id})", "Title (ID Post ID)"),
         ]
         for label_key, tpl, fallback_label in self._folder_name_presets:
             self.creator_folder_name_combo.addItem(_t(label_key, fallback_label), tpl)

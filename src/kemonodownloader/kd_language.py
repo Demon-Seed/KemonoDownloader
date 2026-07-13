@@ -880,18 +880,6 @@ class KDLanguage:
                 "korean": "{post_title}",
                 "chinese-simplified": "{post_title}",
             },
-            "tmpl_posttitle_postid_folder": {
-                "english": "{post_title}-{post_id}",
-                "japanese": "{post_title}-{post_id}",
-                "korean": "{post_title}-{post_id}",
-                "chinese-simplified": "{post_title}-{post_id}",
-            },
-            "tmpl_posttitle_id_paren": {
-                "english": "{post_title} (ID {post_id})",
-                "japanese": "{post_title} (ID {post_id})",
-                "korean": "{post_title} (ID {post_id})",
-                "chinese-simplified": "{post_title} (ID {post_id})",
-            },
             "folder_name_template_help_title": {
                 "english": "Folder Name Template Help",
                 "japanese": "フォルダ名テンプレートヘルプ",
