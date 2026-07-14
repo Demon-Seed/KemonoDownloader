@@ -537,7 +537,7 @@ class PostDetectionThread(QThread):
                 translate("log_info", f"Search query detected: {search_query}"), "INFO"
             )
 
-        all_posts = []  # Accumulate raw post dicts for final processing
+        all_posts = []  # Accumulate raw post dicts for pagination checks
         all_processed_posts = []  # Accumulate (title, (post_id, thumbnail_url)) tuples
         offset = start_offset
         page_size = 50
@@ -815,7 +815,7 @@ class PostDetectionThread(QThread):
                 )
                 break
 
-            # Process posts for this batch
+            # Process posts for this batch (thumbnail extraction + skip filtering)
             batch_posts = []
             for post in posts_data:
                 if not isinstance(post, dict):
@@ -861,7 +861,7 @@ class PostDetectionThread(QThread):
                     )
                 batch_posts.append((title, (post_id, thumbnail_url)))
 
-            # Accumulate raw posts for final processing
+            # Accumulate raw posts for pagination checks
             all_posts.extend(posts_data)
 
             # Accumulate processed tuples for the final finished.emit()
@@ -953,7 +953,6 @@ class PostPopulationThread(QThread):
 
 class FilterThread(QThread):
     finished = pyqtSignal(list)
-    log = pyqtSignal(str, str)
 
     def __init__(self, all_detected_posts, checked_urls, search_text):
         super().__init__()
@@ -980,7 +979,6 @@ class FilePreparationThread(QThread):
     progress = pyqtSignal(int)
     finished = pyqtSignal(list, dict)
     log = pyqtSignal(str, str)
-    error = pyqtSignal(str)
 
     def __init__(
         self,
@@ -1634,15 +1632,17 @@ class CreatorDownloadThread(QThread):
     def get_post_folder_name(self, post_id, post_title, creator_folder):
         """Render the per-post folder name using the configurable
         ``creator_folder_name_template`` setting (default
-        "{post_id}_{post_title}", preserving prior behavior). Falls back to
-        that default if the setting is unavailable or the template fails
-        to render (e.g. references an unknown placeholder).
+        "{post_id}_{post_title}").
 
-        If the rendered name collides with an existing folder that belongs
-        to a *different* post (tracked via a hidden ``.post_id`` marker file),
-        a numeric suffix (_1, _2, ...) is appended until a free or matching
-        name is found. The result is cached per post_id so repeated calls
-        (once per file in the post) always resolve to the same folder.
+        If the template contains ``{post_id}``, the rendered name is
+        guaranteed unique (post_id is a unique numeric ID) and no
+        disk-collision check is performed — this short-circuit avoids
+        unnecessary disk I/O for the most common case.
+
+        For templates without ``{post_id}``, a simple disk-existence check
+        appends ``_1``, ``_2``, ... until a free name is found. The result
+        is cached per post_id so repeated calls (once per file in the post)
+        always resolve to the same folder.
         """
         with self._post_folder_names_lock:
             if post_id in self._post_folder_names:
@@ -1687,36 +1687,23 @@ class CreatorDownloadThread(QThread):
 
             base_name = sanitize_filename(rendered)
 
-            # Resolve collisions against what's already on disk
-            candidate = base_name
-            counter = 1
-            while True:
-                candidate_path = os.path.join(creator_folder, candidate)
-                if not os.path.exists(candidate_path):
-                    break
-                marker_path = os.path.join(candidate_path, ".post_id")
-                if os.path.exists(marker_path):
-                    try:
-                        with open(marker_path, "r", encoding="utf-8") as f:
-                            if f.read().strip() == str(post_id):
-                                break
-                    except Exception:
-                        pass
-                candidate = f"{base_name}_{counter}"
-                counter += 1
+            # Short-circuit: if the template includes {post_id}, the
+            # rendered folder name is guaranteed unique. Skip the
+            # disk-collision check entirely.
+            if "{post_id}" in template:
+                candidate = base_name
+            else:
+                # Simple disk-existence check — append _1, _2, ... until
+                # a free name is found. No marker files, no cross-session
+                # tracking; just a basic collision guard.
+                candidate = base_name
+                counter = 1
+                while os.path.exists(os.path.join(creator_folder, candidate)):
+                    candidate = f"{base_name}_{counter}"
+                    counter += 1
 
             self._post_folder_names[post_id] = candidate
             return candidate
-
-    def mark_post_folder(self, post_folder, post_id):
-        """Write a hidden marker file recording which post owns this folder."""
-        marker_path = os.path.join(post_folder, ".post_id")
-        if not os.path.exists(marker_path):
-            try:
-                with open(marker_path, "w", encoding="utf-8") as f:
-                    f.write(str(post_id))
-            except Exception:
-                pass
 
     def generate_filename_and_folder(
         self, file_url, folder, file_index, total_files, post_id, post_title
@@ -1883,6 +1870,10 @@ class CreatorDownloadThread(QThread):
                 if content:
                     soup = BeautifulSoup(content, "html.parser")
                     text = soup.get_text(separator="\n\n")
+                    try:
+                        os.makedirs(post_folder, exist_ok=True)
+                    except OSError:
+                        pass
                     with open(desc_path, "w", encoding="utf-8") as f:
                         f.write(text)
                     self._safe_emit(
@@ -1917,35 +1908,6 @@ class CreatorDownloadThread(QThread):
         target_folder, filename = self.generate_filename_and_folder(
             file_url, folder, file_index, total_files, post_id, post_title
         )
-
-        try:
-            os.makedirs(target_folder, exist_ok=True)
-        except OSError as e:
-            error_msg = translate("failed_to_create_post_folder", target_folder, str(e))
-            self._safe_emit(self.log, translate("log_error", error_msg), "ERROR")
-            with self.failed_files_lock:
-                self.failed_files[file_url] = error_msg
-            self._safe_emit(self.file_completed, file_index, file_url, False)
-            self.check_post_completion(file_url)
-            return
-
-        # If this post got a resolved per-post folder name (only populated
-        # when folder strategy is "per_post"), record which post owns it.
-        if post_id in self._post_folder_names:
-            self.mark_post_folder(target_folder, post_id)
-
-        # Download text if enabled (only once per post)
-        if self.download_text:
-            # Determine destination for description files depending on folder strategy
-            # (e.g., 'txt' subfolder when using file-type subfolders)
-            desc_folder = self.get_desc_folder_for_post(folder, post_id, post_title)
-            try:
-                os.makedirs(desc_folder, exist_ok=True)
-                if post_id in self._post_folder_names:
-                    self.mark_post_folder(desc_folder, post_id)
-            except Exception:
-                pass
-            await self.download_post_text_if_needed(post_id, desc_folder)
 
         full_path = os.path.join(target_folder, filename.replace("/", "_"))
         url_hash = hashlib.md5(file_url.encode()).hexdigest()
@@ -2016,6 +1978,33 @@ class CreatorDownloadThread(QThread):
             ),
             "INFO",
         )
+
+        # Create the target folder now that we've confirmed the file
+        # isn't already downloaded (hash-db dedup). This prevents empty
+        # _1/_2 folders from being created when re-downloading a post
+        # whose files are all dedup hits.
+        try:
+            os.makedirs(target_folder, exist_ok=True)
+        except OSError as e:
+            error_msg = translate("failed_to_create_post_folder", target_folder, str(e))
+            self._safe_emit(self.log, translate("log_error", error_msg), "ERROR")
+            with self.failed_files_lock:
+                self.failed_files[file_url] = error_msg
+            self._safe_emit(self.file_progress, file_index, 0)
+            self._safe_emit(self.file_completed, file_index, file_url, False)
+            self.check_post_completion(file_url)
+            return
+
+        # Download text if enabled (only once per post).
+        # This is placed AFTER the hash-db dedup check so that re-downloading
+        # a post whose files are all dedup hits does NOT create an empty
+        # _1 folder (the desc download would resolve a different folder name
+        # since _post_folder_names cache is per-thread, not per-session).
+        if self.download_text:
+            # Determine destination for description files depending on folder strategy
+            # (e.g., 'txt' subfolder when using file-type subfolders)
+            desc_folder = self.get_desc_folder_for_post(folder, post_id, post_title)
+            await self.download_post_text_if_needed(post_id, desc_folder)
 
         max_retries = self.settings.file_download_max_retries
         for attempt in range(1, max_retries + 1):
@@ -2674,7 +2663,7 @@ class CreatorDownloaderTab(QWidget):
         self.total_posts_to_download = 0
         self.total_files_to_download = 0
         self.completed_files = set()
-        self.completed_file_paths = set()
+
         self.failed_files = {}  # Map file_url to error message
         # Locks for thread-safe access to shared data structures
         self.completed_files_lock = threading.Lock()
@@ -4155,7 +4144,6 @@ class CreatorDownloaderTab(QWidget):
             )
         )
         self.file_preparation_thread.log.connect(self.append_log_to_console)
-        self.file_preparation_thread.error.connect(self.on_file_preparation_error)
         self.active_threads.append(self.file_preparation_thread)
         self.file_preparation_thread.start()
 
@@ -4254,14 +4242,6 @@ class CreatorDownloaderTab(QWidget):
         self.active_threads.append(thread)
         thread.start()
 
-    def on_file_preparation_error(self, error_message):
-        self.append_log_to_console(translate("log_error", error_message), "ERROR")
-        self.background_task_progress.setRange(0, 100)
-        self.background_task_progress.setValue(0)
-        self.background_task_label.setText(translate("idle"))
-        self.cleanup_file_preparation_thread()
-        self.creator_download_finished()
-
     def process_next_creator(self, remaining_urls):
         """Process the next creator or finish if no more remain."""
         if not remaining_urls:
@@ -4278,8 +4258,7 @@ class CreatorDownloaderTab(QWidget):
 
     def cleanup_thread(self, thread, remaining_urls):
         """Clean up a download thread and proceed to the next creator or finish."""
-        # Transfer failed file from thread to tab if present (handle threads
-        # that weren't tracked in active_threads as well)
+        # Transfer failed file from thread to tab if present
         try:
             thread_failed = getattr(thread, "failed_files", None)
             if thread_failed:
@@ -4527,14 +4506,12 @@ class CreatorDownloaderTab(QWidget):
                 translate("file_progress", progress)
             )
 
-    def update_file_completion(self, file_index, file_url, success, file_path=""):
+    def update_file_completion(self, file_index, file_url, success):
         """Update file completion status and check overall progress."""
         with self.completed_files_lock, self.failed_files_lock:
             if success:
                 if file_url not in self.completed_files:
                     self.completed_files.add(file_url)
-                    if file_path:
-                        self.completed_file_paths.add(file_path)
                     self.append_log_to_console(
                         translate(
                             "log_debug",
@@ -4960,7 +4937,6 @@ class CreatorDownloaderTab(QWidget):
             self.all_detected_posts, self.checked_urls, self.creator_search_input.text()
         )
         self.filter_thread.finished.connect(self.on_filter_finished)
-        self.filter_thread.log.connect(self.append_log_to_console)
         self.filter_thread.finished.connect(self.cleanup_filter_thread)
         self.active_threads.append(self.filter_thread)
         self.filter_thread.start()

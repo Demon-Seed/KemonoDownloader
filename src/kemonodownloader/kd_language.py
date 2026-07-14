@@ -124,12 +124,6 @@ class KDLanguage:
                 "korean": "스레드 {0} 가 정상적으로 종료되지 않았습니다. 강제 종료를 시도합니다.",
                 "chinese-simplified": "线程 {0} 未正常退出，正在尝试终止。",
             },
-            "filtered_post": {
-                "english": "Filtered post: {0} (ID: {1})",
-                "japanese": "フィルタリングされた投稿：{0}（ID：{1}）",
-                "korean": "필터링된 게시물: {0} (ID: {1})",
-                "chinese-simplified": "已过滤的帖子：{0}（ID：{1}）",
-            },
             "creator_download_thread_started": {
                 "english": "CreatorDownloadThread started for service: {0}, creator_id: {1}",
                 "japanese": "サービス {0}、クリエイターID {1} のためにCreatorDownloadThreadを開始しました",
