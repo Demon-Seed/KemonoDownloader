@@ -899,9 +899,6 @@ class PostDetectionThread(QThread):
             time.sleep(0.5)
 
         if self.is_running:
-            # All posts were already processed (thumbnail extraction + skip
-            # filtering) incrementally in the batch loop above and
-            # accumulated into all_processed_posts.  Emit the full list.
             self.filtered_count = self._skipped_count
             self.total_detected = len(all_processed_posts)
             self.finished.emit(all_processed_posts)
@@ -1002,11 +999,8 @@ class FilePreparationThread(QThread):
         self.settings = settings
         self.max_concurrent = max_concurrent
         self.is_running = True
-        # Independent, always-on, filename-only skip list. This list is
-        # never used to remove a whole post -- it only ever excludes
-        # individual files by name, and it applies regardless of scope,
-        # so it can be combined freely with whole-post skipping via a
-        # different keyword list.
+        # Independent, always-on, filename-only skip list.
+        # It can be combined freely with whole-post skipping.
         self.file_skip_keywords = file_skip_keywords if file_skip_keywords is not None else []
         self._files_skipped_count = 0
         self._files_skipped_lock = threading.Lock()
@@ -1427,8 +1421,7 @@ class FilePreparationThread(QThread):
                 "INFO",
             )
             # File-skip summary is emitted by CreatorDownloaderTab in
-            # creator_download_finished() so it appears as the LAST line
-            # in the log, not buried behind subsequent messages.
+            # creator_download_finished() so it appears as the LAST line in the log.
             self.finished.emit(files_to_download, files_to_posts_map)
 
 
@@ -1635,11 +1628,9 @@ class CreatorDownloadThread(QThread):
         "{post_id}_{post_title}").
 
         If the template contains ``{post_id}``, the rendered name is
-        guaranteed unique (post_id is a unique numeric ID) and no
-        disk-collision check is performed — this short-circuit avoids
-        unnecessary disk I/O for the most common case.
+        guaranteed unique and no disk-collision check is performed.
 
-        For templates without ``{post_id}``, a simple disk-existence check
+        For templates without ``{post_id}``, a disk-existence check
         appends ``_1``, ``_2``, ... until a free name is found. The result
         is cached per post_id so repeated calls (once per file in the post)
         always resolve to the same folder.
@@ -2836,7 +2827,7 @@ class CreatorDownloaderTab(QWidget):
 
         # Download text checkbox
         self.creator_download_text_check = QCheckBox(translate("download_text"))
-        self.creator_download_text_check.setChecked(True)
+        self.creator_download_text_check.setChecked(False)
         self.creator_download_text_check.setStyleSheet("color: white;")
         creator_options_layout.addWidget(self.creator_download_text_check)
 
@@ -3005,11 +2996,6 @@ class CreatorDownloaderTab(QWidget):
 
         post_list_layout.addLayout(skip_scope_layout)
 
-        # Independent, always-on file-level skip keyword list. This is
-        # separate from "Skip Posts Containing" above -- it never removes
-        # a whole post, it only ever excludes individual files by name,
-        # and it applies on top of (in addition to) whole-post skipping,
-        # so the two can be combined with different keyword lists.
         file_skip_filter_layout = QHBoxLayout()
         file_skip_filter_layout.setContentsMargins(0, 0, 0, 0)
 

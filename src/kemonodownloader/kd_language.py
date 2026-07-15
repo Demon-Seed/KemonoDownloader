@@ -286,6 +286,12 @@ class KDLanguage:
                 "korean": "필터링이 완료되었습니다. 표시된 게시물: {0}",
                 "chinese-simplified": "筛选完成，显示了 {0} 个帖子",
             },
+            "incremental_filtering_added_posts": {
+                "english": "Incremental filtering: added {0} post(s) to display",
+                "japanese": "段階的フィルタリング: {0} 件の投稿を表示に追加しました",
+                "korean": "증분 필터링: {0}개의 게시물을 표시에 추가했습니다",
+                "chinese-simplified": "增量筛选: 已添加 {0} 个帖子到显示",
+            },
             "displayed_page_posts": {
                 "english": "Displayed page {0} with {1} posts",
                 "japanese": "ページ {0} を表示（投稿数: {1}）",
@@ -915,6 +921,18 @@ class KDLanguage:
                 "japanese": "カンマ区切りキーワード（例: JP, ZH）。いずれかのキーワードに一致する投稿（大文字小文字不区別、単語単位）は完全に除外されます。「フィルター対象」で選択: タイトルのみ、ファイル名のみ、またはいずれか一致でスキップ。空欄で無効。",
                 "korean": "쉼표로 구분된 키워드 (예: JP, ZH). 키워드와 일치하는 게시물(대소문자 구분 없음, 단어 단위)은 완전히 제외됩니다. '필터 기준'에서 선택: 제목만, 파일명만, 또는 하나라도 일치하면 건너뜀. 빈칸으로 비활성화.",
                 "chinese-simplified": "逗号分隔的关键词（例如: JP, ZH）。匹配任一关键词的帖子（不区分大小写，整词匹配）将被完全排除。使用\"过滤依据\"选择: 仅标题、仅文件名、或任一匹配即跳过。留空禁用。",
+            },
+            "skip_files_keywords": {
+                "english": "Skip Files Containing",
+                "japanese": "除外するファイルキーワード",
+                "korean": "제외할 파일 키워드",
+                "chinese-simplified": "跳过包含以下内容的文件",
+            },
+            "skip_files_keywords_placeholder": {
+                "english": "e.g. JP, ZH (comma-separated, optional)",
+                "japanese": "例: JP, ZH（カンマ区切り、任意）",
+                "korean": "예: JP, ZH (쉼표로 구분, 선택 사항)",
+                "chinese-simplified": "例如: JP, ZH（用逗号分隔，可选）",
             },
             "skip_files_keywords_help_title": {
                 "english": "Skip Files Help",
