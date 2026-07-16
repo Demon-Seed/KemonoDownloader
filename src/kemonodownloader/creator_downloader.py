@@ -1472,6 +1472,7 @@ class CreatorDownloadThread(QThread):
         download_text=False,
         skip_folder_enabled=False,
         skip_folder_threshold=1,
+        force_folder_for_compressed=False,
     ):
         super().__init__()
         self.service = service
@@ -1496,6 +1497,10 @@ class CreatorDownloadThread(QThread):
         self.download_text = download_text
         self.skip_folder_enabled = skip_folder_enabled
         self.skip_folder_threshold = skip_folder_threshold
+        self.force_folder_for_compressed = force_folder_for_compressed
+        # Extensions treated as "compressed archives" for the
+        # force_folder_for_compressed toggle.
+        self.COMPRESSED_EXTENSIONS = (".zip", ".7z", ".rar")
         self.post_file_counters = {}  # Track file counter per post for auto-rename
         self.domain_config = self._get_domain_config_from_files()
         # Locks for thread-safe access to shared dictionaries
@@ -1803,7 +1808,13 @@ class CreatorDownloadThread(QThread):
         else:  # per_post (default)
             # Check if skip-folder toggle is on and this post has few enough files
             post_file_count = len(self.post_files_map.get(post_id, []))
-            if self.skip_folder_enabled and post_file_count <= self.skip_folder_threshold:
+            is_compressed_file = file_ext.lower() in self.COMPRESSED_EXTENSIONS
+            skip_folder_applies = (
+                self.skip_folder_enabled
+                and post_file_count <= self.skip_folder_threshold
+                and not (self.force_folder_for_compressed and is_compressed_file)
+            )
+            if skip_folder_applies:
                 target_folder = creator_folder
             else:
                 post_folder_name = self.get_post_folder_name(
@@ -2855,6 +2866,22 @@ class CreatorDownloaderTab(QWidget):
         self.creator_skip_folder_check.setStyleSheet("color: white;")
         skip_single_image_layout.addWidget(self.creator_skip_folder_check)
 
+        # Toggle: keep compressed archives (ZIP/7z/RAR) in their own post
+        # folder even when Skip Post Folder would otherwise skip it.
+        self.creator_force_compressed_folder_check = QCheckBox()
+        self.creator_force_compressed_folder_check.setIcon(
+            qta.icon("fa5s.file-archive", color="#FFD700")
+        )
+        self.creator_force_compressed_folder_check.setChecked(False)
+        self.creator_force_compressed_folder_check.setStyleSheet("color: white;")
+        self.creator_force_compressed_folder_check.setToolTip(
+            _t(
+                "force_folder_for_compressed",
+                "Always Post Folder for Compressed Files",
+            )
+        )
+        skip_single_image_layout.addWidget(self.creator_force_compressed_folder_check)
+
         self.creator_skip_folder_info_btn = QPushButton(
             qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
         )
@@ -3209,6 +3236,13 @@ class CreatorDownloaderTab(QWidget):
             self.creator_skip_folder_info_btn.setToolTip(
                 _t("skip_folder_info_title", "Skip Post Folder")
             )
+        if hasattr(self, "creator_force_compressed_folder_check"):
+            self.creator_force_compressed_folder_check.setToolTip(
+                _t(
+                    "force_folder_for_compressed",
+                    "Always Post Folder for Compressed Files",
+                )
+            )
         self.creator_multi_url_input.setPlaceholderText(
             translate("multi_url_placeholder_creator")
         )
@@ -3298,7 +3332,7 @@ class CreatorDownloaderTab(QWidget):
             _t("skip_folder_info_title", "Skip Post Folder"),
             _t(
                 "skip_folder_info_text",
-                "When enabled, posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.\n\nFor example, if set to 1, single-image posts will not get their own folder — the image will be placed directly in the creator's folder.\n\nThis only applies when Folder Structure is set to 'Per-post folders'.",
+                "When enabled, posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.\n\nFor example, if set to 1, single-image posts will not get their own folder — the image will be placed directly in the creator's folder.\n\nThis only applies when Folder Structure is set to 'Per-post folders'.\n\nThe archive icon toggle next to this button ignores compressed files (ZIP, 7z, RAR) when deciding whether to skip the post folder — those files will always be saved in their own post folder, even if Skip Post Folder would otherwise apply to that post.",
             ),
         )
 
@@ -3779,6 +3813,8 @@ class CreatorDownloaderTab(QWidget):
         self.creator_skip_folder_combo.setEnabled(enabled)
         if hasattr(self, "creator_skip_folder_info_btn"):
             self.creator_skip_folder_info_btn.setEnabled(enabled)
+        if hasattr(self, "creator_force_compressed_folder_check"):
+            self.creator_force_compressed_folder_check.setEnabled(enabled)
 
         # Post selection
         self.creator_search_input.setEnabled(enabled)
@@ -3818,6 +3854,8 @@ class CreatorDownloaderTab(QWidget):
             self.creator_download_text_check.setEnabled(False)
             self.creator_skip_folder_check.setEnabled(False)
             self.creator_skip_folder_combo.setEnabled(False)
+            if hasattr(self, "creator_force_compressed_folder_check"):
+                self.creator_force_compressed_folder_check.setEnabled(False)
             self.creator_check_all.setEnabled(False)
             self.creator_check_all_all.setEnabled(False)
 
@@ -4289,6 +4327,7 @@ class CreatorDownloaderTab(QWidget):
             download_text=self.creator_download_text_check.isChecked(),
             skip_folder_enabled=self.creator_skip_folder_check.isChecked(),
             skip_folder_threshold=self.creator_skip_folder_combo.currentData() if hasattr(self, "creator_skip_folder_combo") else 1,
+            force_folder_for_compressed=self.creator_force_compressed_folder_check.isChecked() if hasattr(self, "creator_force_compressed_folder_check") else False,
         )
         thread.file_progress.connect(self.update_creator_file_progress)
         thread.file_completed.connect(self.update_file_completion)
