@@ -1470,6 +1470,8 @@ class CreatorDownloadThread(QThread):
         settings,
         max_concurrent=20,
         download_text=False,
+        skip_folder_enabled=False,
+        skip_folder_threshold=1,
     ):
         super().__init__()
         self.service = service
@@ -1491,6 +1493,9 @@ class CreatorDownloadThread(QThread):
         self.post_titles_map = post_titles_map
         self.creator_name = None
         self.auto_rename_enabled = auto_rename_enabled
+        self.download_text = download_text
+        self.skip_folder_enabled = skip_folder_enabled
+        self.skip_folder_threshold = skip_folder_threshold
         self.post_file_counters = {}  # Track file counter per post for auto-rename
         self.domain_config = self._get_domain_config_from_files()
         # Locks for thread-safe access to shared dictionaries
@@ -1796,10 +1801,15 @@ class CreatorDownloadThread(QThread):
             ext_folder = (file_ext.lstrip(".") or "other").lower()
             target_folder = os.path.join(creator_folder, ext_folder)
         else:  # per_post (default)
-            post_folder_name = self.get_post_folder_name(
-                post_id, post_title_safe, creator_folder
-            )
-            target_folder = os.path.join(creator_folder, post_folder_name)
+            # Check if skip-folder toggle is on and this post has few enough files
+            post_file_count = len(self.post_files_map.get(post_id, []))
+            if self.skip_folder_enabled and post_file_count <= self.skip_folder_threshold:
+                target_folder = creator_folder
+            else:
+                post_folder_name = self.get_post_folder_name(
+                    post_id, post_title_safe, creator_folder
+                )
+                target_folder = os.path.join(creator_folder, post_folder_name)
 
         return target_folder, final_filename
 
@@ -1820,6 +1830,10 @@ class CreatorDownloadThread(QThread):
         elif strategy == "single_folder":
             return creator_folder
         else:  # per_post
+            # Respect skip-folder toggle for description files too
+            post_file_count = len(self.post_files_map.get(post_id, []))
+            if self.skip_folder_enabled and post_file_count <= self.skip_folder_threshold:
+                return creator_folder
             return os.path.join(
                 creator_folder,
                 self.get_post_folder_name(post_id, post_title, creator_folder),
@@ -2785,13 +2799,13 @@ class CreatorDownloaderTab(QWidget):
 
         creator_categories_layout = QHBoxLayout()
         self.creator_main_check = QCheckBox()
-        self.creator_main_check.setChecked(True)
+        self.creator_main_check.setChecked(False)
         creator_categories_layout.addWidget(self.creator_main_check)
         self.creator_attachments_check = QCheckBox()
-        self.creator_attachments_check.setChecked(True)
+        self.creator_attachments_check.setChecked(False)
         creator_categories_layout.addWidget(self.creator_attachments_check)
         self.creator_content_check = QCheckBox()
-        self.creator_content_check.setChecked(True)
+        self.creator_content_check.setChecked(False)
         creator_categories_layout.addWidget(self.creator_content_check)
         creator_categories_layout.addStretch()
         creator_options_layout.addLayout(creator_categories_layout)
@@ -2831,6 +2845,37 @@ class CreatorDownloaderTab(QWidget):
         self.creator_download_text_check.setStyleSheet("color: white;")
         creator_options_layout.addWidget(self.creator_download_text_check)
 
+        # Skip post folder for low-image-count posts toggle + dropdown
+        skip_single_image_layout = QHBoxLayout()
+        skip_single_image_layout.setContentsMargins(0, 0, 0, 0)
+        self.creator_skip_folder_check = QCheckBox(
+            _t("skip_folder_for_few_images", "Skip Post Folder")
+        )
+        self.creator_skip_folder_check.setChecked(False)
+        self.creator_skip_folder_check.setStyleSheet("color: white;")
+        skip_single_image_layout.addWidget(self.creator_skip_folder_check)
+
+        self.creator_skip_folder_info_btn = QPushButton(
+            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+        )
+        self.creator_skip_folder_info_btn.setFixedSize(26, 26)
+        self.creator_skip_folder_info_btn.setStyleSheet(
+            "background: #4A5B7A; border-radius: 5px;"
+        )
+        self.creator_skip_folder_info_btn.clicked.connect(self.show_skip_folder_info)
+        skip_single_image_layout.addWidget(self.creator_skip_folder_info_btn)
+        skip_single_image_layout.addSpacing(10)
+
+        self.creator_skip_folder_combo = QComboBox()
+        for n in range(1, 11):
+            self.creator_skip_folder_combo.addItem(str(n), n)
+        self.creator_skip_folder_combo.setCurrentIndex(0)  # Default: 1
+        self.creator_skip_folder_combo.setFixedWidth(60)
+        self.creator_skip_folder_combo.setStyleSheet("padding: 5px; border-radius: 5px;")
+        skip_single_image_layout.addWidget(self.creator_skip_folder_combo)
+        skip_single_image_layout.addStretch()
+        creator_options_layout.addLayout(skip_single_image_layout)
+
         self.creator_ext_group = QGroupBox()
         self.creator_ext_group.setStyleSheet("QGroupBox { color: white; }")
         creator_ext_layout = QGridLayout()
@@ -2856,7 +2901,7 @@ class CreatorDownloaderTab(QWidget):
             ".webp": QCheckBox("WEBP"),
         }
         for i, (ext, check) in enumerate(self.creator_ext_checks.items()):
-            check.setChecked(True)
+            check.setChecked(False)
             check.stateChanged.connect(self.filter_items)
             creator_ext_layout.addWidget(check, i // 5, i % 5)
         self.creator_ext_group.setLayout(creator_ext_layout)
@@ -3160,6 +3205,10 @@ class CreatorDownloaderTab(QWidget):
         self.creator_auto_rename_check.setText(translate("auto_rename"))
         self.creator_fast_mode_check.setText(translate("fast_mode"))
         self.creator_fast_mode_info_btn.setToolTip(translate("fast_mode_info_title"))
+        if hasattr(self, "creator_skip_folder_info_btn"):
+            self.creator_skip_folder_info_btn.setToolTip(
+                _t("skip_folder_info_title", "Skip Post Folder")
+            )
         self.creator_multi_url_input.setPlaceholderText(
             translate("multi_url_placeholder_creator")
         )
@@ -3241,6 +3290,17 @@ class CreatorDownloaderTab(QWidget):
             self.background_task_progress.setRange(0, 100)
             self.background_task_progress.setValue(0)
             self.background_task_label.setText(translate("idle"))
+
+    def show_skip_folder_info(self):
+        """Show a dialog explaining what Skip Post Folder does."""
+        QMessageBox.information(
+            self,
+            _t("skip_folder_info_title", "Skip Post Folder"),
+            _t(
+                "skip_folder_info_text",
+                "When enabled, posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.\n\nFor example, if set to 1, single-image posts will not get their own folder — the image will be placed directly in the creator's folder.\n\nThis only applies when Folder Structure is set to 'Per-post folders'.",
+            ),
+        )
 
     def show_fast_mode_info(self):
         """Show a dialog explaining what Fast Mode does."""
@@ -3714,6 +3774,12 @@ class CreatorDownloaderTab(QWidget):
         self.creator_auto_rename_check.setEnabled(enabled)
         self.creator_download_text_check.setEnabled(enabled)
 
+        # Skip-folder toggle + dropdown
+        self.creator_skip_folder_check.setEnabled(enabled)
+        self.creator_skip_folder_combo.setEnabled(enabled)
+        if hasattr(self, "creator_skip_folder_info_btn"):
+            self.creator_skip_folder_info_btn.setEnabled(enabled)
+
         # Post selection
         self.creator_search_input.setEnabled(enabled)
         self.creator_check_all.setEnabled(enabled)
@@ -3750,6 +3816,8 @@ class CreatorDownloaderTab(QWidget):
             self.creator_content_check.setEnabled(False)
             self.creator_auto_rename_check.setEnabled(False)
             self.creator_download_text_check.setEnabled(False)
+            self.creator_skip_folder_check.setEnabled(False)
+            self.creator_skip_folder_combo.setEnabled(False)
             self.creator_check_all.setEnabled(False)
             self.creator_check_all_all.setEnabled(False)
 
@@ -4219,6 +4287,8 @@ class CreatorDownloaderTab(QWidget):
             settings,
             settings.simultaneous_downloads,
             download_text=self.creator_download_text_check.isChecked(),
+            skip_folder_enabled=self.creator_skip_folder_check.isChecked(),
+            skip_folder_threshold=self.creator_skip_folder_combo.currentData() if hasattr(self, "creator_skip_folder_combo") else 1,
         )
         thread.file_progress.connect(self.update_creator_file_progress)
         thread.file_completed.connect(self.update_file_completion)

@@ -982,6 +982,24 @@ class KDLanguage:
                 "korean": "하나라도 일치하면 건너뜀",
                 "chinese-simplified": "任一匹配即跳过",
             },
+            "skip_folder_for_few_images": {
+                "english": "Skip Post Folder",
+                "japanese": "投稿フォルダをスキップ",
+                "korean": "게시물 폴더 건너뛰기",
+                "chinese-simplified": "跳过帖子文件夹",
+            },
+            "skip_folder_info_title": {
+                "english": "Skip Post Folder",
+                "japanese": "投稿フォルダをスキップ",
+                "korean": "게시물 폴더 건너뛰기",
+                "chinese-simplified": "跳过帖子文件夹",
+            },
+            "skip_folder_info_text": {
+                "english": "When enabled, posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.\n\nFor example, if set to 1, single-image posts will not get their own folder — the image will be placed directly in the creator's folder.\n\nThis only applies when Folder Structure is set to 'Per-post folders'.",
+                "japanese": "有効な場合、ファイル数が選択した値以下の投稿は、個別のサブフォルダを作成せずにクリエイターフォルダに直接保存されます。\n\n例: 1に設定すると、1枚の画像のみの投稿はフォルダを作成せず、画像はクリエイターのフォルダに直接配置されます。\n\nこれはフォルダ構造が「投稿ごとのフォルダ」に設定されている場合にのみ適用されます。",
+                "korean": "활성화된 경우, 파일 수가 선택한 값 이하인 게시물은 개별 하위 폴더를 만들지 않고 크리에이터 폴더에 직접 저장됩니다.\n\n예: 1로 설정하면 이미지 1개만 있는 게시물은 폴더를 만들지 않고 이미지가 크리에이터 폴더에 직접 배치됩니다.\n\n이는 폴더 구조가 '게시물별 폴더'로 설정된 경우에만 적용됩니다.",
+                "chinese-simplified": "启用后，文件数小于或等于所选值的帖子将其文件直接保存在创作者文件夹中，而不是为该帖子创建单独的子文件夹。\n\n例如，如果设置为 1，单张图片的帖子将不会创建自己的文件夹——图片将直接放在创作者的文件夹中。\n\n这仅在文件夹结构设置为“按帖子创建子文件夹”时适用。",
+            },
 
             "per_post_folders": {
                 "english": "Per-post folders (default)",
