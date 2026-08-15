@@ -8,6 +8,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -49,17 +50,63 @@ from kemonodownloader.hash_db import HashDB
 from kemonodownloader.kd_language import language_manager, translate
 
 
-def _t(key, fallback):
+def _t(key, fallback, *args):
     """Translate *key*, falling back to *fallback* text if the key hasn't
-    been added to kd_language.py yet.
+    been added to kd_language.py yet. Any extra positional *args* are
+    used to format the translation (or the fallback) with str.format().
     """
     try:
-        value = translate(key)
+        value = translate(key, *args)
     except Exception:
         value = None
     if not value or value == key:
+        if args:
+            try:
+                return fallback.format(*args)
+            except Exception:
+                return fallback
         return fallback
     return value
+
+
+def get_post_published_date(post):
+    """Return the post's original publish date (NOT the import/scrape date)
+    as a `datetime.date`, or None if it can't be determined. Checks the
+    common field names used by the API for the original post date, and
+    deliberately ignores 'added'/'import*' style fields which represent
+    when the post was scraped/imported rather than when it was posted.
+    """
+    if not isinstance(post, dict):
+        return None
+    for key in ("published", "post_date", "date"):
+        raw = post.get(key)
+        if not raw:
+            continue
+        try:
+            text = str(raw).strip()
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            return datetime.fromisoformat(text).date()
+        except Exception:
+            try:
+                return datetime.strptime(str(raw)[:10], "%Y-%m-%d").date()
+            except Exception:
+                continue
+    return None
+
+
+def parse_filter_date(text):
+    """Parse a user-entered 'YYYY-MM-DD' date filter boundary. Returns a
+    `datetime.date` or None if *text* is blank/unparseable."""
+    if not text:
+        return None
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except Exception:
+        return None
 
 
 class ThreadSettings:
@@ -338,23 +385,36 @@ class ImageModal(QDialog):
 
 
 def _keyword_matches_text(keywords, text):
-    """Case-insensitive whole-word match of any keyword in *text*, treating
-    underscores, dots, hyphens, and other common filename separators as
-    valid word boundaries (in addition to string start/end). Shared by
-    PostDetectionThread (post/title-level skip) and FilePreparationThread
-    (individual-file-level skip).
+    """Case-insensitive whole-word match of any keyword in *text*,
+    treating non-alphanumeric characters (including _, -, ., /, spaces,
+    curly braces, etc.) as valid word boundaries (in addition to string
+    start/end).  No normalization is performed — the keyword must appear
+    exactly (case-insensitive) as a whole word in the text.  This avoids
+    false positives from camelCase splitting (e.g. 'sketch' will NOT match
+    'SketchBook').  Shared by PostDetectionThread (post/title-level skip)
+    and FilePreparationThread (individual-file-level skip).
     """
     if not keywords or not text:
+        return False
+    text_lower = text.lower()
+    if not text_lower:
         return False
     for keyword in keywords:
         if not keyword:
             continue
+        keyword_lower = keyword.lower()
+        if not keyword_lower:
+            continue
         try:
-            pattern = r"(?<![A-Za-z0-9])" + re.escape(keyword) + r"(?![A-Za-z0-9])"
-            if re.search(pattern, text, re.IGNORECASE):
+            pattern = (
+                r"(?<![a-z0-9])"
+                + re.escape(keyword_lower)
+                + r"(?![a-z0-9])"
+            )
+            if re.search(pattern, text_lower):
                 return True
         except re.error:
-            if keyword.lower() in text.lower():
+            if keyword_lower in text_lower:
                 return True
     return False
 
@@ -371,17 +431,57 @@ class PostDetectionThread(QThread):
         post_titles_map,
         settings,
         skip_keywords=None,
-        skip_keywords_scope="title",
+        skip_keywords_scopes=None,
+        post_dates_map=None,
+        date_after=None,
+        date_before=None,
     ):
         super().__init__()
         self.url = url
         self.post_titles_map = post_titles_map  # Shared dictionary to store post titles
+        self.post_dates_map = post_dates_map if post_dates_map is not None else {}
         self.settings = settings
         self.is_running = True
         self.domain_config = get_domain_config(url)
         self.skip_keywords = skip_keywords if skip_keywords is not None else []
-        self.skip_keywords_scope = skip_keywords_scope if skip_keywords_scope else "title"
+        # Set of scopes to check keywords against: any of "title",
+        # "filenames", "description", "tags". A post is skipped if the
+        # keyword matches in ANY enabled scope.
+        if skip_keywords_scopes is None:
+            # Legacy default when the caller doesn't specify scopes at all.
+            self.skip_keywords_scopes = {"title"}
+        else:
+            # Respect the caller's exact selection — including an empty
+            # set, which means no scope is checked and therefore no
+            # post should be skipped by keyword.
+            self.skip_keywords_scopes = set(skip_keywords_scopes)
+        # Optional post-date range filter (datetime.date objects, inclusive).
+        # Only the post's own publish date is considered, never the import date.
+        self.date_after = date_after
+        self.date_before = date_before
         self._skipped_count = 0
+        self._keyword_skipped_count = 0
+        self._date_skipped_count = 0
+        self._parsed_dates = {}  # post_id -> parsed datetime.date (cache, avoids re-parsing)
+
+    def _post_date_out_of_range(self, post):
+        """Return True if *post* should be skipped because its publish date
+        falls outside the configured [date_after, date_before] range."""
+        if not self.date_after and not self.date_before:
+            return False
+        post_id = post.get("id")
+        if post_id in self._parsed_dates:
+            post_date = self._parsed_dates[post_id]
+        else:
+            post_date = get_post_published_date(post)
+        if post_date is None:
+            # Unknown date: don't silently drop it from results.
+            return False
+        if self.date_after and post_date < self.date_after:
+            return True
+        if self.date_before and post_date > self.date_before:
+            return True
+        return False
 
     def _gather_post_filenames(self, post):
         """Collect candidate filenames for a post: the main file and any
@@ -413,31 +513,175 @@ class PostDetectionThread(QThread):
             pass
         return filenames
 
+    def _gather_post_description(self, post):
+        """Return the post's description/content as plain text (HTML
+        stripped), or an empty string if it has none."""
+        try:
+            raw_html = post.get("content")
+            if not raw_html:
+                return ""
+            return BeautifulSoup(raw_html, "html.parser").get_text(" ")
+        except Exception:
+            return ""
+
+    def _gather_post_tags(self, post):
+        """Collect the post's tags as a list of strings, tolerating:
+        - A PostgreSQL array string: "{tag1,tag2,tag3}" (Kemono/Coomer style)
+        - A comma-separated string: "tag1, tag2, tag3"
+        - A semicolon-separated string: "tag1; tag2; tag3"
+        - A list of plain strings: ["tag1", "tag2"]
+        - A list of dictionaries with a 'name', 'tag', 'label', or
+          'value' key: [{"id": 1, "name": "AlienComic"}, ...]
+        - A dict mapping tag names to truthy/falsy values.
+        Falls back to str() conversion for any other element type.
+        """
+        try:
+            tags = post.get("tags")
+            if not tags:
+                # Debug: distinguish between "field is None" vs "field
+                # is missing entirely" so we can tell whether the API
+                # listing endpoint includes tags at all.
+                post_id = post.get("id", "unknown")
+                if "tags" in post:
+                    self.log.emit(
+                        translate(
+                            "log_debug",
+                            f"[TAG-DEBUG] Post {post_id}: 'tags' field is "
+                            f"null/empty (value={tags!r})",
+                        ),
+                        "DEBUG",
+                    )
+                else:
+                    self.log.emit(
+                        translate(
+                            "log_debug",
+                            f"[TAG-DEBUG] Post {post_id}: no 'tags' field "
+                            f"in API response (available keys: "
+                            f"{list(post.keys())})",
+                        ),
+                        "DEBUG",
+                    )
+                return []
+
+            # Debug: log raw tags value + type so format issues are
+            # immediately visible.
+            post_id = post.get("id", "unknown")
+            self.log.emit(
+                translate(
+                    "log_debug",
+                    f"[TAG-DEBUG] Post {post_id}: raw tags type="
+                    f"{type(tags).__name__}, value={tags!r}",
+                ),
+                "DEBUG",
+            )
+
+            if isinstance(tags, str):
+                # Handle PostgreSQL array string format used by
+                # Kemono/Coomer APIs: "{tag1,tag2,tag3}"
+                # Strip leading/trailing curly braces, then split by comma.
+                if tags.startswith("{") and tags.endswith("}"):
+                    tags = tags[1:-1]
+                # Split by comma first (the standard delimiter for both
+                # PostgreSQL array strings and plain comma-separated strings).
+                candidates = tags.split(",")
+                # If comma gave only one result, try semicolon as fallback.
+                if len(candidates) <= 1:
+                    candidates = tags.split(";")
+                # Strip any remaining braces, quotes, and whitespace from each tag
+                result = []
+                for t in candidates:
+                    cleaned = t.strip().strip("{}\"'")
+                    if cleaned:
+                        result.append(cleaned)
+                return result
+            if isinstance(tags, list):
+                result = []
+                for t in tags:
+                    if isinstance(t, dict):
+                        # Extract the tag name from common key names used
+                        # by various API responses.
+                        name = (
+                            t.get("name")
+                            or t.get("tag")
+                            or t.get("label")
+                            or t.get("value")
+                        )
+                        if name:
+                            result.append(str(name).strip().strip("{}\"'"))
+                    elif isinstance(t, str):
+                        cleaned = t.strip().strip("{}\"'")
+                        if cleaned:
+                            result.append(cleaned)
+                    else:
+                        s = str(t).strip().strip("{}\"'")
+                        if s:
+                            result.append(s)
+                return result
+            if isinstance(tags, dict):
+                # Handle dict format: keys are tag names, values may
+                # be booleans, counts, or other metadata.
+                result = []
+                for key in tags:
+                    cleaned = str(key).strip().strip("{}\"'")
+                    if cleaned:
+                        result.append(cleaned)
+                return result
+        except Exception:
+            pass
+        return []
+
     def _title_matches_skip_keyword(self, title, post=None):
         """Return True if this post should be skipped, based on the
-        configured skip-keywords and search scope (title, filenames, or
-        both). *post* is the raw post dict, needed to inspect filenames;
-        if omitted, filename matching is skipped even if scope requires it.
+        configured skip-keywords and the enabled scopes (any combination
+        of title, filenames, description, tags). *post* is the raw post
+        dict, needed to inspect filenames/description/tags; scopes that
+        need it are skipped if *post* is omitted.
         """
         if not self.skip_keywords:
             return False
 
-        scope = self.skip_keywords_scope
-        title_match = _keyword_matches_text(self.skip_keywords, title) if title else False
+        scopes = self.skip_keywords_scopes
 
-        filenames_match = False
-        if scope in ("filenames", "both_or") and post is not None:
+        if "title" in scopes and title:
+            if _keyword_matches_text(self.skip_keywords, title):
+                return True
+
+        if post is None:
+            return False
+
+        if "filenames" in scopes:
             for fname in self._gather_post_filenames(post):
                 if _keyword_matches_text(self.skip_keywords, fname):
-                    filenames_match = True
-                    break
+                    return True
 
-        if scope == "title":
-            return title_match
-        if scope == "filenames":
-            return filenames_match
-        # Default / "both_or"
-        return title_match or filenames_match
+        if "description" in scopes:
+            description = self._gather_post_description(post)
+            if description and _keyword_matches_text(self.skip_keywords, description):
+                return True
+
+        if "tags" in scopes:
+            gathered_tags = self._gather_post_tags(post)
+            if gathered_tags:
+                self.log.emit(
+                    translate(
+                        "log_debug",
+                        f"[TAG-DEBUG] Checking {len(gathered_tags)} tags against "
+                        f"keywords {self.skip_keywords}: {gathered_tags}",
+                    ),
+                    "DEBUG",
+                )
+            for tag in gathered_tags:
+                if _keyword_matches_text(self.skip_keywords, tag):
+                    self.log.emit(
+                        translate(
+                            "log_debug",
+                            f"[TAG-DEBUG] SKIP MATCH: keyword matched tag '{tag}'",
+                        ),
+                        "DEBUG",
+                    )
+                    return True
+
+        return False
 
     def stop(self):
         self.is_running = False
@@ -807,6 +1051,14 @@ class PostDetectionThread(QThread):
                 self.post_titles_map[(service, creator_id, post_id)] = (
                     sanitize_filename(title)
                 )
+                # Store the post's own publish date (not the import date).
+                # Cache the parsed date object too so the range-filter pass
+                # below doesn't need to re-parse it.
+                parsed_date = get_post_published_date(post)
+                self._parsed_dates[post_id] = parsed_date
+                self.post_dates_map[post_id] = (
+                    parsed_date.strftime("%Y-%m-%d") if parsed_date else "Unknown date"
+                )
 
             if not posts_data:
                 self.log.emit(
@@ -824,7 +1076,14 @@ class PostDetectionThread(QThread):
                 if not post_id:
                     continue
                 title = post.get("title", f"Post {post_id}")
-                if self._title_matches_skip_keyword(title, post):
+                keyword_match = self._title_matches_skip_keyword(title, post)
+                date_out = self._post_date_out_of_range(post)
+
+                if keyword_match:
+                    self._keyword_skipped_count += 1
+                if date_out:
+                    self._date_skipped_count += 1
+                if keyword_match or date_out:
                     self._skipped_count += 1
                     continue
                 thumbnail_url = None
@@ -900,16 +1159,19 @@ class PostDetectionThread(QThread):
 
         if self.is_running:
             self.filtered_count = self._skipped_count
-            self.total_detected = len(all_processed_posts)
+            self.date_skipped_count = self._date_skipped_count
+            self.keyword_skipped_count = self._keyword_skipped_count
+            self.total_detected = len(all_posts)
             self.finished.emit(all_processed_posts)
 
 class PostPopulationThread(QThread):
     finished = pyqtSignal(dict, list)
     log = pyqtSignal(str, str)
 
-    def __init__(self, detected_posts):
+    def __init__(self, detected_posts, post_dates_map=None):
         super().__init__()
         self.detected_posts = detected_posts
+        self.post_dates_map = post_dates_map if post_dates_map is not None else {}
         self.is_running = True
 
     def stop(self):
@@ -920,7 +1182,8 @@ class PostPopulationThread(QThread):
             return
         post_url_map = {}
         for post_title, (post_id, thumbnail_url) in self.detected_posts:
-            unique_title = f"{post_title} (ID: {post_id})"
+            post_date = self.post_dates_map.get(post_id, "Unknown date")
+            unique_title = f"{post_title} ({post_date})"
             post_url_map[unique_title] = (post_id, thumbnail_url)
             self.log.emit(
                 translate(
@@ -1060,7 +1323,7 @@ class FilePreparationThread(QThread):
                     self._files_skipped_count += 1
                 self.log.emit(
                     translate(
-                        "log_debug", _t("skipped_individual_file", f"Skipped main file (keyword match): {file_name}")
+                        "log_debug", _t("skipped_individual_file", f"Skipped main file (keyword match): {file_name}", file_name)
                     ),
                     "INFO",
                 )
@@ -1107,6 +1370,7 @@ class FilePreparationThread(QThread):
                                 _t(
                                     "skipped_individual_file",
                                     f"Skipped attachment (keyword match): {attachment_name}",
+                                    attachment_name,
                                 ),
                             ),
                             "INFO",
@@ -1156,6 +1420,7 @@ class FilePreparationThread(QThread):
                             _t(
                                 "skipped_individual_file",
                                 f"Skipped content image (keyword match): {img_name}",
+                                img_name,
                             ),
                         ),
                         "INFO",
@@ -1501,11 +1766,9 @@ class CreatorDownloadThread(QThread):
         # Extensions treated as "compressed archives" for the
         # force_folder_for_compressed toggle.
         self.COMPRESSED_EXTENSIONS = (".zip", ".7z", ".rar")
-        self.post_file_counters = {}  # Track file counter per post for auto-rename
         self.domain_config = self._get_domain_config_from_files()
         # Locks for thread-safe access to shared dictionaries
         self.failed_files_lock = threading.Lock()
-        self.post_file_counters_lock = threading.Lock()
         # Cache of resolved per-post folder names (post_id -> folder name),
         # so repeated calls for the same post always resolve to the same
         # folder, and so we only need to check disk collisions once per post.
@@ -1707,7 +1970,8 @@ class CreatorDownloadThread(QThread):
             return candidate
 
     def generate_filename_and_folder(
-        self, file_url, folder, file_index, total_files, post_id, post_title
+        self, file_url, folder, file_index, total_files, post_id, post_title,
+        page_number
     ):
         """Generate the target folder path and filename for a given file according to
         the creator downloader settings (filename template, folder strategy) and
@@ -1773,15 +2037,16 @@ class CreatorDownloadThread(QThread):
                 pass
             formatted = f"{context['post_id']}_{context['orig_name']}"
 
-        # Apply auto-rename prefix if enabled (per-post counter)
+        # Apply auto-rename prefix if enabled. The per-post page number
+        # is computed once at enqueue time (detection order), so pages
+        # stay in reading order even when downloaded concurrently.
+        # Zero-padding keeps lexicographic sorting (e.g. Windows
+        # Explorer) in numeric order.
         prefix = ""
         if self.auto_rename_enabled:
-            with self.post_file_counters_lock:
-                if post_id not in self.post_file_counters:
-                    self.post_file_counters[post_id] = 0
-                self.post_file_counters[post_id] += 1
-                file_counter = self.post_file_counters[post_id]
-            prefix = f"{file_counter}_"
+            post_file_count = len(self.post_files_map.get(post_id, []))
+            width = max(3, len(str(post_file_count)))
+            prefix = f"{page_number:0{width}d}_"
 
         # Build final filename and sanitize
         filename_no_ext = sanitize_filename(prefix + formatted)
@@ -1909,7 +2174,7 @@ class CreatorDownloadThread(QThread):
                 "WARNING",
             )
 
-    async def download_file(self, file_url, folder, file_index, total_files):
+    async def download_file(self, file_url, folder, file_index, total_files, page_number):
         if not self.is_running or file_url not in self.files_to_download:
             self._safe_emit(
                 self.log, translate("log_info", f"Skipping {file_url}"), "INFO"
@@ -1922,7 +2187,8 @@ class CreatorDownloadThread(QThread):
 
         # Generate final target folder and filename using settings and auto-rename
         target_folder, filename = self.generate_filename_and_folder(
-            file_url, folder, file_index, total_files, post_id, post_title
+            file_url, folder, file_index, total_files, post_id, post_title,
+            page_number
         )
 
         full_path = os.path.join(target_folder, filename.replace("/", "_"))
@@ -2227,14 +2493,18 @@ class CreatorDownloadThread(QThread):
     async def download_worker(self, queue, folder, total_files):
         while self.is_running:
             try:
-                file_index, file_url = await asyncio.wait_for(queue.get(), timeout=1.0)
+                file_index, file_url, page_number = await asyncio.wait_for(
+                    queue.get(), timeout=1.0
+                )
             except asyncio.TimeoutError:
                 # Re-check self.is_running on next iteration
                 continue
             except asyncio.CancelledError:
                 return
             try:
-                await self.download_file(file_url, folder, file_index, total_files)
+                await self.download_file(
+                    file_url, folder, file_index, total_files, page_number
+                )
             except asyncio.CancelledError:
                 return  # finally still runs → task_done()
             except Exception as e:
@@ -2313,8 +2583,11 @@ class CreatorDownloadThread(QThread):
             asyncio.set_event_loop(loop)
             try:
                 queue = asyncio.Queue()
+                post_order_counts = {}
                 for i, file_url in enumerate(self.files_to_download):
-                    queue.put_nowait((i, file_url))
+                    pid = self.files_to_posts_map.get(file_url, self.creator_id)
+                    post_order_counts[pid] = post_order_counts.get(pid, 0) + 1
+                    queue.put_nowait((i, file_url, post_order_counts[pid]))
 
                 async def main():
                     tasks = [
@@ -2692,6 +2965,7 @@ class CreatorDownloaderTab(QWidget):
         self.checkbox_toggle_thread = None
         self._cancellation_thread = None
         self.post_titles_map = {}
+        self.post_dates_map = {}  # post_id -> display string of the post's own publish date
         self.post_widget_cache = (
             {}
         )  # Maps post_title -> (item, widget) for O(1) lookups
@@ -3046,7 +3320,8 @@ class CreatorDownloaderTab(QWidget):
 
         post_list_layout.addLayout(skip_filter_layout)
 
-        # Skip scope combo row
+        # Skip scope toggles row — each toggle is independent (multi-select),
+        # so a post is skipped if the keyword matches in ANY enabled scope.
         skip_scope_layout = QHBoxLayout()
         skip_scope_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -3054,16 +3329,19 @@ class CreatorDownloaderTab(QWidget):
         self.skip_scope_label.setStyleSheet("color: white;")
         skip_scope_layout.addWidget(self.skip_scope_label)
 
-        self.skip_scope_combo = QComboBox()
         self._skip_scope_options = [
-            ("skip_scope_title", "title", "Title only"),
-            ("skip_scope_filenames", "filenames", "Filenames only"),
-            ("skip_scope_both_or", "both_or", "Skip if either match"),
+            ("skip_scope_title_toggle", "title", "Title"),
+            ("skip_scope_filenames_toggle", "filenames", "Filenames"),
+            ("skip_scope_description_toggle", "description", "Description"),
+            ("skip_scope_tags_toggle", "tags", "Tags"),
         ]
+        self.skip_scope_checkboxes = {}
         for label_key, value, fallback_label in self._skip_scope_options:
-            self.skip_scope_combo.addItem(_t(label_key, fallback_label), value)
-        self.skip_scope_combo.setStyleSheet("padding: 5px; border-radius: 5px;")
-        skip_scope_layout.addWidget(self.skip_scope_combo, stretch=1)
+            checkbox = QCheckBox(_t(label_key, fallback_label))
+            checkbox.setStyleSheet("color: white;")
+            checkbox.setChecked(value == "title")  # Title enabled by default
+            skip_scope_layout.addWidget(checkbox)
+            self.skip_scope_checkboxes[value] = checkbox
         skip_scope_layout.addStretch()
 
         post_list_layout.addLayout(skip_scope_layout)
@@ -3095,6 +3373,47 @@ class CreatorDownloaderTab(QWidget):
         file_skip_filter_layout.addWidget(self.file_skip_keywords_help_btn)
 
         post_list_layout.addLayout(file_skip_filter_layout)
+
+        # Post date range filter — "From"/"To" bounds (both optional,
+        # both inclusive). Filters by the post's own publish date, not
+        # the import/scrape date.
+        date_range_layout = QHBoxLayout()
+        date_range_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.date_range_label = QLabel(_t("date_range_filter", "Date Range"))
+        self.date_range_label.setStyleSheet("color: white;")
+        date_range_layout.addWidget(self.date_range_label)
+
+        self.date_from_label = QLabel(_t("date_range_from", "From"))
+        self.date_from_label.setStyleSheet("color: white;")
+        date_range_layout.addWidget(self.date_from_label)
+
+        self.date_from_edit = QLineEdit()
+        self.date_from_edit.setPlaceholderText(
+            _t("date_range_from_placeholder", "YYYY-MM-DD (optional)")
+        )
+        self.date_from_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
+        date_range_layout.addWidget(self.date_from_edit, stretch=1)
+
+        self.date_to_label = QLabel(_t("date_range_to", "To"))
+        self.date_to_label.setStyleSheet("color: white;")
+        date_range_layout.addWidget(self.date_to_label)
+
+        self.date_to_edit = QLineEdit()
+        self.date_to_edit.setPlaceholderText(
+            _t("date_range_to_placeholder", "YYYY-MM-DD (optional)")
+        )
+        self.date_to_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
+        date_range_layout.addWidget(self.date_to_edit, stretch=1)
+
+        self.date_filter_help_btn = QPushButton("?")
+        self.date_filter_help_btn.setStyleSheet(
+            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+        )
+        self.date_filter_help_btn.clicked.connect(self.show_date_filter_help)
+        date_range_layout.addWidget(self.date_filter_help_btn)
+
+        post_list_layout.addLayout(date_range_layout)
 
         self.creator_search_input = QLineEdit()
         self.creator_search_input.setStyleSheet("padding: 5px; border-radius: 5px;")
@@ -3286,19 +3605,11 @@ class CreatorDownloaderTab(QWidget):
                     "e.g. JP, ZH (comma-separated, optional)",
                 )
             )
-        if hasattr(self, "skip_scope_combo"):
-            current_scope_data = self.skip_scope_combo.currentData()
-            self.skip_scope_combo.blockSignals(True)
-            self.skip_scope_combo.clear()
+        if hasattr(self, "skip_scope_checkboxes"):
             for label_key, value, fallback_label in self._skip_scope_options:
-                self.skip_scope_combo.addItem(
-                    _t(label_key, fallback_label), value
-                )
-            for i in range(self.skip_scope_combo.count()):
-                if self.skip_scope_combo.itemData(i) == current_scope_data:
-                    self.skip_scope_combo.setCurrentIndex(i)
-                    break
-            self.skip_scope_combo.blockSignals(False)
+                checkbox = self.skip_scope_checkboxes.get(value)
+                if checkbox is not None:
+                    checkbox.setText(_t(label_key, fallback_label))
 
         self.update_creator_queue_list()
 
@@ -3584,6 +3895,7 @@ class CreatorDownloaderTab(QWidget):
         self.filtered_posts = []  # Clear filtered posts cache
         self.all_detected_posts = []  # Clear previous creator's posts
         self.post_url_map = {}  # Clear previous creator's post URL mapping
+        self.post_dates_map = {}  # Clear previous creator's post dates
         self.current_page = 1  # Reset pagination
         self.total_pages = 1
 
@@ -3616,17 +3928,52 @@ class CreatorDownloaderTab(QWidget):
         # Disable UI elements during fetching
         self.set_fetching_ui_state(True)
 
-        # Read skip-keywords and scope directly from the inline UI widgets
+        # Read skip-keywords and scope directly from the inline UI widgets.
+        # Scope is a set of independently-toggled checkboxes now — a post is
+        # skipped if the keyword matches in ANY enabled scope.
         raw_keywords = self.skip_keywords_edit.text().strip()
         skip_keywords = [kw.strip() for kw in raw_keywords.split(",") if kw.strip()] if raw_keywords else []
-        skip_keywords_scope = self.skip_scope_combo.currentData() or "title"
+        skip_keywords_scopes = {
+            scope for scope, checkbox in self.skip_scope_checkboxes.items()
+            if checkbox.isChecked()
+        }
+
+        date_after = parse_filter_date(self.date_from_edit.text())
+        date_before = parse_filter_date(self.date_to_edit.text())
+        if self.date_from_edit.text().strip() and date_after is None:
+            self.append_log_to_console(
+                translate(
+                    "log_warning",
+                    _t(
+                        "invalid_date_from_ignored",
+                        "Invalid 'Date Range: From' value ignored (use YYYY-MM-DD)",
+                    ),
+                ),
+                "WARNING",
+            )
+        if self.date_to_edit.text().strip() and date_before is None:
+            self.append_log_to_console(
+                translate(
+                    "log_warning",
+                    _t(
+                        "invalid_date_to_ignored",
+                        "Invalid 'Date Range: To' value ignored (use YYYY-MM-DD)",
+                    ),
+                ),
+                "WARNING",
+            )
+        if date_after and date_before and date_after > date_before:
+            date_after, date_before = date_before, date_after
 
         self.post_detection_thread = PostDetectionThread(
             url,
             self.post_titles_map,
             self._create_thread_settings(),
             skip_keywords=skip_keywords,
-            skip_keywords_scope=skip_keywords_scope,
+            skip_keywords_scopes=skip_keywords_scopes,
+            post_dates_map=self.post_dates_map,
+            date_after=date_after,
+            date_before=date_before,
         )
         self.post_detection_thread.finished.connect(self.on_post_detection_finished)
         self.post_detection_thread.posts_batch.connect(self.on_posts_batch_received)
@@ -3707,7 +4054,8 @@ class CreatorDownloaderTab(QWidget):
                 min(len(self.filtered_posts), current_page_end),
             ):
                 post_title, post_id, thumbnail_url, is_checked = self.filtered_posts[i]
-                unique_title = f"{post_title} (ID: {post_id})"
+                post_date = self.post_dates_map.get(post_id, "Unknown date")
+                unique_title = f"{post_title} ({post_date})"
                 self.post_url_map[unique_title] = (post_id, thumbnail_url)
                 self.add_list_item(unique_title, thumbnail_url, is_checked)
 
@@ -3753,10 +4101,14 @@ class CreatorDownloaderTab(QWidget):
 
         # Inline skip-keywords filter
         self.skip_keywords_edit.setEnabled(not is_fetching)
-        self.skip_scope_combo.setEnabled(not is_fetching)
+        for checkbox in self.skip_scope_checkboxes.values():
+            checkbox.setEnabled(not is_fetching)
         self.skip_keywords_help_btn.setEnabled(not is_fetching)
         self.file_skip_keywords_edit.setEnabled(not is_fetching)
         self.file_skip_keywords_help_btn.setEnabled(not is_fetching)
+        self.date_from_edit.setEnabled(not is_fetching)
+        self.date_to_edit.setEnabled(not is_fetching)
+        self.date_filter_help_btn.setEnabled(not is_fetching)
 
         # Pagination controls
         self.prev_page_btn.setEnabled(not is_fetching and self.current_page > 1)
@@ -3825,10 +4177,14 @@ class CreatorDownloaderTab(QWidget):
 
         # Inline skip-keywords filter
         self.skip_keywords_edit.setEnabled(enabled)
-        self.skip_scope_combo.setEnabled(enabled)
+        for checkbox in self.skip_scope_checkboxes.values():
+            checkbox.setEnabled(enabled)
         self.skip_keywords_help_btn.setEnabled(enabled)
         self.file_skip_keywords_edit.setEnabled(enabled)
         self.file_skip_keywords_help_btn.setEnabled(enabled)
+        self.date_filter_help_btn.setEnabled(enabled)
+        self.date_from_edit.setEnabled(enabled)
+        self.date_to_edit.setEnabled(enabled)
 
         # Pagination
         self.prev_page_btn.setEnabled(enabled and self.current_page > 1)
@@ -3881,7 +4237,8 @@ class CreatorDownloaderTab(QWidget):
 
         for i in range(start_idx, end_idx):
             post_title, post_id, thumbnail_url, is_checked = self.filtered_posts[i]
-            unique_title = f"{post_title} (ID: {post_id})"
+            post_date = self.post_dates_map.get(post_id, "Unknown date")
+            unique_title = f"{post_title} ({post_date})"
             self.post_url_map[unique_title] = (post_id, thumbnail_url)
             self.add_list_item(unique_title, thumbnail_url, is_checked)
 
@@ -3923,7 +4280,9 @@ class CreatorDownloaderTab(QWidget):
     def start_population_thread(self, detected_posts):
         self.background_task_label.setText(translate("populating_posts"))
         self.background_task_progress.setRange(0, 0)
-        self.post_population_thread = PostPopulationThread(detected_posts)
+        self.post_population_thread = PostPopulationThread(
+            detected_posts, post_dates_map=self.post_dates_map
+        )
         self.post_population_thread.finished.connect(self.on_post_population_finished)
         self.post_population_thread.log.connect(self.append_log_to_console)
         self.active_threads.append(self.post_population_thread)
@@ -4825,10 +5184,21 @@ class CreatorDownloaderTab(QWidget):
             _t("skip_posts_keywords_help_title", "Skip Posts Help"),
             _t(
                 "skip_posts_keywords_help_text",
-                "Comma-separated keywords (e.g. JP, ZH). Posts matching any "
-                "keyword (case-insensitive, whole word) are excluded "
-                "entirely. Use 'Filter By' to choose: Title only, Filenames "
-                "only, or Skip if either match. Leave blank to disable.",
+                "Comma-separated keywords (e.g. AlienComic, sketch). Posts "
+                "matching any keyword (case-insensitive, whole word) are "
+                "excluded entirely.\n\n"
+                "Use the 'Filter By' checkboxes to choose which fields are "
+                "checked. Any combination can be enabled at once — a post is "
+                "skipped if the keyword matches in ANY enabled field:\n"
+                "  • Title — checks the post title\n"
+                "  • Filenames — checks the main file and attachment names\n"
+                "  • Description — checks the post body text\n"
+                "  • Tags — checks the post's tags\n\n"
+                "Matching is case-insensitive and whole-word. For example, "
+                "'sketch' matches 'Sketch' but not 'SketchBook'. To match "
+                "multiple variations, enter them as separate keywords: "
+                "'AlienComic, Alien Comic, alien_comic'.\n\n"
+                "Leave the keyword box blank to disable.",
             ),
         )
 
@@ -4844,6 +5214,21 @@ class CreatorDownloaderTab(QWidget):
                 "excluded from download. Only the matched file is skipped — "
                 "never the whole post. Independent from 'Skip Posts "
                 "Containing' above. Leave blank to disable.",
+            ),
+        )
+
+    def show_date_filter_help(self):
+        """Show help text explaining the post date range filter."""
+        QMessageBox.information(
+            self,
+            _t("date_filter_help_title", "Post Date Filter Help"),
+            _t(
+                "date_filter_help_text",
+                "Filter posts by their own publish date (not the date they "
+                "were imported/scraped). Enter dates as YYYY-MM-DD in "
+                "'From' and/or 'To' — both bounds are inclusive and both "
+                "are optional; leave either blank to disable that bound. "
+                "Posts with an unknown publish date are always kept.",
             ),
         )
 
@@ -5074,6 +5459,10 @@ class CreatorDownloaderTab(QWidget):
                 filtered_count = getattr(detection_thread, "filtered_count", 0)
                 total_detected = getattr(detection_thread, "total_detected", 0)
                 skip_kws = getattr(detection_thread, "skip_keywords", [])
+                keyword_skipped_count = getattr(
+                    detection_thread, "keyword_skipped_count", filtered_count
+                )
+                date_skipped_count = getattr(detection_thread, "date_skipped_count", 0)
                 self.append_log_to_console(
                     translate(
                         "log_info",
@@ -5086,14 +5475,27 @@ class CreatorDownloaderTab(QWidget):
                     ),
                     "INFO",
                 )
-                if skip_kws:
+                if skip_kws and keyword_skipped_count:
                     self.append_log_to_console(
                         translate(
                             "log_info",
                             translate(
                                 "posts_skipped_by_keyword",
-                                filtered_count,
+                                keyword_skipped_count,
                                 ", ".join(skip_kws),
+                            ),
+                        ),
+                        "INFO",
+                    )
+                if date_skipped_count:
+                    self.append_log_to_console(
+                        translate(
+                            "log_info",
+                            _t(
+                                "posts_skipped_by_date_filter",
+                                f"Skipped {date_skipped_count} post(s) outside the "
+                                f"selected date range.",
+                                date_skipped_count,
                             ),
                         ),
                         "INFO",
