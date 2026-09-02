@@ -183,6 +183,12 @@ def _build_headers() -> dict:
     }
 
 
+class _RetryableDownloadError(Exception):
+    """Raised for download failures (e.g. size mismatch) that should go
+    through the normal retry/backoff path in download_file(), rather than
+    being treated as a fatal, non-retryable error."""
+
+
 HEADERS = None  # Built lazily via get_headers()
 
 
@@ -2444,8 +2450,12 @@ class CreatorDownloadThread(QThread):
                                 ),
                                 "ERROR",
                             )
-                    # Raise exception to trigger retry
-                    raise Exception(
+                    # Raise a retryable exception so this is caught by the
+                    # RequestException/_RetryableDownloadError branch below
+                    # and actually retried, instead of falling into the
+                    # generic `except Exception` handler further down (which
+                    # gives up immediately with no retry at all).
+                    raise _RetryableDownloadError(
                         f"Size mismatch: downloaded {downloaded_size} bytes, expected {file_size} bytes"
                     )
 
@@ -2468,7 +2478,7 @@ class CreatorDownloadThread(QThread):
                 self.check_post_completion(file_url)
                 return
 
-            except requests.RequestException as e:
+            except (requests.RequestException, _RetryableDownloadError) as e:
                 if attempt == max_retries:
                     error_msg = translate(
                         "error_downloading_after_retries", file_url, max_retries, str(e)
@@ -2483,6 +2493,32 @@ class CreatorDownloadThread(QThread):
                     self.check_post_completion(file_url)
                     return
                 else:
+                    # Exponential backoff instead of a flat 1s delay, so
+                    # repeated failures don't hammer the server at a fixed
+                    # rate. status_code/Retry-After are only present on
+                    # requests.RequestException (HTTP errors); other
+                    # failures (timeouts, connection errors,
+                    # _RetryableDownloadError) fall back to the plain
+                    # exponential schedule.
+                    resp = getattr(e, "response", None)
+                    status_code = getattr(resp, "status_code", None)
+                    retry_after_header = (
+                        resp.headers.get("Retry-After") if resp is not None else None
+                    )
+
+                    delay = min(2 ** (attempt - 1), 30)
+                    if status_code in (403, 429):
+                        # These are WAF/rate-limit signals specifically -
+                        # retrying fast makes the block more likely to
+                        # persist, so enforce a higher floor even on the
+                        # first retry.
+                        delay = max(delay, 5)
+                    if retry_after_header:
+                        try:
+                            delay = max(delay, float(retry_after_header))
+                        except ValueError:
+                            pass
+
                     self._safe_emit(
                         self.log,
                         translate(
@@ -2497,7 +2533,7 @@ class CreatorDownloadThread(QThread):
                         ),
                         "WARNING",
                     )
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(delay)
             except Exception as e:
                 self._safe_emit(
                     self.log,
