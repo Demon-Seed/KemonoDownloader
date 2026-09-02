@@ -6,10 +6,9 @@
 
 <br>
 
-### This is a Personal Fork Using 100% AI, I use it myself so it should be functional, but be aware anyway.<br> 
-### **Feel free to report bugs, though I am lazy.**<br>
-**99% of additions are in the 'Creator Downloader' tab, as I see no use for 'Post Downloader'.**<br>
+* ### This is a Personal Fork Using 100% AI, I use it myself so it should be functional, but be aware anyway. Feel free to report bugs, though I am lazy.<br> 
 # Additions:<br>
+*99% of additions are in the 'Creator Downloader' tab, as I see no use for 'Post Downloader'*<br>
 * Filtering (can be used in any combination, number skipped displays in log):<br>
   * Filter out posts by keyword (Title, Filenames, Description, Tags, or any combination.)<br>
   * Filter out files by keyword.<br>
