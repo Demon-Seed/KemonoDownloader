@@ -2292,7 +2292,31 @@ class CreatorDownloadThread(QThread):
         for attempt in range(1, max_retries + 1):
             try:
                 headers = get_headers().copy()
-                headers["Referer"] = self.domain_config["referer"]
+                # Use the file host's own origin as Referer/Origin instead of
+                # the base-domain referer. For hosts like pawchive, files are
+                # served from a different subdomain (file.pawchive.<suffix>)
+                # than the site itself (pawchive.<suffix>). DDoS-Guard (and
+                # similar WAFs) treat a Referer that doesn't match the
+                # requested host as a bot/hotlink signal and 403 immediately
+                # (no CF-RAY, since it's DDoS-Guard, not Cloudflare).
+                file_base_url = self.domain_config.get(
+                    "file_base_url"
+                ) or self.domain_config["base_url"]
+                headers["Referer"] = file_base_url.rstrip("/") + "/"
+                headers["Origin"] = self.domain_config["base_url"].rstrip("/")
+                # get_headers() returns the module-wide default header set,
+                # which hardcodes Accept: text/css (meant for a stylesheet
+                # probe, not a file download). Sending that Accept header
+                # while requesting a media/binary URL is a strong bot
+                # signal to WAFs like DDoS-Guard. Override it, and add the
+                # Sec-Fetch-* hints a real browser would send for a
+                # cross-site subresource request (file.<domain> is a
+                # different origin than the referring page's domain).
+                headers["Accept"] = "*/*"
+                headers["Accept-Encoding"] = "gzip, deflate, br"
+                headers["Sec-Fetch-Dest"] = "empty"
+                headers["Sec-Fetch-Mode"] = "cors"
+                headers["Sec-Fetch-Site"] = "same-site"
 
                 # Use requests instead of aiohttp for better proxy support
                 def download_with_requests():
@@ -2302,6 +2326,35 @@ class CreatorDownloadThread(QThread):
                     with self._ssl_lock:
                         if not self.is_running:
                             raise Exception("Download cancelled before connection")
+
+                        # Warm up the file host once per thread/session so
+                        # DDoS-Guard issues its clearance cookie for that
+                        # specific host before we request the actual file.
+                        # Without this, the very first file request on a
+                        # fresh session/thread can 403 even with a correct
+                        # Referer, because no cookie has been set for
+                        # file.<domain> yet.
+                        warmed_hosts = getattr(
+                            _thread_local, "ddos_guard_warmed_hosts", None
+                        )
+                        if warmed_hosts is None:
+                            warmed_hosts = set()
+                            _thread_local.ddos_guard_warmed_hosts = warmed_hosts
+                        if file_base_url not in warmed_hosts:
+                            try:
+                                session.get(
+                                    file_base_url.rstrip("/") + "/",
+                                    headers={
+                                        "User-Agent": headers["User-Agent"],
+                                        "Referer": self.domain_config["referer"],
+                                    },
+                                    timeout=(10, 10),
+                                )
+                            except Exception:
+                                # Warm-up is best-effort; proceed regardless.
+                                pass
+                            warmed_hosts.add(file_base_url)
+
                         response = session.get(
                             file_url,
                             headers=headers,
@@ -2311,6 +2364,14 @@ class CreatorDownloadThread(QThread):
                     # After headers are received each thread has its own
                     # SSL connection and can stream data concurrently.
                     try:
+                        if response.status_code == 403:
+                            self._safe_emit(
+                                self.log,
+                                f"[DEBUG 403] Server: {response.headers.get('Server')} | "
+                                f"CF-RAY: {response.headers.get('cf-ray')} | "
+                                f"Body: {response.text[:300]}",
+                                "ERROR",
+                            )
                         response.raise_for_status()
                         header = response.headers.get("content-length")
                         try:
