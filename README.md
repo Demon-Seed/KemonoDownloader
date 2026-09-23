@@ -28,6 +28,9 @@
 * Toggle boxes swapped from checked to unchecked by default.<br>
 * Changed retry timer from flat 1sec to an exponential (1,2,4,8 etc. capping at 30sec) to avoid hammering the API for no reason.<br>
 
+# Want Todo<br>
+* Some kind of way to easily track when a creator was last downloaded from.
+
 # Support OG DEV:<br>
 **Developed by VoxDroid** | **Fork by Claude & GLM 5.2 Lol**<br>
 [GitHub](https://github.com/VoxDroid) | [Ko-fi](https://ko-fi.com/izeno)
