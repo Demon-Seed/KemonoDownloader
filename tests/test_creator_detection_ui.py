@@ -20,7 +20,7 @@ class FakeSignal:
 
 
 class FakePostDetectionThread:
-    def __init__(self, url, post_titles_map, settings):
+    def __init__(self, url, post_titles_map, settings, **kwargs):
         self.finished = FakeSignal()
         self.posts_batch = FakeSignal()
         self.log = FakeSignal()

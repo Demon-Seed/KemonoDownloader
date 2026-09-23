@@ -37,7 +37,6 @@ def test_settings_applied_message_includes_template_and_strategy(
         st.temp_settings["base_directory"] = str(tmp_path)
         st.temp_settings["base_folder_name"] = "Kemono Downloader Test"
         st.temp_settings["simultaneous_downloads"] = 3
-        st.temp_settings["auto_check_updates"] = True
         st.temp_settings["language"] = "english"
         st.temp_settings["use_proxy"] = False
         st.temp_settings["proxy_type"] = "tor"

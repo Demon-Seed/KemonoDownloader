@@ -46,7 +46,7 @@ def test_detection_to_population_flow(tmp_path, monkeypatch):
                 self.cb(*args[:n])
 
     class FakePostDetectionThread:
-        def __init__(self, url, post_titles_map, settings):
+        def __init__(self, url, post_titles_map, settings, **kwargs):
             self.finished = FakeSignal()
             self.posts_batch = FakeSignal()
             self.log = FakeSignal()
@@ -61,7 +61,7 @@ def test_detection_to_population_flow(tmp_path, monkeypatch):
             self.finished.emit(batch)
 
     class FakePostPopulationThread:
-        def __init__(self, detected_posts):
+        def __init__(self, detected_posts, post_dates_map=None):
             self.finished = FakeSignal()
             self.log = FakeSignal()
 

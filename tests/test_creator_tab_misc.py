@@ -51,11 +51,12 @@ def test_display_current_page_populates_list(tmp_path):
     ]
     tab.posts_per_page = 2
     tab.current_page = 1
+    tab.post_dates_map = {"1": "2024-01-02", "2": "2024-01-03"}
     tab.display_current_page()
     # Should display two items on page 1
     assert tab.creator_post_list.count() == 2
-    # post_url_map should include the unique titles
-    assert any("(ID: 1)" in k for k in tab.post_url_map.keys())
+    # post_url_map keys are the unique titles (post title + post date)
+    assert any("T1 (2024-01-02)" in k for k in tab.post_url_map.keys())
 
 
 def test_on_post_detection_error_uses_cached_posts(monkeypatch, tmp_path):
@@ -95,6 +96,16 @@ def test_cleanup_thread_transfers_failed_files(tmp_path):
             return "FakeThread"
 
     th = FakeThread()
-    tab.cleanup_thread(th, [])
+    keep_alive = FakeThread()
+    keep_alive.failed_files = None
+    tab.active_threads = [th, keep_alive]
+    # Files are still outstanding, so this cleanup must not end the run
+    # (ending it logs the failures and clears the set).
+    tab.total_files_to_download = 5
+    tab.completed_files = set()
+
+    tab.cleanup_thread(th)
+
     assert "u1" in tab.failed_files
     assert th._deleted is True
+    assert keep_alive in tab.active_threads

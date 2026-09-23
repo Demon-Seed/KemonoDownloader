@@ -37,7 +37,6 @@ class TestDefaultSettings:
         default_settings = {
             "base_folder_name": "Kemono Downloader",
             "simultaneous_downloads": 5,
-            "auto_check_updates": True,
             "language": "english",
             "creator_posts_max_attempts": 200,
             "post_data_max_retries": 7,
@@ -51,7 +50,6 @@ class TestDefaultSettings:
 
         assert default_settings["base_folder_name"] == "Kemono Downloader"
         assert default_settings["simultaneous_downloads"] == 5
-        assert default_settings["auto_check_updates"] is True
         assert default_settings["language"] == "english"
 
     def test_creator_filename_and_folder_defaults(self):
@@ -894,7 +892,6 @@ class TestCustomUIState:
             "base_directory": "/tmp",
             "base_folder_name": "Kemono Downloader",
             "simultaneous_downloads": 5,
-            "auto_check_updates": True,
             "creator_posts_max_attempts": 200,
             "post_data_max_retries": 7,
             "file_download_max_retries": 50,
@@ -935,7 +932,6 @@ class TestCustomUIState:
             "base_folder_name": "Kemono Downloader",
             "base_directory": "/tmp",
             "simultaneous_downloads": 5,
-            "auto_check_updates": True,
             "language": "english",
             "creator_posts_max_attempts": 200,
             "post_data_max_retries": 7,

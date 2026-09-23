@@ -22,7 +22,7 @@ class FakeSignal:
 
 
 class FakePostDetectionThread:
-    def __init__(self, url, post_titles_map, settings):
+    def __init__(self, url, post_titles_map, settings, **kwargs):
         self.url = url
         self.post_titles_map = post_titles_map
         self.settings = settings
@@ -39,7 +39,7 @@ class FakePostDetectionThread:
 
 
 class FakePostPopulationThread:
-    def __init__(self, detected_posts):
+    def __init__(self, detected_posts, post_dates_map=None):
         self.detected_posts = detected_posts
         self.finished = FakeSignal()
         self.log = FakeSignal()

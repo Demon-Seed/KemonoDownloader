@@ -106,12 +106,6 @@ class KDLanguage:
                 "korean": "기본 API URL: {0}",
                 "chinese-simplified": "基础 API URL：{0}",
             },
-            "successfully_validated_url": {
-                "english": "Successfully validated URL {0}",
-                "japanese": "URL {0} を正常に検証しました",
-                "korean": "URL {0}을 성공적으로 검증했습니다",
-                "chinese-simplified": "成功验证了URL {0}",
-            },
             "thread_deleted_during_cancellation_wait": {
                 "english": "A thread was deleted during cancellation wait",
                 "japanese": "キャンセル待機中にスレッドが削除されました",
@@ -394,12 +388,6 @@ class KDLanguage:
                 "korean": "엔드포인트 오류: {0} - {1}",
                 "chinese-simplified": "端点错误：{0} - {1}",
             },
-            "validation_attempt_failed": {
-                "english": "Validation attempt {0} failed, retrying in {1}s...",
-                "japanese": "検証試行 {0} が失敗しました、{1}秒後に再試行します...",
-                "korean": "검증 시도 {0}이 실패했습니다, {1}초 후에 재시도합니다...",
-                "chinese-simplified": "验证尝试 {0} 失败，将在 {1}秒后重试...",
-            },
             "unexpected_response_structure": {
                 "english": "Unexpected response structure: {0}",
                 "japanese": "予期しない応答構造：{0}",
@@ -502,12 +490,6 @@ class KDLanguage:
                 "korean": "게시물 폴더 {0} 생성에 실패했습니다: {1}. 폴더 이름이 유효하지 않을 가능성이 있습니다.",
                 "chinese-simplified": "无法创建帖子文件夹 {0}：{1}。可能是由于文件夹名称无效。",
             },
-            "failed_to_remove_interrupted_file": {
-                "english": "Failed to remove interrupted file {0}: {1}",
-                "japanese": "中断されたファイル {0} の削除に失敗しました：{1}",
-                "korean": "중단된 파일 {0} 제거에 실패했습니다: {1}",
-                "chinese-simplified": "无法删除中断的文件 {0}：{1}",
-            },
             "unexpected_error_downloading": {
                 "english": "Unexpected error downloading {0}: {1}",
                 "japanese": "{0} のダウンロード中に予期しないエラー：{1}",
@@ -519,18 +501,6 @@ class KDLanguage:
                 "japanese": "ダウンロードワーカーでのエラー：{0}",
                 "korean": "다운로드 작업자 오류: {0}",
                 "chinese-simplified": "下载工作进程错误：{0}",
-            },
-            "failed_to_load_file_hashes": {
-                "english": "Failed to load file hashes: {0}",
-                "japanese": "ファイルハッシュの読み込みに失敗しました：{0}",
-                "korean": "파일 해시 로드에 실패했습니다: {0}",
-                "chinese-simplified": "无法加载文件哈希：{0}",
-            },
-            "failed_to_save_file_hashes": {
-                "english": "Failed to save file hashes: {0}",
-                "japanese": "ファイルハッシュの保存に失敗しました：{0}",
-                "korean": "파일 해시 저장에 실패했습니다: {0}",
-                "chinese-simplified": "无法保存文件哈希：{0}",
             },
             "rate_limit_hit": {
                 "english": "Rate limit hit for {0} (attempt {1}/{2}). Retrying...",
@@ -597,24 +567,6 @@ class KDLanguage:
                 "japanese": "投稿ID：{0}、タイトル：{1}",
                 "korean": "게시물 ID: {0}, 제목: {1}",
                 "chinese-simplified": "帖子ID：{0}，标题：{1}",
-            },
-            "network_error_attempt": {
-                "english": "Network error on attempt {0}: {1}, retrying...",
-                "japanese": "試行 {0} でネットワークエラー：{1}、再試行中...",
-                "korean": "시도 {0}에서 네트워크 오류: {1}, 재시도 중...",
-                "chinese-simplified": "尝试 {0} 时网络错误：{1}，正在重试...",
-            },
-            "failed_to_validate": {
-                "english": "Failed to validate {0} after {1} attempts: {2}",
-                "japanese": "{0} の検証に {1} 回試行後失敗しました：{2}",
-                "korean": "{0} 검증이 {1}번 시도 후 실패했습니다: {2}",
-                "chinese-simplified": "在 {1} 次尝试后无法验证 {0}：{2}",
-            },
-            "validation_in_progress": {
-                "english": "Validation already in progress. Please wait.",
-                "japanese": "検証がすでに進行中です。しばらくお待ちください。",
-                "korean": "검증이 이미 진행 중입니다. 잠시 기다려 주세요.",
-                "chinese-simplified": "验证已在进行中。请稍等。",
             },
             "checkbox_toggled_for_post": {
                 "english": "Checkbox toggled for post {0} (ID: {1}) to {2}",
@@ -736,12 +688,6 @@ class KDLanguage:
                 "korean": "모든 파일을 시도했습니다(성공 또는 실패), 다운로드 완료를 트리거합니다",
                 "chinese-simplified": "所有文件已尝试（成功或失败），触发下载完成",
             },
-            "moving_to_next_creator": {
-                "english": "Moving to next creator: {0}",
-                "japanese": "次のクリエイターに移ります：{0}",
-                "korean": "다음 크리에이터로 이동: {0}",
-                "chinese-simplified": "移动到下一个创建者：{0}",
-            },
             "terminated_lingering_thread": {
                 "english": "Terminated lingering thread: {0}",
                 "japanese": "残留スレッドを終了しました：{0}",
@@ -801,12 +747,6 @@ class KDLanguage:
                 "japanese": "ファイル名テンプレート",
                 "korean": "파일 이름 템플릿",
                 "chinese-simplified": "文件名模板",
-            },
-            "filename_template_placeholder": {
-                "english": "Use placeholders: {post_title}, {post_id}, {orig_name}, {ext}, {creator_name}, {creator_id}",
-                "japanese": "プレースホルダを使用: {post_title}, {post_id}, {orig_name}, {ext}, {creator_name}, {creator_id}",
-                "korean": "자리 표시자 사용: {post_title}, {post_id}, {orig_name}, {ext}, {creator_name}, {creator_id}",
-                "chinese-simplified": "使用占位符: {post_title}, {post_id}, {orig_name}, {ext}, {creator_name}, {creator_id}",
             },
             "tmpl_postid_orig": {
                 "english": "{post_id}_{orig_name}",
@@ -1159,12 +1099,6 @@ class KDLanguage:
                 "chinese-simplified": "设置已重置为默认值。单击“应用更改”以保存它们。",
             },
             # For post_downloader.py fallback validation
-            "first_validation_failed_exception": {
-                "english": "First validation method failed with exception for {0}, trying fallback method...",
-                "japanese": "最初の検証方法が {0} で例外で失敗しました、フォールバック方法を試しています...",
-                "korean": "첫 번째 검증 방법이 {0}에 대해 예외로 실패했습니다, 대체 방법을 시도 중...",
-                "chinese-simplified": "第一次验证方法失败：{0}尝试备用方法...",
-            },
             "attempting_fallback_validation": {
                 "english": "Attempting fallback validation for {0}",
                 "japanese": "{0} のフォールバック検証を試みています",
@@ -1184,12 +1118,6 @@ class KDLanguage:
                 "chinese-simplified": "备用验证失败：{0}",
             },
             # For creator_downloader.py fallback validation
-            "first_validation_failed": {
-                "english": "First validation method failed for {0}, trying fallback method...",
-                "japanese": "最初の検証方法が {0} で失敗しました、フォールバック方法を試しています...",
-                "korean": "첫 번째 검증 방법이 {0}에 대해 실패했습니다, 대체 방법을 시도 중...",
-                "chinese-simplified": "第一次验证方法失败。尝试备用方法...",
-            },
             # Main window and common elements
             "app_title": {
                 "english": "Kemono Downloader",
@@ -1202,12 +1130,6 @@ class KDLanguage:
                 "japanese": "開発者: VoxDroid",
                 "korean": "개발자: VoxDroid",
                 "chinese-simplified": "开发者: VoxDroid",
-            },
-            "launch_button": {
-                "english": "Launch Application",
-                "japanese": "アプリケーションを起動",
-                "korean": "애플리케이션 시작",
-                "chinese-simplified": "启动应用程序",
             },
             "idle": {
                 "english": "Idle",
@@ -1345,12 +1267,6 @@ class KDLanguage:
                 "chinese-simplified": "整体进度 ({0}/{1} 文件, {2}/{3} 投稿)",
             },
             # Creator Downloader tab
-            "enter_creator_url": {
-                "english": "Enter creator URL (e.g., https://kemono.cr/patreon/user/12345678)",
-                "japanese": "クリエイターURLを入力 (例: https://kemono.cr/patreon/user/12345678)",
-                "korean": "크리에이터 URL 입력 (예: https://kemono.cr/patreon/user/12345678)",
-                "chinese-simplified": "输入创作者 URL (例如: https://kemono.cr/patreon/user/12345678)",
-            },
             "creator_queue": {
                 "english": "Creator Queue",
                 "japanese": "クリエイターキュー",
@@ -1491,16 +1407,16 @@ class KDLanguage:
                 "chinese-simplified": "API请求最大重试次数:",
             },
             "update_settings": {
-                "english": "Update Settings",
-                "japanese": "更新設定",
-                "korean": "업데이트 설정",
-                "chinese-simplified": "更新设置",
+                "english": "Updates",
+                "japanese": "更新",
+                "korean": "업데이트",
+                "chinese-simplified": "更新",
             },
-            "auto_check_updates": {
-                "english": "Auto Check for Updates:",
-                "japanese": "自動更新チェック:",
-                "korean": "자동 업데이트 확인:",
-                "chinese-simplified": "自动检查更新:",
+            "check_updates_on_github": {
+                "english": "Check for updates on the GitHub repository (VoxDroid/KemonoDownloader)",
+                "japanese": "GitHubリポジトリで更新を確認 (VoxDroid/KemonoDownloader)",
+                "korean": "GitHub 저장소에서 업데이트 확인 (VoxDroid/KemonoDownloader)",
+                "chinese-simplified": "在 GitHub 仓库中检查更新（VoxDroid/KemonoDownloader）",
             },
             "language_settings": {
                 "english": "Language Settings",
@@ -1577,10 +1493,10 @@ class KDLanguage:
                 "chinese-simplified": "确认设置更改",
             },
             "confirm_settings_message": {
-                "english": "Are you sure you want to apply these settings?\n\nFolder Name: {0}\nSave Directory: {1}\nSimultaneous Downloads: {2}\nAuto Check Updates: {3}\nLanguage: {4}\nUse Proxy: {5}\nProxy Type: {6}\nFilename Template: {7}\nFolder Name Template: {10}\nFolder Strategy: {8}\nFont: {9}",
-                "japanese": "これらの設定を適用してもよろしいですか？\n\nフォルダ名: {0}\n保存ディレクトリ: {1}\n同時ダウンロード数: {2}\n自動更新チェック: {3}\n言語: {4}\nプロキシを使用: {5}\nプロキシタイプ: {6}\nファイル名テンプレート: {7}\nフォルダ名テンプレート: {10}\nフォルダ戦略: {8}\nフォント: {9}",
-                "korean": "이 설정을 적용하시겠습니까?\n\n폴더 이름: {0}\n저장 디렉토리: {1}\n동시 다운로드: {2}\n자동 업데이트 확인: {3}\n언어: {4}\n프록시 사용: {5}\n프록시 유형: {6}\n파일 이름 템플릿: {7}\n폴더 이름 템플릿: {10}\n폴더 전략: {8}\n글꼴: {9}",
-                "chinese-simplified": "您确定要应用这些设置吗？\n\n文件夹名称: {0}\n保存目录: {1}\n并行下载数: {2}\n自动检查更新: {3}\n语言: {4}\n使用代理: {5}\n代理类型: {6}\n文件名模板: {7}\n文件夹名称模板: {10}\n文件夹策略: {8}\n字体: {9}",
+                "english": "Are you sure you want to apply these settings?\n\nFolder Name: {0}\nSave Directory: {1}\nSimultaneous Downloads: {2}\nLanguage: {3}\nUse Proxy: {4}\nProxy Type: {5}\nFilename Template: {6}\nFolder Name Template: {7}\nFolder Strategy: {8}\nFont: {9}",
+                "japanese": "これらの設定を適用してもよろしいですか？\n\nフォルダ名: {0}\n保存ディレクトリ: {1}\n同時ダウンロード数: {2}\n言語: {3}\nプロキシを使用: {4}\nプロキシタイプ: {5}\nファイル名テンプレート: {6}\nフォルダ名テンプレート: {7}\nフォルダ戦略: {8}\nフォント: {9}",
+                "korean": "이 설정을 적용하시겠습니까?\n\n폴더 이름: {0}\n저장 디렉토리: {1}\n동시 다운로드: {2}\n언어: {3}\n프록시 사용: {4}\n프록시 유형: {5}\n파일 이름 템플릿: {6}\n폴더 이름 템플릿: {7}\n폴더 전략: {8}\n글꼴: {9}",
+                "chinese-simplified": "您确定要应用这些设置吗？\n\n文件夹名称: {0}\n保存目录: {1}\n并行下载数: {2}\n语言: {3}\n使用代理: {4}\n代理类型: {5}\n文件名模板: {6}\n文件夹名称模板: {7}\n文件夹策略: {8}\n字体: {9}",
             },
             "enabled": {
                 "english": "Enabled",
@@ -1619,10 +1535,10 @@ class KDLanguage:
                 "chinese-simplified": "设置已应用",
             },
             "settings_applied_message": {
-                "english": "Settings have been successfully applied!\n\nFolder Name: {0}\nSave Directory: {1}\nSimultaneous Downloads: {2}\nAuto Check Updates: {3}\nLanguage: {4}\nUse Proxy: {5}\nProxy Type: {6}\nFilename Template: {7}\nFolder Name Template: {10}\nFolder Strategy: {8}\nFont: {9}",
-                "japanese": "設定が正常に適用されました！\n\nフォルダ名: {0}\n保存ディレクトリ: {1}\n同時ダウンロード数: {2}\n自動更新チェック: {3}\n言語: {4}\nプロキシを使用: {5}\nプロキシタイプ: {6}\nファイル名テンプレート: {7}\nフォルダ名テンプレート: {10}\nフォルダ戦略: {8}\nフォント: {9}",
-                "korean": "설정이 성공적으로 적용되었습니다!\n\n폴더 이름: {0}\n저장 디렉토리: {1}\n동시 다운로드: {2}\n자동 업데이트 확인: {3}\n언어: {4}\n프록시 사용: {5}\n프록시 유형: {6}\n파일 이름 템플릿: {7}\n폴더 이름 템플릿: {10}\n폴더 전략: {8}\n글꼴: {9}",
-                "chinese-simplified": "设置已成功应用！\n\n文件夹名称: {0}\n保存目录: {1}\n并行下载数: {2}\n自动检查更新: {3}\n语言: {4}\n使用代理: {5}\n代理类型: {6}\n文件名模板: {7}\n文件夹名称模板: {10}\n文件夹策略: {8}\n字体: {9}",
+                "english": "Settings have been successfully applied!\n\nFolder Name: {0}\nSave Directory: {1}\nSimultaneous Downloads: {2}\nLanguage: {3}\nUse Proxy: {4}\nProxy Type: {5}\nFilename Template: {6}\nFolder Name Template: {7}\nFolder Strategy: {8}\nFont: {9}",
+                "japanese": "設定が正常に適用されました！\n\nフォルダ名: {0}\n保存ディレクトリ: {1}\n同時ダウンロード数: {2}\n言語: {3}\nプロキシを使用: {4}\nプロキシタイプ: {5}\nファイル名テンプレート: {6}\nフォルダ名テンプレート: {7}\nフォルダ戦略: {8}\nフォント: {9}",
+                "korean": "설정이 성공적으로 적용되었습니다!\n\n폴더 이름: {0}\n저장 디렉토리: {1}\n동시 다운로드: {2}\n언어: {3}\n프록시 사용: {4}\n프록시 유형: {5}\n파일 이름 템플릿: {6}\n폴더 이름 템플릿: {7}\n폴더 전략: {8}\n글꼴: {9}",
+                "chinese-simplified": "设置已成功应用！\n\n文件夹名称: {0}\n保存目录: {1}\n并行下载数: {2}\n语言: {3}\n使用代理: {4}\n代理类型: {5}\n文件名模板: {6}\n文件夹名称模板: {7}\n文件夹策略: {8}\n字体: {9}",
             },
             "proxy_settings": {
                 "english": "Proxy Settings",
@@ -1744,12 +1660,6 @@ class KDLanguage:
                 "korean": "Tor 테스트 실패.",
                 "chinese-simplified": "Tor测试失败。",
             },
-            "tor_unsupported_platform": {
-                "english": "Tor download is not supported on this platform.",
-                "japanese": "このプラットフォームではTorのダウンロードはサポートされていません。",
-                "korean": "이 플랫폼에서는 Tor 다운로드를 지원하지 않습니다.",
-                "chinese-simplified": "此平台不支持Tor下载。",
-            },
             "tor_auto_detected": {
                 "english": "Tor automatically detected at: {0}",
                 "japanese": "Torが自動検出されました: {0}",
@@ -1859,24 +1769,6 @@ class KDLanguage:
                 "korean": "폴더 이름은 비워둘 수 없습니다.",
                 "chinese-simplified": "文件夹名称不能为空。",
             },
-            "directory_not_exist": {
-                "english": "Selected directory does not exist.",
-                "japanese": "選択したディレクトリが存在しません。",
-                "korean": "선택한 디렉토리가 존재하지 않습니다.",
-                "chinese-simplified": "所选目录不存在。",
-            },
-            "update_check_failed": {
-                "english": "Update Check Failed",
-                "japanese": "更新チェックに失敗しました",
-                "korean": "업데이트 확인 실패",
-                "chinese-simplified": "检查更新失败",
-            },
-            "unable_check_updates": {
-                "english": "Unable to check for updates.",
-                "japanese": "更新を確認できません。",
-                "korean": "업데이트를 확인할 수 없습니다.",
-                "chinese-simplified": "无法检查更新。",
-            },
             "image_load_error": {
                 "english": "Image Load Error",
                 "japanese": "画像読み込みエラー",
@@ -1889,30 +1781,11 @@ class KDLanguage:
                 "korean": "미디어 로드 오류",
                 "chinese-simplified": "媒体加载错误",
             },
-            # Update notification
-            "update_available": {
-                "english": "Update Available",
-                "japanese": "更新があります",
-                "korean": "업데이트 가능",
-                "chinese-simplified": "更新可用",
-            },
-            "update_available_message": {
-                "english": "A new version ({0}) is available!",
-                "japanese": "新しいバージョン ({0}) が利用可能です！",
-                "korean": "새 버전({0})이 사용 가능합니다!",
-                "chinese-simplified": "新版本 ({0}) 可用！",
-            },
             "current_version": {
                 "english": "Current version: {0}",
                 "japanese": "現在のバージョン: {0}",
                 "korean": "현재 버전: {0}",
                 "chinese-simplified": "当前版本: {0}",
-            },
-            "click_release_page": {
-                "english": "Click here to visit the release page",
-                "japanese": "リリースページを訪問するにはここをクリック",
-                "korean": "릴리스 페이지를 방문하려면 여기를 클릭하세요",
-                "chinese-simplified": "点击此处访问发布页面",
             },
             # Background tasks
             "detecting_post": {
@@ -1926,12 +1799,6 @@ class KDLanguage:
                 "japanese": "リンクから投稿を検出中...",
                 "korean": "링크에서 게시물 감지 중...",
                 "chinese-simplified": "从链接检测投稿...",
-            },
-            "validating_url": {
-                "english": "Validating URL...",
-                "japanese": "URLを検証中...",
-                "korean": "URL 검증 중...",
-                "chinese-simplified": "验证 URL...",
             },
             "populating_posts": {
                 "english": "Populating posts...",
@@ -1956,12 +1823,6 @@ class KDLanguage:
                 "japanese": "チェックボックスを更新中...",
                 "korean": "체크박스 업데이트 중...",
                 "chinese-simplified": "更新复选框...",
-            },
-            "updating_download_mode": {
-                "english": "Updating download mode...",
-                "japanese": "ダウンロードモードを更新中...",
-                "korean": "다운로드 모드 업데이트 중...",
-                "chinese-simplified": "更新下载模式...",
             },
             "toggling_checkbox": {
                 "english": "Toggling checkbox...",
@@ -2025,12 +1886,6 @@ class KDLanguage:
                 "korean": "게시물 URL을 대기열에 추가했습니다: {0}",
                 "chinese-simplified": "已将投稿 URL 添加到队列: {0}",
             },
-            "added_creator_url": {
-                "english": "Added creator URL to queue: {0}",
-                "japanese": "クリエイターURLをキューに追加しました: {0}",
-                "korean": "크리에이터 URL을 대기열에 추가했습니다: {0}",
-                "chinese-simplified": "已将创作者 URL 添加到队列: {0}",
-            },
             "invalid_post_url": {
                 "english": "Invalid post URL or failed to fetch: {0}",
                 "japanese": "無効な投稿URLまたは取得に失敗しました: {0}",
@@ -2054,12 +1909,6 @@ class KDLanguage:
                 "japanese": "クリエイターを表示中: {0}",
                 "korean": "크리에이터 보는 중: {0}",
                 "chinese-simplified": "查看创作者: {0}",
-            },
-            "refetching_posts_for_creator": {
-                "english": "Refetching posts for creator: {0}",
-                "japanese": "クリエイターの投稿を再取得中: {0}",
-                "korean": "크리에이터의 게시물 다시 가져오는 중: {0}",
-                "chinese-simplified": "重新获取创作者的投稿: {0}",
             },
             "link_removed": {
                 "english": "Link ({0}) is removed from the queue.",
@@ -2114,12 +1963,6 @@ class KDLanguage:
                 "japanese": "キュー内のすべての投稿のファイルを準備中",
                 "korean": "대기열의 모든 게시물에 대한 파일 준비 중",
                 "chinese-simplified": "正在准备队列中所有投稿的文件",
-            },
-            "preparing_files_all_creators": {
-                "english": "Preparing files for all creators in queue",
-                "japanese": "キュー内のすべてのクリエイターのファイルを準備中",
-                "korean": "대기열의 모든 크리에이터에 대한 파일 준비 중",
-                "chinese-simplified": "正在准备队列中所有创作者的文件",
             },
             "download_all_disabled": {
                 "english": "Download All Links disabled. Reverted to current post.",
@@ -2223,12 +2066,6 @@ class KDLanguage:
                 "korean": "게시물 {0}의 모든 파일이 다운로드되었습니다",
                 "chinese-simplified": "所有文件已下载完毕: {0}",
             },
-            "no_files_selected_post": {
-                "english": "No files selected for download for this post.",
-                "japanese": "この投稿ではダウンロードするファイルが選択されていません。",
-                "korean": "이 게시물에 대해 다운로드할 파일이 선택되지 않았습니다.",
-                "chinese-simplified": "未选择要下载的文件。",
-            },
             "language_changed": {
                 "english": "Language changed to English",
                 "japanese": "言語が日本語に変更されました",
@@ -2285,12 +2122,6 @@ class KDLanguage:
                 "korean": "잘못된 URL 형식. 예상 형식: https://kemono.cr/[service]/user/[user_id]/post/[post_id]",
                 "chinese-simplified": "无效的 URL 格式。预期格式: https://kemono.cr/[service]/user/[user_id]/post/[post_id]",
             },
-            "invalid_url_format_link": {
-                "english": "Invalid URL format: {0}",
-                "japanese": "無効なURL形式：{0}",
-                "korean": "잘못된 URL 형식: {0}",
-                "chinese-simplified": "无效的URL格式：{0}",
-            },
             "failed_to_fetch_post": {
                 "english": "Failed to fetch post - Status code: {0}",
                 "japanese": "投稿の取得に失敗しました - ステータスコード: {0}",
@@ -2332,18 +2163,6 @@ class KDLanguage:
                 "japanese": "{0} からGIFを読み込めませんでした: 無効または破損したGIFデータ",
                 "korean": "{0}에서 GIF 로드 실패: 잘못되거나 손상된 GIF 데이터",
                 "chinese-simplified": "无法从 {0} 加载 GIF: 无效或损坏的 GIF 数据",
-            },
-            "no_internet_connection": {
-                "english": "No internet connection. Update check failed.",
-                "japanese": "インターネット接続がありません。更新チェックに失敗しました。",
-                "korean": "인터넷 연결이 없습니다. 업데이트 확인 실패.",
-                "chinese-simplified": "没有互联网连接。检查更新失败。",
-            },
-            "failed_to_check_updates": {
-                "english": "Failed to check for updates",
-                "japanese": "更新の確認に失敗しました",
-                "korean": "업데이트 확인 실패",
-                "chinese-simplified": "检查更新失败",
             },
             # Help Tab Translations (expanded with full content)
             "help_title": {
@@ -2407,15 +2226,15 @@ class KDLanguage:
             },
             "help_getting_started_text": {
                 "english": "<b>1.1 Launching the Application</b><br>"
-                "- When you first open the Kemono Downloader, you'll be greeted by an introductory screen featuring the application title 'Kemono.cr Downloader'.<br>"
-                "- Below the title, you'll see the developer's name ('Developed by VoxDroid') and a clickable link to the GitHub repository (github.com/VoxDroid) for updates and support.<br>"
-                "- Click the 'Launch' button in the center of the screen to proceed to the main interface.<br><br>"
+                "- Opening the Kemono Downloader takes you straight into the main interface, with the <b>Creator Downloader</b> tab selected by default.<br>"
+                "- The developer's name ('Developed by VoxDroid'), a link to the GitHub repository (github.com/VoxDroid) and the current version are shown in the footer at the bottom of the window.<br><br>"
                 "<b>1.2 Main Interface Overview</b><br>"
-                "The main interface is divided into four tabs, each serving a specific purpose:<br>"
+                "The main interface is divided into five tabs, each serving a specific purpose:<br>"
+                "  - <b>Creator Downloader</b>: Use this tab to download content from an entire creator's profile, fetching all their posts and associated files. This is the default tab.<br>"
                 "  - <b>Post Downloader</b>: Use this tab to download files from specific Kemono.cr posts by entering their URLs. Ideal for downloading individual posts.<br>"
-                "  - <b>Creator Downloader</b>: Use this tab to download content from an entire creator's profile, fetching all their posts and associated files.<br>"
                 "  - <b>Settings</b>: Configure the application's behavior, such as save directories, simultaneous downloads, and UI preferences.<br>"
-                "  - <b>Help</b>: You're here! This tab provides this comprehensive user manual to guide you through using the application.<br><br>"
+                "  - <b>Help</b>: You're here! This tab provides this comprehensive user manual to guide you through using the application.<br>"
+                "  - <b>Browser Extension</b>: Information and setup instructions for the optional browser extension.<br><br>"
                 "<b>1.3 Interface Elements</b><br>"
                 "- <b>Tabs</b>: Located at the top of the main interface, the tabs are styled with icons and labels. The active tab is highlighted with a darker background.<br>"
                 "- <b>Status Bar</b>: At the bottom of the window, a status label (e.g., 'Idle') indicates the application's current state. It updates during operations like downloading.<br>"
@@ -2427,15 +2246,15 @@ class KDLanguage:
                 "  - <b>Other Files</b>: Contains metadata like file hashes for deduplication.<br>"
                 "- Ensure you have an active internet connection, as the application needs to fetch data from Kemono.cr.",
                 "japanese": "<b>1.1 アプリケーションの起動</b><br>"
-                "- ケモノダウンローダーを初めて開くと、アプリケーションタイトル「Kemono.cr Downloader」が表示された紹介画面が表示されます。<br>"
-                "- タイトルの下には、開発者名（「Developed by VoxDroid」）と、更新やサポートのためのGitHubリポジトリへのクリック可能なリンク（github.com/VoxDroid）が表示されます。<br>"
-                "- 画面中央の「起動」ボタンをクリックしてメインインターフェースに進みます。<br><br>"
+                "- ケモノダウンローダーを開くとすぐにメインインターフェースが表示され、<b>クリエイターダウンローダー</b>タブがデフォルトで選択されます。<br>"
+                "- 開発者名（「Developed by VoxDroid」）、GitHubリポジトリへのリンク（github.com/VoxDroid）、現在のバージョンはウィンドウ下部のフッターに表示されます。<br><br>"
                 "<b>1.2 メインインターフェースの概要</b><br>"
-                "メインインターフェースは4つのタブに分かれており、それぞれ特定の目的を持っています：<br>"
+                "メインインターフェースは5つのタブに分かれており、それぞれ特定の目的を持っています：<br>"
+                "  - <b>クリエイターダウンローダー</b>：このタブを使用して、クリエイター全体のプロフィールからコンテンツをダウンロードし、すべての投稿と関連ファイルをフェッチします。デフォルトのタブです。<br>"
                 "  - <b>投稿ダウンローダー</b>：このタブを使用して、URLを入力することで特定のKemono.su投稿からファイルをダウンロードします。個々の投稿のダウンロードに最適です。<br>"
-                "  - <b>クリエイターダウンローダー</b>：このタブを使用して、クリエイター全体のプロフィールからコンテンツをダウンロードし、すべての投稿と関連ファイルをフェッチします。<br>"
                 "  - <b>設定</b>：保存ディレクトリ、同時ダウンロード数、UI設定など、アプリケーションの動作を設定します。<br>"
-                "  - <b>ヘルプ</b>：ここです！このタブは、アプリケーションの使用をガイドする包括的なユーザーマニュアルを提供します。<br><br>"
+                "  - <b>ヘルプ</b>：ここです！このタブは、アプリケーションの使用をガイドする包括的なユーザーマニュアルを提供します。<br>"
+                "  - <b>ブラウザ拡張機能</b>：オプションのブラウザ拡張機能の情報とセットアップ手順です。<br><br>"
                 "<b>1.3 インターフェース要素</b><br>"
                 "- <b>タブ</b>：メインインターフェースの上部に位置し、アイコンとラベルでスタイルされています。アクティブなタブは濃い背景で強調されます。<br>"
                 "- <b>ステータスバー</b>：ウィンドウの下部にあり、ステータスラベル（例：「アイドル」）がアプリケーションの現在の状態を示します。ダウンロードなどの操作中に更新されます。<br>"
@@ -2447,15 +2266,15 @@ class KDLanguage:
                 "  - <b>その他のファイル</b>：重複排除のためのファイルハッシュなどのメタデータを含みます。<br>"
                 "- アプリケーションはKemono.suからデータをフェッチする必要があるため、アクティブなインターネット接続を確保してください。",
                 "korean": "<b>1.1 애플리케이션 실행</b><br>"
-                "- 케모노 다운로더를 처음 열면 'Kemono.cr Downloader'라는 애플리케이션 제목이 포함된 소개 화면이 표시됩니다。<br>"
-                "- 제목 아래에는 개발자 이름('Developed by VoxDroid')과 업데이트 및 지원을 위한 GitHub 저장소에 대한 클릭 가능한 링크(github.com/VoxDroid)가 표시됩니다.<br>"
-                "- 화면 중앙의 '실행' 버튼을 클릭하여 메인 인터페이스로 이동합니다。<br><br>"
+                "- 케모노 다운로더를 열면 곧바로 메인 인터페이스가 표시되며, <b>크리에이터 다운로더</b> 탭이 기본으로 선택됩니다.<br>"
+                "- 개발자 이름('Developed by VoxDroid'), GitHub 저장소 링크(github.com/VoxDroid) 및 현재 버전은 창 하단의 푸터에 표시됩니다.<br><br>"
                 "<b>1.2 메인 인터페이스 개요</b><br>"
-                "메인 인터페이스는 네 개의 탭으로 나뉘며, 각 탭은 특정 목적을 제공합니다:<br>"
+                "메인 인터페이스는 다섯 개의 탭으로 나뉘며, 각 탭은 특정 목적을 제공합니다:<br>"
+                "  - <b>크리에이터 다운로더</b>: 이 탭을 사용하여 크리에이터 전체 프로필에서 콘텐츠를 다운로드하며, 모든 게시물과 관련 파일을 가져옵니다. 기본 탭입니다.<br>"
                 "  - <b>게시물 다운로더</b>: 이 탭을 사용하여 URL을 입력함으로써 특정 Kemono.cr 게시물에서 파일을 다운로드합니다. 개별 게시물 다운로드에 이상적입니다.<br>"
-                "  - <b>크리에이터 다운로더</b>: 이 탭을 사용하여 크리에이터 전체 프로필에서 콘텐츠를 다운로드하며, 모든 게시물과 관련 파일을 가져옵니다.<br>"
                 "  - <b>설정</b>: 저장 디렉토리, 동시 다운로드 수, UI 설정 등 애플리케이션 동작을 구성합니다.<br>"
-                "  - <b>도움말</b>: 여기입니다! 이 탭은 애플리케이션 사용을 안내하는 포괄적인 사용자 매뉴얼을 제공합니다.<br><br>"
+                "  - <b>도움말</b>: 여기입니다! 이 탭은 애플리케이션 사용을 안내하는 포괄적인 사용자 매뉴얼을 제공합니다.<br>"
+                "  - <b>브라우저 확장</b>: 선택 사항인 브라우저 확장 프로그램에 대한 정보와 설치 안내입니다.<br><br>"
                 "<b>1.3 인터페이스 요소</b><br>"
                 "- <b>탭</b>: 메인 인터페이스 상단에 위치하며, 아이콘과 레이블로 스타일이 지정됩니다. 활성 탭은 더 어두운 배경으로 강조됩니다.<br>"
                 "- <b>상태 표시줄</b>: 창 하단에 있으며, 상태 레이블(예: '대기 중')이 애플리케이션의 현재 상태를 나타냅니다. 다운로드와 같은 작업 중에 업데이트됩니다.<br>"
@@ -2467,15 +2286,15 @@ class KDLanguage:
                 "  - <b>기타 파일</b>: 중복 제거를 위한 파일 해시와 같은 메타데이터를 포함합니다.<br>"
                 "- 애플리케이션이 Kemono.su에서 데이터를 가져와야 하므로 활성 인터넷 연결을 확인하세요.",
                 "chinese-simplified": "<b>1.1 启动应用程序</b><br>"
-                "- 首次打开 Kemono 下载器时，您将看到一个包含应用程序标题“Kemono.cr 下载器”的介绍屏幕。<br>"
-                "- 标题下方显示开发者的名称（“Developed by VoxDroid”）以及指向 GitHub 仓库（github.com/VoxDroid）的可点击链接，以获取更新和支持。<br>"
-                "- 点击屏幕中央的“启动”按钮进入主界面。<br><br>"
+                "- 打开 Kemono 下载器后会直接进入主界面，默认选中<b>创作者下载器</b>选项卡。<br>"
+                "- 开发者名称（“Developed by VoxDroid”）、GitHub 仓库链接（github.com/VoxDroid）以及当前版本显示在窗口底部的页脚中。<br><br>"
                 "<b>1.2 主界面概览</b><br>"
-                "主界面分为四个选项卡，每个选项卡都有特定用途：<br>"
+                "主界面分为五个选项卡，每个选项卡都有特定用途：<br>"
+                "  - <b>创作者下载器</b>：使用此选项卡下载整个创作者资料的内容，获取所有帖子及相关文件。这是默认选项卡。<br>"
                 "  - <b>帖子下载器</b>：使用此选项卡通过输入 URL 下载特定 Kemono.cr 帖子的文件。适合下载单个帖子。<br>"
-                "  - <b>创作者下载器</b>：使用此选项卡下载整个创作者资料的内容，获取所有帖子及相关文件。<br>"
                 "  - <b>设置</b>：配置应用程序的行为，例如保存目录、同时下载数量和界面偏好设置。<br>"
-                "  - <b>帮助</b>：您现在所在的位置！此选项卡提供全面的用户手册，指导您使用应用程序。<br><br>"
+                "  - <b>帮助</b>：您现在所在的位置！此选项卡提供全面的用户手册，指导您使用应用程序。<br>"
+                "  - <b>浏览器扩展</b>：可选的浏览器扩展程序的信息和安装说明。<br><br>"
                 "<b>1.3 界面元素</b><br>"
                 "- <b>选项卡</b>：位于主界面顶部，带有图标和标签样式。当前激活的选项卡会以较深的背景高亮显示。<br>"
                 "- <b>状态栏</b>：位于窗口底部，状态标签（例如“空闲”）显示应用程序的当前状态。在下载等操作期间会更新。<br>"
@@ -2695,16 +2514,17 @@ class KDLanguage:
             },
             "help_creator_downloader_text": {
                 "english": "The Creator Downloader tab is designed for bulk downloading content from a creator's entire profile on Kemono.cr. You can queue multiple creators, fetch their posts, select specific content to download, and monitor the progress. This tab is ideal for archiving a creator's work or downloading content from multiple creators at once. Below are the detailed steps to use this tab effectively:<br><br>"
-                "<b>3.1 Adding a Creator to the Queue</b><br>"
+                "<b>3.1 Adding Creators to the Queue</b><br>"
                 "- <b>Step 1</b>: Navigate to the 'Creator Downloader' tab by clicking its label at the top of the interface. The tab is marked with a user-edit icon.<br>"
-                "- <b>Step 2</b>: Locate the 'Enter creator URL' field at the top left of the tab. This is a text input field with a placeholder text 'Enter creator URL (e.g., https://kemono.cr/patreon/user/12345678)'.<br>"
-                "- <b>Step 3</b>: Enter the URL of a creator's profile on Kemono.cr. The URL must follow the format: https://kemono.cr/[service]/user/[user_id]. For example: https://kemono.cr/patreon/user/12345678.<br>"
-                "- <b>Step 4</b>: Click the 'Add to Queue' button next to the input field. The button is styled with a plus icon and a blue background.<br>"
-                "- <b>Step 5</b>: The creator URL will appear in the 'Creator Queue' list below the input field. Each entry in the list includes:<br>"
+                "- <b>Step 2</b>: Locate the multi-line URL box at the top left of the tab, with the placeholder 'Paste creator or post URLs here, one per line…'.<br>"
+                "- <b>Step 3</b>: Paste one or more creator URLs, each on its own line. Creator URLs follow the format: https://kemono.cr/[service]/user/[user_id]. For example: https://kemono.cr/patreon/user/12345678.<br>"
+                "- <b>Step 4</b>: Post URLs are accepted too. A link such as https://kemono.cr/patreon/user/12345678/post/87654321 is reduced to its parent creator, and the post id is remembered so that a download from that creator selects just those posts.<br>"
+                "- <b>Step 5</b>: Click the 'Add All to Queue' button (layers icon) to queue every line at once. To queue links from a file instead, click the 'Import from TXT File' button (file-import icon) and choose a .txt file with one link per line.<br>"
+                "- <b>Step 6</b>: The creators appear in the 'Creator Queue' list below the input box. Each entry in the list includes:<br>"
                 "  - An eye icon to fetch and view the creator's posts.<br>"
-                "  - The creator URL as a clickable label.<br>"
+                "  - The creator URL as a label, followed by any remembered post links shown as '(post [ids])'.<br>"
                 "  - An 'X' button to remove the creator from the queue.<br>"
-                "- <b>Note</b>: Duplicate URLs are automatically prevented. If you try to add a URL already in the queue, a warning message will appear in the console: '[WARNING] URL already in queue.'<br><br>"
+                "- <b>Note</b>: Duplicate URLs are skipped automatically and reported in the console summary (for example: 'Added 3 link(s) to queue. Skipped 1 link(s).').<br><br>"
                 "<b>3.2 Viewing Creator Posts</b><br>"
                 "- <b>Step 1</b>: In the 'Creator Queue' list, find the creator whose posts you want to view.<br>"
                 "- <b>Step 2</b>: Click the eye icon next to the creator URL. This initiates a background task to fetch all posts associated with the creator from Kemono.cr.<br>"
@@ -2761,14 +2581,15 @@ class KDLanguage:
                 "japanese": "クリエイターダウンローダータブは、Kemono.su上のクリエイターの全プロフィールからコンテンツを一括ダウンロードするために設計されています。複数のクリエイターをキューに追加し、投稿を取得し、特定のコンテンツを選択してダウンロードし、進捗を監視できます。このタブは、クリエイターの作品をアーカイブしたり、複数のクリエイターから一度にコンテンツをダウンロードするのに最適です。以下に、このタブを効果的に使用するための詳細な手順を示します：<br><br>"
                 "<b>3.1 クリエイターをキューに追加する</b><br>"
                 "- <b>ステップ1</b>：インターフェース上部の「クリエイターダウンローダー」タブをクリックして移動します。このタブはユーザー編集アイコンでマークされています。<br>"
-                "- <b>ステップ2</b>：タブの左上にある「クリエイターURLを入力」フィールドを見つけます。これは「クリエイターURLを入力（例: https://kemono.cr/patreon/user/12345678）」というプレースホルダーテキストが表示されたテキスト入力フィールドです。<br>"
-                "- <b>ステップ3</b>：Kemono.suのクリエイタープロフィールのURLを入力します。URLは次の形式である必要があります：https://kemono.cr/[service]/user/[user_id]。例: https://kemono.cr/patreon/user/12345678。<br>"
-                "- <b>ステップ4</b>：入力フィールドの横にある「キューに追加」ボタンをクリックします。このボタンはプラスアイコンと青い背景でスタイルされています。<br>"
-                "- <b>ステップ5</b>：クリエイターURLが入力フィールド下の「クリエイターキュー」リストに表示されます。リストの各エントリには以下が含まれます：<br>"
+                "- <b>ステップ2</b>：タブの左上にある複数行のURL入力ボックスを見つけます。プレースホルダーは「クリエイターまたは投稿のURLをここに貼り付けてください（1行に1つ）…」です。<br>"
+                "- <b>ステップ3</b>：クリエイターのURLを1行に1つずつ貼り付けます。URLは次の形式である必要があります：https://kemono.cr/[service]/user/[user_id]。例: https://kemono.cr/patreon/user/12345678。<br>"
+                "- <b>ステップ4</b>：投稿URLも使用できます。https://kemono.cr/patreon/user/12345678/post/87654321 のようなリンクは親クリエイターに変換され、投稿IDが記憶されるため、そのクリエイターのダウンロードでは該当する投稿だけが選択されます。<br>"
+                "- <b>ステップ5</b>：「すべてキューに追加」ボタン（レイヤーアイコン）をクリックすると、すべての行をまとめてキューに追加します。ファイルから追加する場合は「TXTファイルからインポート」ボタン（ファイルインポートアイコン）をクリックし、1行に1つのリンクが書かれた.txtファイルを選択します。<br>"
+                "- <b>ステップ6</b>：クリエイターは入力ボックス下の「クリエイターキュー」リストに表示されます。リストの各エントリには以下が含まれます：<br>"
                 "  - クリエイターの投稿を取得して表示するための目アイコン。<br>"
-                "  - クリック可能なラベルとしてのクリエイターURL。<br>"
+                "  - クリエイターURLのラベル。記憶された投稿リンクがある場合は「(投稿 [ids])」として続けて表示されます。<br>"
                 "  - キューからクリエイターを削除するための「X」ボタン。<br>"
-                "- <b>注意</b>：重複するURLは自動的に防止されます。すでにキューにあるURLを追加しようとすると、コンソールに警告メッセージが表示されます：「[警告] URLはすでにキューにあります。」<br><br>"
+                "- <b>注意</b>：重複するURLは自動的にスキップされ、コンソールの集計に表示されます（例：「キューに 3 件のリンクを追加しました。1 件のリンクをスキップしました。」）。<br><br>"
                 "<b>3.2 クリエイターの投稿を表示する</b><br>"
                 "- <b>ステップ1</b>：「クリエイターキュー」リストで、投稿を表示したいクリエイターを見つけます。<br>"
                 "- <b>ステップ2</b>：クリエイターURLの横にある目アイコンをクリックします。これにより、Kemono.suからクリエイターに関連するすべての投稿を取得するバックグラウンドタスクが開始されます。<br>"
@@ -2823,14 +2644,15 @@ class KDLanguage:
                 "korean": "크리에이터 다운로더 탭은 Kemono.su에서 크리에이터의 전체 프로필에서 콘텐츠를 대량으로 다운로드하도록 설계되었습니다. 여러 크리에이터를 대기열에 추가하고, 그들의 게시물을 가져오며, 다운로드할 특정 콘텐츠를 선택하고 진행 상황을 모니터링할 수 있습니다. 이 탭은 크리에이터의 작업을 아카이빙하거나 여러 크리에이터의 콘텐츠를 한 번에 다운로드하는 데 이상적입니다. 아래는 이 탭을 효과적으로 사용하는 자세한 단계입니다:<br><br>"
                 "<b>3.1 크리에이터를 대기열에 추가하기</b><br>"
                 "- <b>단계 1</b>: 인터페이스 상단의 '크리에이터 다운로더' 탭을 클릭하여 이동합니다. 이 탭은 사용자 편집 아이콘으로 표시됩니다.<br>"
-                "- <b>단계 2</b>: 탭의 좌측 상단에 있는 '크리에이터 URL 입력' 필드를 찾습니다. 이 필드는 '크리에이터 URL 입력(예: https://kemono.cr/patreon/user/12345678)'라는 플레이스홀더 텍스트가 있는 텍스트 입력 필드입니다.<br>"
-                "- <b>단계 3</b>: Kemono.su의 크리에이터 프로필 URL을 입력합니다. URL은 다음 형식을 따라야 합니다: https://kemono.cr/[service]/user/[user_id]. 예: https://kemono.cr/patreon/user/12345678.<br>"
-                "- <b>단계 4</b>: 입력 필드 옆의 '대기열에 추가' 버튼을 클릭합니다. 이 버튼은 플러스 아이콘과 파란색 배경으로 스타일링되어 있습니다.<br>"
-                "- <b>단계 5</b>: 크리에이터 URL이 입력 필드 아래의 '크리에이터 대기열' 목록에 나타납니다. 목록의 각 항목에는 다음이 포함됩니다:<br>"
+                "- <b>단계 2</b>: 탭의 좌측 상단에 있는 여러 줄 URL 입력 상자를 찾습니다. 플레이스홀더는 '여기에 크리에이터 또는 게시물 URL을 붙여넣으세요 (한 줄에 하나)…'입니다.<br>"
+                "- <b>단계 3</b>: 크리에이터 URL을 한 줄에 하나씩 붙여넣습니다. URL은 다음 형식을 따라야 합니다: https://kemono.cr/[service]/user/[user_id]. 예: https://kemono.cr/patreon/user/12345678.<br>"
+                "- <b>단계 4</b>: 게시물 URL도 사용할 수 있습니다. https://kemono.cr/patreon/user/12345678/post/87654321 같은 링크는 상위 크리에이터로 변환되고 게시물 ID가 기억되어, 해당 크리에이터를 다운로드할 때 그 게시물만 선택됩니다.<br>"
+                "- <b>단계 5</b>: '모두 큐에 추가' 버튼(레이어 아이콘)을 클릭하면 모든 줄이 한 번에 대기열에 추가됩니다. 파일에서 추가하려면 'TXT 파일에서 가져오기' 버튼(파일 가져오기 아이콘)을 클릭하고 한 줄에 하나의 링크가 있는 .txt 파일을 선택합니다.<br>"
+                "- <b>단계 6</b>: 크리에이터가 입력 상자 아래의 '크리에이터 대기열' 목록에 나타납니다. 목록의 각 항목에는 다음이 포함됩니다:<br>"
                 "  - 크리에이터의 게시물을 가져오고 보기 위한 눈 아이콘.<br>"
-                "  - 클릭 가능한 레이블로 표시된 크리에이터 URL.<br>"
+                "  - 크리에이터 URL 레이블. 기억된 게시물 링크가 있으면 '(게시물 [ids])'로 이어서 표시됩니다.<br>"
                 "  - 대기열에서 크리에이터를 제거하기 위한 'X' 버튼.<br>"
-                "- <b>참고</b>: 중복 URL은 자동으로 방지됩니다. 이미 대기열에 있는 URL을 추가하려고 하면 콘솔에 경고 메시지가 표시됩니다: '[경고] URL이 이미 대기열에 있습니다.'<br><br>"
+                "- <b>참고</b>: 중복 URL은 자동으로 건너뛰고 콘솔 요약에 표시됩니다(예: '대기열에 3개의 링크를 추가했습니다. 1개의 링크를 건너뛰었습니다.').<br><br>"
                 "<b>3.2 크리에이터 게시물 보기</b><br>"
                 "- <b>단계 1</b>: '크리에이터 대기열' 목록에서 게시물을 보고 싶은 크리에이터를 찾습니다.<br>"
                 "- <b>단계 2</b>: 크리에이터 URL 옆의 눈 아이콘을 클릭합니다. 그러면 Kemono.su에서 크리에이터와 관련된 모든 게시물을 가져오는 백그라운드 작업이 시작됩니다.<br>"
@@ -2887,14 +2709,15 @@ class KDLanguage:
                 "chinese-simplified": "创作者下载器选项卡专为从 Kemono.cr 上某个创作者的整个资料批量下载内容而设计。您可以将多个创作者添加到队列，获取他们的帖子，选择特定内容进行下载，并监控进度。此选项卡非常适合归档创作者的作品或一次下载多个创作者的内容。以下是有效使用此选项卡的详细步骤：<br><br>"
                 "<b>3.1 将创作者添加到队列</b><br>"
                 "- <b>步骤 1</b>：点击界面顶部的“创作者下载器”标签进入该选项卡。该选项卡标有用户编辑图标。<br>"
-                "- <b>步骤 2</b>：找到选项卡左上方的“输入创作者 URL”字段。这是一个带有占位符文本“输入创作者 URL（例如：https://kemono.cr/patreon/user/12345678）”的文本输入框。<br>"
-                "- <b>步骤 3</b>：输入 Kemono.cr 上创作者资料的 URL。URL 必须遵循以下格式：https://kemono.cr/[service]/user/[user_id]。例如：https://kemono.cr/patreon/user/12345678。<br>"
-                "- <b>步骤 4</b>：点击输入字段旁边的“添加到队列”按钮。该按钮带有加号图标和蓝色背景。<br>"
-                "- <b>步骤 5</b>：创作者 URL 将显示在输入字段下方的“创作者队列”列表中。列表中的每个条目包括：<br>"
+                "- <b>步骤 2</b>：找到选项卡左上方支持多行的 URL 输入框，其占位符为“在此粘贴创作者或帖子 URL，每行一个…”。<br>"
+                "- <b>步骤 3</b>：粘贴一个或多个创作者 URL，每行一个。URL 必须遵循以下格式：https://kemono.cr/[service]/user/[user_id]。例如：https://kemono.cr/patreon/user/12345678。<br>"
+                "- <b>步骤 4</b>：也可以使用帖子 URL。像 https://kemono.cr/patreon/user/12345678/post/87654321 这样的链接会被转换为所属创作者，并记住帖子 ID，因此从该创作者下载时只会选择这些帖子。<br>"
+                "- <b>步骤 5</b>：点击“全部添加到队列”按钮（层图标）可一次性添加所有行。若要从文件添加，请点击“从 TXT 文件导入”按钮（文件导入图标），然后选择每行一个链接的 .txt 文件。<br>"
+                "- <b>步骤 6</b>：创作者将显示在输入框下方的“创作者队列”列表中。列表中的每个条目包括：<br>"
                 "  - 一个用于获取和查看创作者帖子的眼睛图标。<br>"
-                "  - 作为可点击标签的创作者 URL。<br>"
+                "  - 创作者 URL 标签；如果记住了帖子链接，会以“（帖子 [ids]）”的形式附加显示。<br>"
                 "  - 一个用于从队列中删除创作者的“X”按钮。<br>"
-                "- <b>注意</b>：系统会自动防止重复的 URL。如果您尝试添加已在队列中的 URL，控制台将显示警告消息：“[警告] URL 已在队列中。”<br><br>"
+                "- <b>注意</b>：重复的 URL 会被自动跳过，并在控制台摘要中显示（例如：“已将 3 个链接添加到队列。跳过了 1 个链接。”）。<br><br>"
                 "<b>3.2 查看创作者帖子</b><br>"
                 "- <b>步骤 1</b>：在“创作者队列”列表中，找到您想要查看帖子的创作者。<br>"
                 "- <b>步骤 2</b>：点击创作者 URL 旁边的眼睛图标。这将启动一个后台任务，从 Kemono.cr 获取与该创作者相关的所有帖子。<br>"
@@ -3231,7 +3054,8 @@ class KDLanguage:
                 "- The developer, VoxDroid, monitors the repository and will respond to issues as time permits.<br><br>"
                 "<b>7.2 Updates</b><br>"
                 "- Check the GitHub repository for the latest releases and updates.<br>"
-                "- The application does not have an auto-update feature, so download the latest version manually from the repository if needed.<br><br>"
+                "- The application does not have an auto-update feature, so download the latest version manually from the repository if needed.<br>"
+                "- The 'Updates' group in the Settings tab links directly to the GitHub repository.<br><br>"
                 "<b>7.3 Notes</b><br>"
                 "- Support is provided on a volunteer basis by the developer and community.<br>"
                 "- Be patient when awaiting a response, especially for non-critical issues.",
@@ -3246,7 +3070,8 @@ class KDLanguage:
                 "- 開発者のVoxDroidはリポジトリを監視し、時間があるときにイシューに応答します。<br><br>"
                 "<b>7.2 更新</b><br>"
                 "- GitHubリポジトリで最新のリリースと更新を確認してください。<br>"
-                "- アプリケーションには自動更新機能がないため、必要に応じてリポジトリから最新バージョンを手動でダウンロードしてください。<br><br>"
+                "- アプリケーションには自動更新機能がないため、必要に応じてリポジトリから最新バージョンを手動でダウンロードしてください。<br>"
+                "- 設定タブの「更新」グループからGitHubリポジトリへ直接アクセスできます。<br><br>"
                 "<b>7.3 注意事項</b><br>"
                 "- サポートは開発者とコミュニティによるボランティアベースで提供されます。<br>"
                 "- 特に重要でない問題については、応答を待つ際に辛抱強くお待ちください。",
@@ -3261,7 +3086,8 @@ class KDLanguage:
                 "- 개발자인 VoxDroid는 저장소를 모니터링하며 시간이 허락하는 한 이슈에 응답합니다.<br><br>"
                 "<b>7.2 업데이트</b><br>"
                 "- GitHub 저장소에서 최신 릴리스와 업데이트를 확인하세요.<br>"
-                "- 애플리케이션에는 자동 업데이트 기능이 없으므로 필요하면 저장소에서 최신 버전을 수동으로 다운로드하세요.<br><br>"
+                "- 애플리케이션에는 자동 업데이트 기능이 없으므로 필요하면 저장소에서 최신 버전을 수동으로 다운로드하세요.<br>"
+                "- 설정 탭의 '업데이트' 그룹에서 GitHub 저장소로 바로 이동할 수 있습니다.<br><br>"
                 "<b>7.3 참고 사항</b><br>"
                 "- 지원은 개발자와 커뮤니티가 자원봉사로 제공합니다.<br>"
                 "- 특히 중요하지 않은 문제에 대한 응답을 기다릴 때는 인내심을 가지세요.",
@@ -3276,7 +3102,8 @@ class KDLanguage:
                 "- 开发者 VoxDroid 会监控仓库，并在时间允许的情况下回应问题。<br><br>"
                 "<b>7.2 更新</b><br>"
                 "- 在 GitHub 仓库中检查最新的发布和更新。<br>"
-                "- 应用程序没有自动更新功能，因此如有需要，请从仓库手动下载最新版本。<br><br>"
+                "- 应用程序没有自动更新功能，因此如有需要，请从仓库手动下载最新版本。<br>"
+                "- 设置选项卡中的“更新”分组直接链接到 GitHub 仓库。<br><br>"
                 "<b>7.3 注意事项</b><br>"
                 "- 支持由开发者和社区以志愿者形式提供。<br>"
                 "- 对于非紧急问题，等待回复时请保持耐心。",
@@ -3771,49 +3598,7 @@ class KDLanguage:
                 "korean": "{0}의 체크박스가 {1}으로 전환됨, checked_urls 수: {2}",
                 "chinese-simplified": "{0} 的复选框切换到 {1}，checked_urls 数量: {2}",
             },
-            # ── Multi-URL & sequential batch download translations ──
-            "batch_download_start": {
-                "english": "Starting batch download for {0} creator(s) in queue.",
-                "japanese": "キュー内の{0}人のクリエイターの一括ダウンロードを開始します。",
-                "korean": "큐에 있는 {0}명의 크리에이터 일괄 다운로드를 시작합니다.",
-                "chinese-simplified": "开始批量下载队列中的 {0} 个创作者。",
-            },
-            "batch_download_complete": {
-                "english": "Batch download complete.",
-                "japanese": "一括ダウンロードが完了しました。",
-                "korean": "일괄 다운로드가 완료되었습니다.",
-                "chinese-simplified": "批量下载完成。",
-            },
-            "batch_processing_creator": {
-                "english": "Processing creator {0} ({1} remaining).",
-                "japanese": "クリエイター {0} を処理中（残り {1} 件）。",
-                "korean": "크리에이터 {0} 처리 중 (나머지 {1}개).",
-                "chinese-simplified": "正在处理创作者 {0}（剩余 {1} 个）。",
-            },
-            "batch_no_posts_found": {
-                "english": "No posts found for creator {0}, skipping.",
-                "japanese": "クリエイター {0} の投稿が見つかりません。スキップします。",
-                "korean": "크리에이터 {0}의 게시물을 찾을 수 없습니다. 건너뜁니다.",
-                "chinese-simplified": "未找到创作者 {0} 的帖子，跳过。",
-            },
-            "batch_auto_selected": {
-                "english": "Auto-selected {0} post(s) for {1}.",
-                "japanese": "{1} の {0} 件の投稿を自動選択しました。",
-                "korean": "{1}에 대해 {0}개의 게시물을 자동 선택했습니다.",
-                "chinese-simplified": "为 {1} 自动选择了 {0} 个帖子。",
-            },
-            "batch_removed_creator": {
-                "english": "Removed completed creator {0} from queue.",
-                "japanese": "完了したクリエイター {0} をキューから削除しました。",
-                "korean": "완료된 크리에이터 {0}을(를) 큐에서 제거했습니다.",
-                "chinese-simplified": "已从队列中移除已完成的创作者 {0}。",
-            },
-            "batch_post_link_not_found": {
-                "english": "Post link(s) for {0} matched no available post; skipping.",
-                "japanese": "{0} の投稿リンクに一致する投稿が見つかりません。スキップします。",
-                "korean": "{0}의 게시물 링크와 일치하는 게시물이 없습니다. 건너뜁니다.",
-                "chinese-simplified": "{0} 的帖子链接未匹配到任何可用帖子，跳过。",
-            },
+            # ── Post-link tag shown next to queued creator URLs ──
             "batch_post_link_tag": {
                 "english": "post {0}",
                 "japanese": "投稿 {0}",

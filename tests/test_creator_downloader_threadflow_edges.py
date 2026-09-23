@@ -63,32 +63,21 @@ def make_tab(tmp_path):
     return cd.CreatorDownloaderTab(make_parent(tmp_path))
 
 
-def test_batch_process_next_with_pending_calls_check_creator(tmp_path):
+def test_start_creator_download_prepares_only_current_creator(tmp_path):
+    """Download must not re-fetch posts or walk the creator queue."""
     tab = make_tab(tmp_path)
-    tab._batch_pending_urls = ["https://kemono.cr/fanbox/user/1", "u2"]
-
-    called = []
-    tab.check_creator_from_queue = lambda url: called.append(url)
-
-    tab._batch_process_next()
-
-    assert called == ["https://kemono.cr/fanbox/user/1"]
-    assert tab._batch_pending_urls == ["u2"]
-
-
-def test_batch_auto_download_with_posts_prepares_files(tmp_path):
-    tab = make_tab(tmp_path)
+    tab.creator_queue = [("https://kemono.cr/fanbox/user/1", True)]
     tab.current_creator_url = "https://kemono.cr/fanbox/user/1"
-    tab.all_detected_posts = [("Post A", ("101", None)), ("Post B", ("102", None))]
+    tab.posts_to_download = ["101"]
 
+    refetched = []
     prepared = []
+    tab.check_creator_from_queue = lambda url: refetched.append(url)
     tab.prepare_files_for_download = lambda urls: prepared.append(urls)
 
-    tab._batch_auto_download()
+    tab.start_creator_download()
 
-    assert tab.checked_urls["101"] is True
-    assert tab.checked_urls["102"] is True
-    assert tab.posts_to_download == ["101", "102"]
+    assert refetched == []
     assert prepared == [["https://kemono.cr/fanbox/user/1"]]
 
 
@@ -153,6 +142,7 @@ def test_on_file_preparation_finished_starts_download_thread_and_strips_query(
             settings,
             max_concurrent,
             download_text=False,
+            **kwargs,
         ):
             created["service"] = service
             created["creator_id"] = creator_id
@@ -182,45 +172,6 @@ def test_on_file_preparation_finished_starts_download_thread_and_strips_query(
     assert created["started"] is True
 
 
-def test_on_file_preparation_error_resets_and_finishes(tmp_path):
-    tab = make_tab(tmp_path)
-    cleaned = []
-    finished = []
-    tab.cleanup_file_preparation_thread = lambda: cleaned.append(True)
-    tab.creator_download_finished = lambda: finished.append(True)
-
-    tab.on_file_preparation_error("oops")
-
-    assert cleaned
-    assert finished
-    assert tab.background_task_progress.value() == 0
-
-
-def test_process_next_creator_no_remaining_finishes(tmp_path):
-    tab = make_tab(tmp_path)
-    called = []
-    tab.creator_download_finished = lambda: called.append(True)
-
-    tab.process_next_creator([])
-
-    assert called
-
-
-def test_process_next_creator_with_remaining_resets_and_prepares(tmp_path):
-    tab = make_tab(tmp_path)
-    tab.completed_files = {"f1"}
-    tab.completed_posts = {"p1"}
-
-    prepared = []
-    tab.prepare_files_for_download = lambda urls: prepared.append(urls)
-
-    tab.process_next_creator(["u1", "u2"])
-
-    assert tab.completed_files == set()
-    assert tab.completed_posts == set()
-    assert prepared == [["u1", "u2"]]
-
-
 def test_cleanup_thread_waiting_branch_keeps_running_state(tmp_path):
     tab = make_tab(tmp_path)
 
@@ -238,7 +189,8 @@ def test_cleanup_thread_waiting_branch_keeps_running_state(tmp_path):
             return None
 
     thread = FakeThread()
-    tab.active_threads = [thread]
+    other_thread = FakeThread()
+    tab.active_threads = [thread, other_thread]
     tab.total_files_to_download = 5
     tab.completed_files = {"one"}
     tab.failed_files = {}
@@ -246,9 +198,41 @@ def test_cleanup_thread_waiting_branch_keeps_running_state(tmp_path):
     called = []
     tab.creator_download_finished = lambda: called.append("finished")
 
-    tab.cleanup_thread(thread, ["https://kemono.cr/fanbox/user/next"])
+    tab.cleanup_thread(thread)
 
+    # Files are still outstanding and another thread is active -> keep waiting.
     assert called == []
+    assert other_thread in tab.active_threads
+
+
+def test_cleanup_thread_finishes_when_all_files_attempted(tmp_path):
+    tab = make_tab(tmp_path)
+
+    class FakeThread:
+        def __init__(self):
+            self.failed_files = None
+
+        def isRunning(self):
+            return False
+
+        def wait(self, *args, **kwargs):
+            return None
+
+        def deleteLater(self):
+            return None
+
+    thread = FakeThread()
+    tab.active_threads = [thread]
+    tab.total_files_to_download = 2
+    tab.completed_files = {"one", "two"}
+    tab.failed_files = {}
+
+    called = []
+    tab.creator_download_finished = lambda: called.append("finished")
+
+    tab.cleanup_thread(thread)
+
+    assert called == ["finished"]
 
 
 def test_cancel_creator_download_starts_cancellation_thread(tmp_path, monkeypatch):
@@ -297,8 +281,6 @@ def test_on_cancellation_finished_runtimeerror_branch(tmp_path):
     tab.active_threads = [BadDeleteThread()]
     tab._cancellation_thread = CancelThread()
     tab.downloading = True
-    tab._batch_downloading = True
-    tab._batch_pending_urls = ["u1"]
     tab.total_files_to_download = 2
     tab.completed_files = {"a"}
     tab.failed_files = {"b": "err"}
@@ -308,5 +290,4 @@ def test_on_cancellation_finished_runtimeerror_branch(tmp_path):
 
     assert tab._cancellation_thread is None
     assert tab.downloading is False
-    assert tab._batch_downloading is False
-    assert tab._batch_pending_urls == []
+    assert tab.creator_queue == []

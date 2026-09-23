@@ -9,6 +9,7 @@ from kemonodownloader import creator_downloader as cd
 class FakeResponse:
     def __init__(self, chunks, headers=None):
         self._chunks = list(chunks)
+        self.status_code = 200
         self.headers = headers or {
             "content-length": str(sum(len(c) for c in self._chunks))
         }
@@ -73,6 +74,7 @@ def test_download_file_success_writes_and_stores(tmp_path, monkeypatch):
     )
     t.hash_db = FakeHashDB()
     t.domain_config = {
+        "base_url": "https://kemono.cr",
         "api_base": "https://kemono.cr/api",
         "referer": "https://kemono.cr",
     }
@@ -80,7 +82,7 @@ def test_download_file_success_writes_and_stores(tmp_path, monkeypatch):
     dest_folder = tmp_path / "out"
     dest_folder.mkdir()
 
-    asyncio.run(t.download_file(file_url, str(dest_folder), 0, 1))
+    asyncio.run(t.download_file(file_url, str(dest_folder), 0, 1, 1))
 
     # File should exist and hash should have been stored
     assert stored
@@ -119,12 +121,19 @@ def test_cleanup_thread_transfers_failed_files(tmp_path):
         def deleteLater(self):
             pass
 
+    # Keep another thread active and files outstanding so cleanup_thread does
+    # not reach the "run finished" path, which logs the failures and clears
+    # the set (that clearing is by design, not a lost transfer).
+    keep_alive = FakeThread(None)
+    tab.active_threads = [keep_alive]
+    tab.total_files_to_download = 5
+
     ft = FakeThread({"u": "err"})
-    tab.cleanup_thread(ft, [])
+    tab.cleanup_thread(ft)
     assert "u" in tab.failed_files
 
     # Also test when thread is in active_threads
     ft2 = FakeThread({"v": "err2"})
     tab.active_threads.append(ft2)
-    tab.cleanup_thread(ft2, [])
+    tab.cleanup_thread(ft2)
     assert "v" in tab.failed_files

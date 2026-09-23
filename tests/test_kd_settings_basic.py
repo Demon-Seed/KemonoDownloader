@@ -38,7 +38,6 @@ def test_save_and_load_settings_roundtrip(tmp_path):
         "base_folder_name": "My Folder",
         "base_directory": str(tmp_path / "base"),
         "simultaneous_downloads": 3,
-        "auto_check_updates": False,
         "language": "english",
         "creator_posts_max_attempts": 10,
         "post_data_max_retries": 2,

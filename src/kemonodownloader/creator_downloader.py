@@ -3001,14 +3001,9 @@ class CreatorDownloaderTab(QWidget):
         self.current_page = 1
         self.total_pages = 1
         self.filtered_posts = []  # Cache of filtered posts for pagination
-        # Sequential batch-download state. "Download" walks every creator
-        # currently in the queue, auto-downloading all of their posts
-        # before advancing to the next one.
-        self._batch_downloading = False
-        self._batch_pending_urls: list[str] = []
         # Creator URL -> set of post ids requested via pasted post links. When a
-        # creator is queued from a post link, a batch run auto-selects only
-        # those posts instead of every post the creator has.
+        # creator is queued from a post link, viewing that creator auto-selects
+        # only those posts instead of every post the creator has.
         self._batch_post_ids: dict[str, set] = {}
         # Set when a post-link selection still has to be applied to the filtered
         # list once it has been rebuilt for display.
@@ -4002,18 +3997,7 @@ class CreatorDownloaderTab(QWidget):
         )
 
     def set_fetching_ui_state(self, is_fetching):
-        """Enable/disable UI elements during fetching.
-
-        While a sequential batch download is in progress the unlock is
-        skipped, so the download-lock established by
-        ``set_downloading_ui_state(True)`` stays in effect for the whole
-        batch rather than flickering between creators.
-        """
-        if not is_fetching and self._batch_downloading:
-            # Keep everything locked 窶・the download-state lock takes
-            # precedence over the fetching-state unlock.
-            return
-
+        """Enable/disable UI elements during fetching."""
         # Main action buttons
         self.creator_download_btn.setEnabled(not is_fetching)
         self.creator_cancel_btn.setEnabled(is_fetching)
@@ -4237,10 +4221,6 @@ class CreatorDownloaderTab(QWidget):
         if self._post_link_selection_pending:
             self._apply_post_link_selection()
 
-        # Batch auto-download: select all posts and start download
-        if self._batch_downloading:
-            self._batch_auto_download()
-
     def on_post_detection_error(self, error_message):
         self.append_log_to_console(translate("log_error", error_message), "ERROR")
 
@@ -4270,119 +4250,28 @@ class CreatorDownloaderTab(QWidget):
             self.cleanup_post_detection_thread()
 
     def start_creator_download(self):
+        # Download is a single-creator action: it downloads exactly the posts
+        # the user has ticked for the creator currently being viewed. It never
+        # re-fetches posts, never auto-selects anything, and never walks the
+        # queue - the queue is a list of links to inspect, nothing more.
         if not self.creator_queue:
             self.append_log_to_console(
                 translate("log_warning", translate("no_creators_queue")), "WARNING"
             )
             return
-
-        # Batch mode: walk the queue, auto-detecting and downloading all
-        # posts for each queued creator in turn.
-        self._batch_pending_urls = [url for url, _ in self.creator_queue]
-        self._batch_downloading = True
-        self.downloading = True
-        self.set_downloading_ui_state(True)
-        self.append_log_to_console(
-            translate(
-                "log_info",
-                translate(
-                    "batch_download_start",
-                    len(self._batch_pending_urls),
-                ),
-            ),
-            "INFO",
-        )
-        self._batch_process_next()
-
-    def _batch_process_next(self):
-        """Process the next creator URL in the batch queue."""
-        if not self._batch_pending_urls:
-            self._batch_downloading = False
-            self.append_log_to_console(
-                translate("log_info", translate("batch_download_complete")),
-                "INFO",
-            )
-            self.downloading = False
-            self.set_downloading_ui_state(False)
-            return
-
-        url = self._batch_pending_urls.pop(0)
-        remaining = len(self._batch_pending_urls)
-        self.append_log_to_console(
-            translate(
-                "log_info",
-                translate("batch_processing_creator", url, remaining),
-            ),
-            "INFO",
-        )
-        # This triggers post detection 竊・on_post_population_finished
-        # which will call _batch_auto_download when _batch_downloading is True
-        self.check_creator_from_queue(url)
-
-    def _batch_auto_download(self):
-        """Called after post population in a batch run to auto-select posts and download."""
         if not self.current_creator_url:
             self.append_log_to_console(
                 translate("log_warning", translate("no_creator_viewed")), "WARNING"
             )
-            self._batch_process_next()
             return
-
-        if not self.all_detected_posts:
+        if not self.posts_to_download:
             self.append_log_to_console(
-                translate(
-                    "log_warning",
-                    translate("batch_no_posts_found", self.current_creator_url),
-                ),
-                "WARNING",
+                translate("log_warning", translate("no_posts_selected")), "WARNING"
             )
-            self._batch_remove_creator_url(self.current_creator_url)
-            self._batch_process_next()
             return
 
-        # Auto-select posts. If this creator was queued from a post link, only
-        # the requested post(s) are selected; otherwise all detected posts are.
-        requested_post_ids = self._batch_post_ids.get(
-            (self.current_creator_url or "").rstrip("/")
-        )
-        if requested_post_ids:
-            if not self._apply_post_link_selection():
-                self.append_log_to_console(
-                    translate(
-                        "log_warning",
-                        translate(
-                            "batch_post_link_not_found",
-                            self.current_creator_url,
-                        ),
-                    ),
-                    "WARNING",
-                )
-                self._batch_remove_creator_url(self.current_creator_url)
-                self._batch_process_next()
-                return
-        else:
-            # Auto-select ALL posts
-            for post_title, (post_id, thumbnail_url) in self.all_detected_posts:
-                self.checked_urls[post_id] = True
-            self.posts_to_download = [
-                post_id for _, (post_id, _) in self.all_detected_posts
-            ]
-            self._sync_filtered_posts_checked()
-        self.display_current_page()
-        self.update_check_all_state()
-        self.append_log_to_console(
-            translate(
-                "log_info",
-                translate(
-                    "batch_auto_selected",
-                    len(self.posts_to_download),
-                    self.current_creator_url,
-                ),
-            ),
-            "INFO",
-        )
-
-        # Set up download state
+        self.downloading = True
+        self.set_downloading_ui_state(True)
         if self._parent and hasattr(self._parent, "status_label"):
             self._parent.status_label.setText(translate("preparing_files"))
         self.creator_download_btn.setEnabled(False)
@@ -4400,11 +4289,17 @@ class CreatorDownloaderTab(QWidget):
         self.creator_file_progress.setValue(0)
         self.creator_file_progress_label.setText(translate("file_progress", 0))
         self.update_progress_bar_style()
+
         self.background_task_label.setText(translate("preparing_files"))
         self.background_task_progress.setRange(0, 100)
         self.background_task_progress.setValue(0)
 
-        urls = [self.current_creator_url]
+        self.append_log_to_console(
+            translate(
+                "log_info", translate("posts_to_download_num", self.posts_to_download)
+            ),
+            "INFO",
+        )
         self.append_log_to_console(
             translate(
                 "log_info",
@@ -4412,7 +4307,7 @@ class CreatorDownloaderTab(QWidget):
             ),
             "INFO",
         )
-        self.prepare_files_for_download(urls)
+        self.prepare_files_for_download([self.current_creator_url])
 
     def _remember_batch_post_id(self, creator_url, post_id):
         """Record (or clear) the post-link restriction for a creator URL.
@@ -4593,12 +4488,11 @@ class CreatorDownloaderTab(QWidget):
             self.append_log_to_console(
                 translate("log_warning", translate("no_files_detected")), "WARNING"
             )
-            self.process_next_creator(urls[1:] if len(urls) > 1 else [])
+            self.creator_download_finished()
             return
 
         url = urls[0]
         url = url.rstrip("/")
-        remaining_urls = urls[1:]
         parts = url.split("/")
         if len(parts) >= 3:
             service = parts[-3]
@@ -4649,26 +4543,12 @@ class CreatorDownloaderTab(QWidget):
         thread.file_completed.connect(self.update_file_completion)
         thread.post_completed.connect(self.update_post_completion)
         thread.log.connect(self.append_log_to_console)
-        thread.finished.connect(lambda: self.cleanup_thread(thread, remaining_urls))
+        thread.finished.connect(lambda: self.cleanup_thread(thread))
         self.active_threads.append(thread)
         thread.start()
 
-    def process_next_creator(self, remaining_urls):
-        """Process the next creator or finish if no more remain."""
-        if not remaining_urls:
-            self.creator_download_finished()
-            return
-        url = remaining_urls[0]
-        new_remaining_urls = remaining_urls[1:]
-        self.append_log_to_console(
-            translate("log_info", translate("moving_to_next_creator", url)), "INFO"
-        )
-        self.completed_files.clear()
-        self.completed_posts.clear()
-        self.prepare_files_for_download([url] + new_remaining_urls)
-
-    def cleanup_thread(self, thread, remaining_urls):
-        """Clean up a download thread and proceed to the next creator or finish."""
+    def cleanup_thread(self, thread):
+        """Clean up a download thread and finish when every file is attempted."""
         # Transfer failed file from thread to tab if present
         try:
             thread_failed = getattr(thread, "failed_files", None)
@@ -4750,12 +4630,8 @@ class CreatorDownloaderTab(QWidget):
                         "WARNING",
                     )
             self.active_threads.clear()
-            # If there are remaining URLs, process the next creator; otherwise, finish
-            if remaining_urls:
-                self.process_next_creator(remaining_urls)
-            else:
-                self.creator_download_finished()
-        elif not self.active_threads and not remaining_urls:
+            self.creator_download_finished()
+        elif not self.active_threads:
             self.append_log_to_console(
                 translate("log_debug", translate("no_more_active_threads")), "INFO"
             )
@@ -4776,11 +4652,6 @@ class CreatorDownloaderTab(QWidget):
             )
 
     def cancel_creator_download(self):
-        # Stop the batch processing loop
-        self._batch_downloading = False
-        self._batch_pending_urls.clear()
-        self._batch_post_ids.clear()
-
         if not self.active_threads:
             self.append_log_to_console(
                 translate("log_warning", translate("no_active_downloads_to_cancel")),
@@ -4892,9 +4763,6 @@ class CreatorDownloaderTab(QWidget):
         self.creator_file_progress_label.setText(translate("downloads_terminated"))
         self.creator_overall_progress_label.setText(translate("downloads_terminated"))
         self.downloading = False
-        self._batch_downloading = False
-        self._batch_pending_urls.clear()
-        self._batch_post_ids.clear()
         self.set_downloading_ui_state(False)
         self.total_files_to_download = 0
         self.completed_files.clear()
@@ -5011,24 +4879,6 @@ class CreatorDownloaderTab(QWidget):
                 )
             )
 
-    def _batch_remove_creator_url(self, url: str) -> None:
-        """Remove a single completed creator URL from the queue during a batch run."""
-        normalized = url.rstrip("/")
-        self._batch_post_ids.pop(normalized, None)
-        before_len = len(self.creator_queue)
-        self.creator_queue = [
-            (u, c) for u, c in self.creator_queue if u.rstrip("/") != normalized
-        ]
-        if len(self.creator_queue) < before_len:
-            self.update_creator_queue_list()
-            self.append_log_to_console(
-                translate(
-                    "log_info",
-                    translate("batch_removed_creator", url),
-                ),
-                "INFO",
-            )
-
     def update_post_completion(self, post_id):
         """Update post completion status and check overall progress."""
         self.completed_posts.add(post_id)
@@ -5036,14 +4886,6 @@ class CreatorDownloaderTab(QWidget):
             translate("log_info", translate("post_fully_downloaded", post_id)), "INFO"
         )
         self.update_overall_progress()
-
-        # Batch run: remove creator from queue once all its posts complete
-        if self._batch_downloading and self.current_creator_url:
-            if (
-                len(self.completed_posts) >= self.total_posts_to_download
-                and self.total_posts_to_download > 0
-            ):
-                self._batch_remove_creator_url(self.current_creator_url)
 
         if len(
             self.completed_posts
@@ -5110,10 +4952,6 @@ class CreatorDownloaderTab(QWidget):
         self.creator_file_progress_label.setText(translate("downloads_complete"))
         self.creator_overall_progress_label.setText(translate("downloads_complete"))
 
-        # Batch run: safety-net removal (item should already be gone)
-        if self._batch_downloading and self.current_creator_url:
-            self._batch_remove_creator_url(self.current_creator_url)
-
         self.total_files_to_download = 0
         self.completed_files.clear()
         self.failed_files.clear()
@@ -5129,12 +4967,8 @@ class CreatorDownloaderTab(QWidget):
         self.checkbox_toggle_thread = None
         self.validation_thread = None
 
-        # Batch run: advance to the next creator in the queue
-        if self._batch_downloading:
-            self._batch_process_next()
-            return
-
-        # Single-creator run: fully restore UI
+        # Fully restore the UI. The creator queue is deliberately left as-is:
+        # finishing a download must never remove or alter queued creators.
         self.set_downloading_ui_state(False)
 
     def show_skip_keywords_help(self):

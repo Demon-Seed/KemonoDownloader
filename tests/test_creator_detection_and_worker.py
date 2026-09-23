@@ -119,8 +119,9 @@ def test_download_worker_processes_one(tmp_path):
 
     called = {"ok": False}
 
-    async def fake_download(f_url, folder, file_index, total_files):
+    async def fake_download(f_url, folder, file_index, total_files, page_number):
         called["ok"] = True
+        called["page_number"] = page_number
         # stop the worker loop after handling one item
         thread.is_running = False
 
@@ -128,11 +129,13 @@ def test_download_worker_processes_one(tmp_path):
 
     async def run_worker():
         queue = asyncio.Queue()
-        queue.put_nowait((0, file_url))
+        # download_worker unpacks (file_index, file_url, page_number).
+        queue.put_nowait((0, file_url, 1))
         await thread.download_worker(queue, str(tmp_path), total_files=1)
 
     asyncio.run(run_worker())
     assert called["ok"]
+    assert called["page_number"] == 1
 
 
 def test_download_text_sync_writes_file(monkeypatch, tmp_path):

@@ -177,7 +177,7 @@ def test_settings_getters_and_is_tor_running(tmp_path, qapp):
     tab = make_tab(tmp_path)
 
     assert isinstance(tab.get_simultaneous_downloads(), int)
-    assert isinstance(tab.is_auto_check_updates_enabled(), bool)
+    assert ks.GITHUB_REPO_URL in tab.github_repo_link.text()
     assert isinstance(tab.get_creator_posts_max_attempts(), int)
     assert isinstance(tab.get_post_data_max_retries(), int)
     assert isinstance(tab.get_file_download_max_retries(), int)

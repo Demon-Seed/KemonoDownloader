@@ -3667,6 +3667,9 @@ def download_thread(qapp, monkeypatch):
         "{post_id}_{orig_name}"
     )
     settings.settings_tab.get_creator_folder_strategy.return_value = "per_post"
+    settings.settings_tab.get_creator_folder_name_template.return_value = (
+        "{post_id}_{post_title}"
+    )
     settings.api_request_max_retries = 1
     settings.file_download_max_retries = 1
     settings.request_timeout = 5
@@ -3717,7 +3720,9 @@ class TestCreatorDownloadThread:
 
         # Should skip if file_url not in files_to_download
         asyncio.run(
-            download_thread.download_file("https://other.com/f.jpg", "/tmp", 0, 1)
+            download_thread.download_file(
+                "https://other.com/f.jpg", "/tmp", 0, 1, 1
+            )
         )
 
     def test_generate_filename_and_folder_strategies(self, download_thread):
@@ -3727,7 +3732,7 @@ class TestCreatorDownloadThread:
 
         # Default: per_post
         folder, filename = download_thread.generate_filename_and_folder(
-            url, "/tmp", 0, 1, "p1", "Title"
+            url, "/tmp", 0, 1, "p1", "Title", 1
         )
         assert "p1_Title" in folder
         assert "p1_f1.jpg" == filename
@@ -3737,7 +3742,7 @@ class TestCreatorDownloadThread:
             "single_folder"
         )
         folder, _ = download_thread.generate_filename_and_folder(
-            url, "/tmp", 0, 1, "p1", "Title"
+            url, "/tmp", 0, 1, "p1", "Title", 1
         )
         assert folder.endswith("123_TestArtist")
 
@@ -3746,7 +3751,7 @@ class TestCreatorDownloadThread:
             "by_file_type"
         )
         folder, _ = download_thread.generate_filename_and_folder(
-            url, "/tmp", 0, 1, "p1", "Title"
+            url, "/tmp", 0, 1, "p1", "Title", 1
         )
         assert folder.endswith("jpg")
 
@@ -3807,7 +3812,7 @@ class TestCreatorDownloadThread:
 
         asyncio.run(
             download_thread.download_file(
-                "https://kemono.cr/f1.jpg", str(tmp_path), 0, 1
+                "https://kemono.cr/f1.jpg", str(tmp_path), 0, 1, 1
             )
         )
 
@@ -3836,7 +3841,7 @@ class TestCreatorDownloadThread:
             return_value=(str(tmp_path), "f1.jpg")
         )
 
-        asyncio.run(download_thread.download_file(file_url, str(tmp_path), 0, 1))
+        asyncio.run(download_thread.download_file(file_url, str(tmp_path), 0, 1, 1))
 
         # Verify it skipped download due to hash match
         assert file_url in download_thread.completed_files
@@ -3846,7 +3851,7 @@ class TestCreatorDownloadThread:
         download_thread.fetch_creator_and_post_info = MagicMock()
 
         # Mock download_file to just mark it as completed
-        async def mock_download_file(file_url, folder, i, total):
+        async def mock_download_file(file_url, folder, i, total, page_number):
             download_thread.completed_files.add(file_url)
 
         monkeypatch.setattr(download_thread, "download_file", mock_download_file)
@@ -4055,22 +4060,96 @@ class TestCreatorDownloaderTab:
         creator_tab.on_file_preparation_finished(urls, files, f2p)
         assert creator_tab.total_files_to_download == 1
 
-    def test_start_creator_download(self, creator_tab, monkeypatch):
-        # Starting a download now walks the creator queue as a sequential batch:
-        # the first queued URL is handed to check_creator_from_queue (post
-        # detection), rather than calling prepare_files_for_download directly.
+    def test_start_creator_download_downloads_selected_posts(
+        self, creator_tab, monkeypatch
+    ):
+        # Download is a single-creator action: it must download exactly the
+        # ticked posts of the creator being viewed, without re-fetching the
+        # post list and without walking the queue.
         creator_tab.creator_queue = [("https://kemono.cr/u/1", True)]
+        creator_tab.current_creator_url = "https://kemono.cr/u/1"
+        creator_tab.posts_to_download = ["p1", "p2"]
 
-        processed = []
+        refetched = []
+        prepared = []
         monkeypatch.setattr(
-            creator_tab, "check_creator_from_queue", lambda url: processed.append(url)
+            creator_tab, "check_creator_from_queue", lambda url: refetched.append(url)
+        )
+        monkeypatch.setattr(
+            creator_tab,
+            "prepare_files_for_download",
+            lambda urls: prepared.append(urls),
         )
 
         creator_tab.start_creator_download()
 
-        assert processed == ["https://kemono.cr/u/1"]
-        assert creator_tab._batch_downloading is True
-        assert creator_tab._batch_pending_urls == []
+        assert refetched == []
+        assert prepared == [["https://kemono.cr/u/1"]]
+        assert creator_tab.downloading is True
+        assert creator_tab.total_posts_to_download == 2
+
+    def test_start_creator_download_warns_when_nothing_selected(
+        self, creator_tab, monkeypatch
+    ):
+        creator_tab.creator_queue = [("https://kemono.cr/u/1", True)]
+        creator_tab.current_creator_url = "https://kemono.cr/u/1"
+        creator_tab.posts_to_download = []
+
+        logs = []
+        prepared = []
+        monkeypatch.setattr(
+            creator_tab,
+            "append_log_to_console",
+            lambda msg, level="INFO": logs.append((msg, level)),
+        )
+        monkeypatch.setattr(
+            creator_tab,
+            "prepare_files_for_download",
+            lambda urls: prepared.append(urls),
+        )
+
+        creator_tab.start_creator_download()
+
+        assert prepared == []
+        assert creator_tab.downloading is False
+        assert any(level == "WARNING" for _msg, level in logs)
+
+    def test_start_creator_download_warns_when_no_queue(
+        self, creator_tab, monkeypatch
+    ):
+        creator_tab.creator_queue = []
+        creator_tab.current_creator_url = None
+        creator_tab.posts_to_download = ["p1"]
+
+        logs = []
+        monkeypatch.setattr(
+            creator_tab,
+            "append_log_to_console",
+            lambda msg, level="INFO": logs.append((msg, level)),
+        )
+
+        creator_tab.start_creator_download()
+
+        assert creator_tab.downloading is False
+        assert any(level == "WARNING" for _msg, level in logs)
+
+    def test_download_completion_keeps_creator_queue_intact(self, creator_tab):
+        # Regression: finishing a download must never remove queued creators
+        # or drop the queue (previously the queue was emptied before the
+        # "Batch download complete." log line).
+        queued = [("https://kemono.cr/u/1", True), ("https://kemono.cr/u/2", False)]
+        creator_tab.creator_queue = list(queued)
+        creator_tab.current_creator_url = "https://kemono.cr/u/1"
+        creator_tab.posts_to_download = ["p1"]
+        creator_tab.total_posts_to_download = 1
+        creator_tab.total_files_to_download = 1
+        creator_tab.completed_files = {"https://kemono.cr/f1"}
+
+        creator_tab.update_post_completion("p1")
+        creator_tab.creator_download_finished()
+
+        assert creator_tab.creator_queue == queued
+        assert creator_tab.posts_to_download == ["p1"]
 
     def test_cancel_creator_download(self, creator_tab, monkeypatch):
         # Mock CancellationThread to avoid starting a real thread
@@ -4097,7 +4176,7 @@ class TestCreatorDownloaderTab:
     def test_update_file_completion(self, creator_tab):
         creator_tab.total_files_to_download = 10
         creator_tab.completed_files = set()
-        creator_tab.update_file_completion(0, "url", True, "path")
+        creator_tab.update_file_completion(0, "url", True)
         assert len(creator_tab.completed_files) == 1
         assert creator_tab.creator_overall_progress.value() == 10
 
@@ -4194,14 +4273,26 @@ class TestCreatorDownloadThreadMetadata:
         from kemonodownloader.creator_downloader import PostPopulationThread
 
         posts = [("Title 1", ("id1", "thumb1"))]
-        thread = PostPopulationThread(posts)
+        thread = PostPopulationThread(posts, post_dates_map={"id1": "2024-01-02"})
 
         results = []
         thread.finished.connect(lambda d, l: results.append((d, l)))
         thread.run()
 
         assert len(results) == 1
-        assert "Title 1 (ID: id1)" in results[0][0]
+        # Unique titles carry the post date (falling back to "Unknown date").
+        assert "Title 1 (2024-01-02)" in results[0][0]
+
+    def test_post_population_thread_unknown_date(self, qapp):
+        from kemonodownloader.creator_downloader import PostPopulationThread
+
+        thread = PostPopulationThread([("Title 1", ("id1", "thumb1"))])
+
+        results = []
+        thread.finished.connect(lambda d, l: results.append((d, l)))
+        thread.run()
+
+        assert "Title 1 (Unknown date)" in results[0][0]
 
     def test_checkbox_toggle_thread(self, qapp):
 

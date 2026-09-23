@@ -3,6 +3,7 @@ import subprocess
 import sys
 
 from PyQt6.QtCore import QProcess, QSettings, Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -24,6 +25,9 @@ from PyQt6.QtWidgets import (
 )
 
 from kemonodownloader.kd_language import language_manager, translate
+
+# Main repository (VoxDroid) used by the in-app update/repository links.
+GITHUB_REPO_URL = "https://github.com/VoxDroid/KemonoDownloader"
 
 
 def _t(key, fallback):
@@ -55,7 +59,6 @@ class SettingsTab(QWidget):
             "base_folder_name": "Kemono Downloader",
             "base_directory": self.get_default_base_directory(),
             "simultaneous_downloads": 5,
-            "auto_check_updates": True,
             "language": "english",
             "creator_posts_max_attempts": 200,
             "post_data_max_retries": 7,
@@ -111,9 +114,6 @@ class SettingsTab(QWidget):
             "simultaneous_downloads",
             self.default_settings["simultaneous_downloads"],
             type=int,
-        )
-        settings_dict["auto_check_updates"] = self.qsettings.value(
-            "auto_check_updates", self.default_settings["auto_check_updates"], type=bool
         )
         settings_dict["language"] = self.qsettings.value(
             "language", self.default_settings["language"], type=str
@@ -182,9 +182,6 @@ class SettingsTab(QWidget):
         self.qsettings.setValue("base_directory", self.settings["base_directory"])
         self.qsettings.setValue(
             "simultaneous_downloads", self.settings["simultaneous_downloads"]
-        )
-        self.qsettings.setValue(
-            "auto_check_updates", self.settings["auto_check_updates"]
         )
         self.qsettings.setValue("language", self.settings["language"])
         self.qsettings.setValue(
@@ -530,28 +527,19 @@ class SettingsTab(QWidget):
         self.creator_custom_group.setLayout(creator_custom_layout)
         layout.addWidget(self.creator_custom_group)
 
-        # Update Settings Group
+        # Repository / Updates Group: a direct link to the main repository
+        # replaced the previous automatic update check.
         self.update_group = QGroupBox()
         self.update_group.setStyleSheet(
             "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
         )
         update_layout = QGridLayout()
 
-        self.auto_update_label = QLabel()
-        update_layout.addWidget(self.auto_update_label, 0, 0)
-        self.auto_update_checkbox = QCheckBox()
-        self.auto_update_checkbox.setChecked(self.temp_settings["auto_check_updates"])
-        self.auto_update_checkbox.setStyleSheet(
-            "QCheckBox::indicator { width: 16px; height: 16px; }"
-            "QCheckBox::indicator:unchecked { background: #2A3B5A; border: 1px solid #4A5B7A; }"
-            "QCheckBox::indicator:checked { background: #4A6B9A; border: 1px solid #5A7BA9; }"
-        )
-        self.auto_update_checkbox.stateChanged.connect(
-            lambda state: self.update_temp_setting(
-                "auto_check_updates", state == Qt.CheckState.Checked.value
-            )
-        )
-        update_layout.addWidget(self.auto_update_checkbox, 0, 1)
+        self.github_repo_link = QLabel()
+        self.github_repo_link.setTextFormat(Qt.TextFormat.RichText)
+        self.github_repo_link.setOpenExternalLinks(True)
+        self.github_repo_link.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        update_layout.addWidget(self.github_repo_link, 0, 0)
 
         self.update_group.setLayout(update_layout)
         layout.addWidget(self.update_group)
@@ -1147,11 +1135,6 @@ class SettingsTab(QWidget):
         self.download_spinbox.blockSignals(False)
 
     def confirm_and_apply_settings(self):
-        auto_check_status = (
-            translate("enabled")
-            if self.temp_settings["auto_check_updates"]
-            else translate("disabled")
-        )
         language_name = language_manager.get_text(self.temp_settings["language"])
         proxy_status = (
             translate("enabled")
@@ -1188,7 +1171,6 @@ class SettingsTab(QWidget):
                 self.temp_settings["base_folder_name"],
                 self.temp_settings["base_directory"],
                 self.temp_settings["simultaneous_downloads"],
-                auto_check_status,
                 language_name,
                 proxy_status,
                 proxy_type_name,
@@ -1263,11 +1245,6 @@ class SettingsTab(QWidget):
 
         self.settings_applied.emit()
 
-        auto_check_status = (
-            translate("enabled")
-            if self.settings["auto_check_updates"]
-            else translate("disabled")
-        )
         language_name = language_manager.get_text(self.settings["language"])
         proxy_status = (
             translate("enabled")
@@ -1302,7 +1279,6 @@ class SettingsTab(QWidget):
                 self.settings["base_folder_name"],
                 self.settings["base_directory"],
                 self.settings["simultaneous_downloads"],
-                auto_check_status,
                 language_name,
                 proxy_status,
                 proxy_type_name,
@@ -1335,7 +1311,6 @@ class SettingsTab(QWidget):
         self.directory_input.setText(self.temp_settings["base_directory"])
         self.download_slider.setValue(self.temp_settings["simultaneous_downloads"])
         self.download_spinbox.setValue(self.temp_settings["simultaneous_downloads"])
-        self.auto_update_checkbox.setChecked(self.temp_settings["auto_check_updates"])
         self.creator_posts_max_attempts_spinbox.setValue(
             self.temp_settings["creator_posts_max_attempts"]
         )
@@ -1401,6 +1376,9 @@ class SettingsTab(QWidget):
         self.api_request_max_retries_label.setText(translate("api_request_max_retries"))
 
         self.update_group.setTitle(translate("update_settings"))
+        self.github_repo_link.setText(
+            f'<a href="{GITHUB_REPO_URL}">{translate("check_updates_on_github")}</a>'
+        )
 
         # Creator downloader customization texts
         self.creator_custom_group.setTitle(translate("creator_downloader_settings"))
@@ -1518,8 +1496,6 @@ class SettingsTab(QWidget):
 
         # Update proxy and other text
 
-        self.auto_update_label.setText(translate("auto_check_updates"))
-
         self.language_group.setTitle(translate("language_settings"))
         self.language_label.setText(translate("language"))
         self.update_language_combo()
@@ -1546,9 +1522,6 @@ class SettingsTab(QWidget):
 
     def get_simultaneous_downloads(self):
         return self.settings["simultaneous_downloads"]
-
-    def is_auto_check_updates_enabled(self):
-        return self.settings["auto_check_updates"]
 
     def get_creator_posts_max_attempts(self):
         return self.settings["creator_posts_max_attempts"]

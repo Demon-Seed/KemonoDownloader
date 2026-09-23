@@ -71,8 +71,6 @@ const translations = {
       featureMediaPlaybackDesc: "Preview videos and GIFs with built-in playback controls.",
       featureMultilingualSupport: "Multilingual Support",
       featureMultilingualSupportDesc: "Switch between English, Japanese, and Korean languages dynamically.",
-      featureAutomaticUpdates: "Automatic Updates",
-      featureAutomaticUpdatesDesc: "Check for new versions on startup with optional notifications.",
       featureCustomizableSettings: "Customizable Settings",
       featureCustomizableSettingsDesc:
         "Tailor save directories, folder names, notifications, and themes to your preference.",
@@ -105,7 +103,7 @@ const translations = {
       // Usage
       usageTitle: "Usage",
       usageDescription:
-        'Upon launching, you\'ll see an introductory screen with a "Launch" button. Click it to enter the main interface, featuring four tabs: <strong>Post Downloader</strong>, <strong>Creator Downloader</strong>, <strong>Settings</strong>, and <strong>Help</strong>. The in-app Help tab contains a comprehensive user manual.',
+        'Opening the app takes you straight to the main interface, with the <strong>Creator Downloader</strong> tab selected by default. It features five tabs: <strong>Creator Downloader</strong>, <strong>Post Downloader</strong>, <strong>Settings</strong>, <strong>Help</strong>, and <strong>Browser Extension</strong>. The in-app Help tab contains a comprehensive user manual.',
       gettingStarted: "Getting Started",
       postDownloaderTab: "Post Downloader Tab",
       creatorDownloaderTab: "Creator Downloader Tab",
@@ -282,8 +280,6 @@ const translations = {
       featureMediaPlaybackDesc: "内蔵の再生コントロールで動画やGIFをプレビューします。",
       featureMultilingualSupport: "多言語サポート",
       featureMultilingualSupportDesc: "英語、日本語、韓国語の言語を動的に切り替えます。",
-      featureAutomaticUpdates: "自動更新",
-      featureAutomaticUpdatesDesc: "起動時に新しいバー���ョンをチェックし、オプションの通知を提供します。",
       featureCustomizableSettings: "カスタマイズ可能な設定",
       featureCustomizableSettingsDesc: "保存ディレクトリ、フォルダ名、通知、テーマを好みに合わせて調整します。",
   
@@ -316,7 +312,7 @@ const translations = {
       // Usage
       usageTitle: "使用方法",
       usageDescription:
-        "起動すると、「起動」ボタンのある紹介画面が表示されます。クリックすると、<strong>投稿ダウンローダー</strong>、<strong>クリエイターダウンローダー</strong>、<strong>設定</strong>、<strong>ヘルプ</strong>の4つのタブを備えたメインインターフェースに入ります。アプリ内のヘルプタブには包括的なユーザーマニュアルが含まれています。",
+        "起動するとすぐにメインインターフェースが表示され、<strong>クリエイターダウンローダー</strong>タブがデフォルトで選択されています。<strong>クリエイターダウンローダー</strong>、<strong>投稿ダウンローダー</strong>、<strong>設定</strong>、<strong>ヘルプ</strong>、<strong>ブラウザ拡張機能</strong>の5つのタブがあります。アプリ内のヘルプタブには包括的なユーザーマニュアルが含まれています。",
       gettingStarted: "はじめに",
       postDownloaderTab: "投稿ダウンローダータブ",
       creatorDownloaderTab: "クリエイターダウンローダータブ",
@@ -478,7 +474,7 @@ const translations = {
       featureConcurrentDownloads: "동시 다운로드",
       featureConcurrentDownloadsDesc: "최적의 성능을 위해 동시 다운로드 수(1-10)를 조정합니다.",
       featureFileDeduplication: "파일 중복 제거",
-      featureFileDeduplicationDesc: "URL 해시를 사용하여 중복 다운로드��� 방지합니다.",
+      featureFileDeduplicationDesc: "URL 해시를 사용하여 중복 다운로드를 방지합니다.",
       featureImagePreviews: "이미지 미리보기",
       featureImagePreviewsDesc: "다운로드 전에 이미지를 미리 보고 콘텐츠를 확인합니다.",
       featureDetailedLogging: "상세 로깅",
@@ -490,8 +486,6 @@ const translations = {
       featureMediaPlaybackDesc: "내장된 재생 컨트롤로 비디오와 GIF를 미리 봅니다.",
       featureMultilingualSupport: "다국어 지원",
       featureMultilingualSupportDesc: "영어, 일본어, 한국어 언어를 동적으로 전환합니다.",
-      featureAutomaticUpdates: "자동 업데이트",
-      featureAutomaticUpdatesDesc: "시작 시 새 버전을 확인하고 선택적 알림을 제공합니다.",
       featureCustomizableSettings: "사용자 정의 설정",
       featureCustomizableSettingsDesc: "저장 디렉토리, 폴더 이름, 알림 및 테마를 원하는 대로 조정합니다.",
   
@@ -523,7 +517,7 @@ const translations = {
       // Usage
       usageTitle: "사용법",
       usageDescription:
-        '실행 시 "시작" 버튼이 있는 소개 화면이 표시됩니다. 클릭하면 <strong>게시물 다운로더</strong>, <strong>크리에이터 다운로더</strong>, <strong>설정</strong>, <strong>도움말</strong>의 네 가지 탭이 있는 메인 인터페이스로 들어갑니다. 앱 내 도움말 탭에는 포괄적인 사용자 매뉴얼이 포함되어 있습니다.',
+        '앱을 열면 곧바로 메인 인터페이스가 표시되며, <strong>크리에이터 다운로더</strong> 탭이 기본으로 선택됩니다. <strong>크리에이터 다운로더</strong>, <strong>게시물 다운로더</strong>, <strong>설정</strong>, <strong>도움말</strong>, <strong>브라우저 확장</strong>의 다섯 개 탭이 있습니다. 앱 내 도움말 탭에는 포괄적인 사용자 매뉴얼이 포함되어 있습니다.',
       gettingStarted: "시작하기",
       postDownloaderTab: "게시물 다운로더 탭",
       creatorDownloaderTab: "크리에이터 다운로더 탭",
@@ -695,8 +689,6 @@ const translations = {
       featureMediaPlaybackDesc: "使用内置播放控件预览视频和 GIF。",
       featureMultilingualSupport: "多语言支持",
       featureMultilingualSupportDesc: "动态切换英语、日语和韩语。",
-      featureAutomaticUpdates: "自动更新",
-      featureAutomaticUpdatesDesc: "在启动时检查新版本，并可选择通知。",
       featureCustomizableSettings: "可自定义设置",
       featureCustomizableSettingsDesc: "根据您的偏好定制保存目录、文件夹名称、通知和主题。",
   
@@ -719,7 +711,7 @@ const translations = {
   
       // Usage
       usageTitle: "使用",
-      usageDescription: "启动后，您将看到一个介绍屏幕，带有 \"Launch\" 按钮。点击它进入主界面，包含四个选项卡：<strong>Post Downloader</strong>、<strong>Creator Downloader</strong>、<strong>Settings</strong> 和 <strong>Help</strong>。应用程序内 Help 选项卡包含全面的用户手册。",
+      usageDescription: "打开后会直接进入主界面，默认选中<strong>创作者下载器</strong>选项卡。界面包含五个选项卡：<strong>创作者下载器</strong>、<strong>帖子下载器</strong>、<strong>设置</strong>、<strong>帮助</strong>和<strong>浏览器扩展</strong>。应用程序内 Help 选项卡包含全面的用户手册。",
       gettingStarted: "入门",
       usageStep1: "应用程序会在指定的保存位置创建默认目录（<code>Downloads</code>、<code>Cache</code>、<code>Other Files</code>）。",
       usageStep2: "确保有活跃的互联网连接来访问 Kemono.cr 和 Coomer.st 内容。",
