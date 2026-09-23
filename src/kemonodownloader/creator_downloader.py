@@ -109,6 +109,42 @@ def parse_filter_date(text):
         return None
 
 
+def resolve_creator_url(raw_url):
+    """Normalize a pasted URL for the Creator Downloader queue.
+
+    Returns a ``(creator_url, post_id)`` tuple:
+
+    * ``.../<service>/user/<id>``               -> (itself, None)
+    * ``.../<service>/user/<id>/post/<pid>``    -> (creator URL, "<pid>")
+    * anything else                             -> (raw_url, None)
+
+    Returning the input unchanged for unrecognized shapes lets the existing
+    URL validation report the error, rather than silently rewriting it.
+    """
+    if not isinstance(raw_url, str):
+        return raw_url, None
+    candidate = raw_url.strip().rstrip("/")
+    if not candidate:
+        return raw_url, None
+    try:
+        parsed = urlparse(candidate)
+        path = parsed.path.strip("/")
+    except ValueError:
+        return raw_url, None
+    if not path:
+        return raw_url, None
+
+    parts = path.split("/")
+    # Post URL: .../<service>/user/<creator_id>/post/<post_id>
+    if len(parts) >= 5 and parts[-2] == "post" and parts[-4] == "user":
+        post_id = parts[-1]
+        # Drop only the trailing "post/<post_id>" pair; keep ".../user/<id>".
+        creator_path = "/".join(parts[:-2])
+        creator_url = f"{parsed.scheme}://{parsed.netloc}/{creator_path}"
+        return creator_url, (post_id or None)
+    return candidate, None
+
+
 class ThreadSettings:
     """Settings container for thread operations"""
 
@@ -394,7 +430,7 @@ def _keyword_matches_text(keywords, text):
     """Case-insensitive whole-word match of any keyword in *text*,
     treating non-alphanumeric characters (including _, -, ., /, spaces,
     curly braces, etc.) as valid word boundaries (in addition to string
-    start/end).  No normalization is performed — the keyword must appear
+    start/end).  No normalization is performed 窶・the keyword must appear
     exactly (case-insensitive) as a whole word in the text.  This avoids
     false positives from camelCase splitting (e.g. 'sketch' will NOT match
     'SketchBook').  Shared by PostDetectionThread (post/title-level skip)
@@ -457,7 +493,7 @@ class PostDetectionThread(QThread):
             # Legacy default when the caller doesn't specify scopes at all.
             self.skip_keywords_scopes = {"title"}
         else:
-            # Respect the caller's exact selection — including an empty
+            # Respect the caller's exact selection 窶・including an empty
             # set, which means no scope is checked and therefore no
             # post should be skipped by keyword.
             self.skip_keywords_scopes = set(skip_keywords_scopes)
@@ -1963,7 +1999,7 @@ class CreatorDownloadThread(QThread):
             if "{post_id}" in template:
                 candidate = base_name
             else:
-                # Simple disk-existence check — append _1, _2, ... until
+                # Simple disk-existence check 窶・append _1, _2, ... until
                 # a free name is found. No marker files, no cross-session
                 # tracking; just a basic collision guard.
                 candidate = base_name
@@ -2603,7 +2639,7 @@ class CreatorDownloadThread(QThread):
                     file_url, folder, file_index, total_files, page_number
                 )
             except asyncio.CancelledError:
-                return  # finally still runs → task_done()
+                return  # finally still runs 竊・task_done()
             except Exception as e:
                 self._safe_emit(
                     self.log,
@@ -2755,112 +2791,6 @@ class CreatorDownloadThread(QThread):
         if self.is_running:
             self._safe_emit(self.finished)
 
-
-class ValidationThread(QThread):
-    result = pyqtSignal(bool)
-    log = pyqtSignal(str, str)
-
-    def __init__(self, url, settings):
-        super().__init__()
-        self.url = url
-        self.settings = settings
-        self.is_running = True
-        self.domain_config = get_domain_config(url)
-
-    def stop(self):
-        self.is_running = False
-
-    def run(self):
-        if not self.is_running:
-            return
-
-        self.url = self.url.rstrip("/")
-        parts = self.url.split("/")
-        if (
-            len(parts) < 5
-            or (self.domain_config["domain"] not in self.url)
-            or parts[-2] != "user"
-        ):
-            self.log.emit(
-                translate("log_error", translate("invalid_url_format_link", self.url)),
-                "ERROR",
-            )
-            self.result.emit(False)
-            return
-
-        max_retries = self.settings.api_request_max_retries
-        retry_delay = 2
-
-        for attempt in range(1, max_retries + 1):
-            try:
-                # Use fallback validation with robust headers
-                fallback_headers = {
-                    "User-Agent": get_user_agent(),
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                    "Accept-Language": accept_language,
-                    "Connection": "keep-alive",
-                    "Upgrade-Insecure-Requests": "1",
-                    "Cache-Control": "max-age=0",
-                    "Referer": self.domain_config["referer"],
-                }
-
-                direct_response = get_session(self.settings.settings_tab).get(
-                    self.url, headers=fallback_headers, timeout=10
-                )
-                domain_check = self.domain_config["domain"].split(".")[
-                    0
-                ]  # 'kemono' or 'coomer'
-                if (
-                    direct_response.status_code == 200
-                    and domain_check in direct_response.text.lower()
-                ):
-                    self.log.emit(
-                        translate(
-                            "log_info",
-                            translate("successfully_validated_url", self.url),
-                        ),
-                        "INFO",
-                    )
-                    self.result.emit(True)
-                    return
-
-                if attempt < max_retries:
-                    self.log.emit(
-                        translate(
-                            "log_warning",
-                            translate(
-                                "validation_attempt_failed", attempt, retry_delay
-                            ),
-                        ),
-                        "WARNING",
-                    )
-                    time.sleep(retry_delay)
-                    retry_delay *= 2  # Exponential backoff
-
-            except requests.RequestException as e:
-                if attempt < max_retries:
-
-                    self.log.emit(
-                        translate(
-                            "log_warning",
-                            translate("network_error_attempt", attempt, str(e)),
-                        ),
-                        "WARNING",
-                    )
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                else:
-                    self.log.emit(
-                        translate(
-                            "log_error",
-                            translate(
-                                "failed_to_validate", self.url, max_retries, str(e)
-                            ),
-                        ),
-                        "ERROR",
-                    )
-
-        self.result.emit(False)
 
 
 class CheckboxToggleThread(QThread):
@@ -3071,9 +3001,18 @@ class CreatorDownloaderTab(QWidget):
         self.current_page = 1
         self.total_pages = 1
         self.filtered_posts = []  # Cache of filtered posts for pagination
-        self.fast_mode = False
-        self._fast_mode_downloading = False
-        self._fast_mode_pending_urls: list[str] = []
+        # Sequential batch-download state. "Download" walks every creator
+        # currently in the queue, auto-downloading all of their posts
+        # before advancing to the next one.
+        self._batch_downloading = False
+        self._batch_pending_urls: list[str] = []
+        # Creator URL -> set of post ids requested via pasted post links. When a
+        # creator is queued from a post link, a batch run auto-selects only
+        # those posts instead of every post the creator has.
+        self._batch_post_ids: dict[str, set] = {}
+        # Set when a post-link selection still has to be applied to the filtered
+        # list once it has been rebuilt for display.
+        self._post_link_selection_pending = False
         self._pending_detection_summary = False
         self._last_detection_thread = None
         self._file_skip_count = 0
@@ -3107,20 +3046,30 @@ class CreatorDownloaderTab(QWidget):
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
 
-        # Creator URL input layout
-        creator_url_layout = QHBoxLayout()
-        self.creator_url_input = QLineEdit()
-        self.creator_url_input.setStyleSheet("padding: 5px; border-radius: 5px;")
-        creator_url_layout.addWidget(self.creator_url_input)
-
-        self.creator_add_to_queue_btn = QPushButton(
-            qta.icon("fa5s.plus", color="white"), ""
+        # URL input area: one URL per line. Both creator and post URLs are
+        # accepted 窶・post URLs are canonicalized to their parent creator.
+        self.creator_multi_url_input = QTextEdit()
+        self.creator_multi_url_input.setPlaceholderText(
+            translate("multi_url_placeholder_creator")
         )
-        self.creator_add_to_queue_btn.clicked.connect(self.add_creator_to_queue)
-        self.creator_add_to_queue_btn.setStyleSheet(
+        self.creator_multi_url_input.setStyleSheet(
+            "background: #2A3B5A; border-radius: 5px; padding: 5px; color: white;"
+        )
+        self.creator_multi_url_input.setFixedHeight(80)
+        left_layout.addWidget(self.creator_multi_url_input)
+
+        creator_url_layout = QHBoxLayout()
+        self.creator_multi_url_add_btn = QPushButton(
+            qta.icon("fa5s.layer-group", color="white"), ""
+        )
+        self.creator_multi_url_add_btn.clicked.connect(
+            self.add_multiple_creators_to_queue
+        )
+        self.creator_multi_url_add_btn.setStyleSheet(
             "background: #4A5B7A; padding: 5px; border-radius: 5px;"
         )
-        creator_url_layout.addWidget(self.creator_add_to_queue_btn)
+        self.creator_multi_url_add_btn.setToolTip(translate("add_all_to_queue"))
+        creator_url_layout.addWidget(self.creator_multi_url_add_btn)
 
         self.creator_add_from_file_btn = QPushButton(
             qta.icon("fa5s.file-import", color="white"), ""
@@ -3131,31 +3080,8 @@ class CreatorDownloaderTab(QWidget):
         )
         self.creator_add_from_file_btn.setToolTip(translate("add_links_from_file"))
         creator_url_layout.addWidget(self.creator_add_from_file_btn)
+        creator_url_layout.addStretch()
         left_layout.addLayout(creator_url_layout)
-
-        # Multi-URL input area
-        self.creator_multi_url_input = QTextEdit()
-        self.creator_multi_url_input.setPlaceholderText(
-            translate("multi_url_placeholder_creator")
-        )
-        self.creator_multi_url_input.setStyleSheet(
-            "background: #2A3B5A; border-radius: 5px; padding: 5px; color: white;"
-        )
-        self.creator_multi_url_input.setFixedHeight(80)
-        self.creator_multi_url_input.setVisible(False)
-        left_layout.addWidget(self.creator_multi_url_input)
-
-        self.creator_multi_url_add_btn = QPushButton(
-            qta.icon("fa5s.layer-group", color="white"), ""
-        )
-        self.creator_multi_url_add_btn.clicked.connect(
-            self.add_multiple_creators_to_queue
-        )
-        self.creator_multi_url_add_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px;"
-        )
-        self.creator_multi_url_add_btn.setVisible(False)
-        left_layout.addWidget(self.creator_multi_url_add_btn)
 
         # Creator Queue Group
         self.creator_queue_group = QGroupBox()
@@ -3191,29 +3117,6 @@ class CreatorDownloaderTab(QWidget):
         creator_categories_layout.addWidget(self.creator_content_check)
         creator_categories_layout.addStretch()
         creator_options_layout.addLayout(creator_categories_layout)
-
-        # Fast Mode row: icon checkbox + info button
-        creator_fast_mode_layout = QHBoxLayout()
-        creator_fast_mode_layout.setContentsMargins(0, 0, 0, 0)
-        self.creator_fast_mode_check = QCheckBox()
-        self.creator_fast_mode_check.setChecked(False)
-        self.creator_fast_mode_check.setIcon(qta.icon("fa5s.bolt", color="#FFD700"))
-        self.creator_fast_mode_check.setStyleSheet("color: white; font-weight: bold;")
-        self.creator_fast_mode_check.stateChanged.connect(self.toggle_fast_mode)
-        creator_fast_mode_layout.addWidget(self.creator_fast_mode_check)
-
-        self.creator_fast_mode_info_btn = QPushButton(
-            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
-        )
-        self.creator_fast_mode_info_btn.setFixedSize(26, 26)
-        self.creator_fast_mode_info_btn.setStyleSheet(
-            "background: #4A5B7A; border-radius: 5px;"
-        )
-        self.creator_fast_mode_info_btn.setToolTip(translate("fast_mode_info_title"))
-        self.creator_fast_mode_info_btn.clicked.connect(self.show_fast_mode_info)
-        creator_fast_mode_layout.addWidget(self.creator_fast_mode_info_btn)
-        creator_fast_mode_layout.addStretch()
-        creator_options_layout.addLayout(creator_fast_mode_layout)
 
         # Auto rename checkbox
         self.creator_auto_rename_check = QCheckBox()
@@ -3417,7 +3320,7 @@ class CreatorDownloaderTab(QWidget):
 
         post_list_layout.addLayout(skip_filter_layout)
 
-        # Skip scope toggles row — each toggle is independent (multi-select),
+        # Skip scope toggles row 窶・each toggle is independent (multi-select),
         # so a post is skipped if the keyword matches in ANY enabled scope.
         skip_scope_layout = QHBoxLayout()
         skip_scope_layout.setContentsMargins(0, 0, 0, 0)
@@ -3471,7 +3374,7 @@ class CreatorDownloaderTab(QWidget):
 
         post_list_layout.addLayout(file_skip_filter_layout)
 
-        # Post date range filter — "From"/"To" bounds (both optional,
+        # Post date range filter 窶・"From"/"To" bounds (both optional,
         # both inclusive). Filters by the post's own publish date, not
         # the import/scrape date.
         date_range_layout = QHBoxLayout()
@@ -3630,8 +3533,10 @@ class CreatorDownloaderTab(QWidget):
         self.update_ui_text()
 
     def update_ui_text(self):
-        self.creator_url_input.setPlaceholderText(translate("enter_creator_url"))
-        self.creator_add_to_queue_btn.setText(translate("add_to_queue"))
+        self.creator_multi_url_input.setPlaceholderText(
+            translate("multi_url_placeholder_creator")
+        )
+        self.creator_multi_url_add_btn.setToolTip(translate("add_all_to_queue"))
         self.creator_add_from_file_btn.setToolTip(translate("add_links_from_file"))
         self.creator_add_from_file_btn.setText(translate("add_links_from_file_title"))
 
@@ -3646,8 +3551,6 @@ class CreatorDownloaderTab(QWidget):
         self.creator_check_all.setText(translate("check_all"))
         self.creator_check_all_all.setText(translate("check_all_all"))
         self.creator_auto_rename_check.setText(translate("auto_rename"))
-        self.creator_fast_mode_check.setText(translate("fast_mode"))
-        self.creator_fast_mode_info_btn.setToolTip(translate("fast_mode_info_title"))
         if hasattr(self, "creator_skip_folder_info_btn"):
             self.creator_skip_folder_info_btn.setToolTip(
                 _t("skip_folder_info_title", "Skip Post Folder")
@@ -3740,48 +3643,16 @@ class CreatorDownloaderTab(QWidget):
             _t("skip_folder_info_title", "Skip Post Folder"),
             _t(
                 "skip_folder_info_text",
-                "When enabled, posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.\n\nFor example, if set to 1, single-image posts will not get their own folder — the image will be placed directly in the creator's folder.\n\nThis only applies when Folder Structure is set to 'Per-post folders'.\n\nThe archive icon toggle next to this button ignores compressed files (ZIP, 7z, RAR) when deciding whether to skip the post folder — those files will always be saved in their own post folder, even if Skip Post Folder would otherwise apply to that post.",
+                "When enabled, posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.\n\nFor example, if set to 1, single-image posts will not get their own folder 窶・the image will be placed directly in the creator's folder.\n\nThis only applies when Folder Structure is set to 'Per-post folders'.\n\nThe archive icon toggle next to this button ignores compressed files (ZIP, 7z, RAR) when deciding whether to skip the post folder 窶・those files will always be saved in their own post folder, even if Skip Post Folder would otherwise apply to that post.",
             ),
         )
 
-    def show_fast_mode_info(self):
-        """Show a dialog explaining what Fast Mode does."""
-        QMessageBox.information(
-            self,
-            translate("fast_mode_info_title"),
-            translate("fast_mode_info_text"),
-        )
-
-    def toggle_fast_mode(self, state):
-        """Toggle fast mode on/off. When on, disables manual options and enables auto-queue processing."""
-        self.fast_mode = state == 2  # Qt.CheckState.Checked
-        # Disable manual option controls when fast mode is on
-        self.creator_main_check.setEnabled(not self.fast_mode)
-        self.creator_attachments_check.setEnabled(not self.fast_mode)
-        self.creator_content_check.setEnabled(not self.fast_mode)
-        self.creator_auto_rename_check.setEnabled(not self.fast_mode)
-        self.creator_download_text_check.setEnabled(not self.fast_mode)
-        self.creator_check_all.setEnabled(not self.fast_mode)
-        self.creator_check_all_all.setEnabled(not self.fast_mode)
-
-        # Show/hide multi-URL batch input
-        self.creator_multi_url_input.setVisible(self.fast_mode)
-        self.creator_multi_url_add_btn.setVisible(self.fast_mode)
-
-        if self.fast_mode:
-            # Force check-all on
-            self.creator_check_all.setChecked(True)
-            self.creator_check_all_all.setChecked(True)
-            self.append_log_to_console(
-                translate("log_info", translate("fast_mode_enabled")), "INFO"
-            )
-        else:
-            self.append_log_to_console(
-                translate("log_info", translate("fast_mode_disabled")), "INFO"
-            )
-
     def add_multiple_creators_to_queue(self):
-        """Add multiple creator URLs from the multi-URL text area to the queue at once."""
+        """Add creator URLs from the multi-URL text area to the queue at once.
+
+        One URL per line. Post URLs are canonicalized to their parent
+        creator URL, so pasting either link shape does the same thing.
+        """
         text = self.creator_multi_url_input.toPlainText().strip()
         if not text:
             self.append_log_to_console(
@@ -3793,12 +3664,16 @@ class CreatorDownloaderTab(QWidget):
         added_count = 0
         skipped_count = 0
         invalid_count = 0
+        post_ids_changed = False
 
         for line in lines:
             url = line.strip()
             if not url:
                 continue
-            normalized_url = url.rstrip("/")
+            # Accept both creator and post URLs; post URLs collapse to the
+            # parent creator so the queue only ever holds creator URLs.
+            normalized_url, post_id = resolve_creator_url(url)
+            normalized_url = normalized_url.rstrip("/")
 
             # Validate URL format (same rules as ValidationThread)
             parts = normalized_url.split("/")
@@ -3818,79 +3693,29 @@ class CreatorDownloaderTab(QWidget):
                 )
                 continue
 
+            # A post link means "just this post"; accumulate them so several
+            # post links for one creator all get selected. A plain creator link
+            # means "everything", so it drops any earlier restriction.
+            if self._remember_batch_post_id(normalized_url, post_id):
+                post_ids_changed = True
+
             if any(
                 item[0].rstrip("/") == normalized_url for item in self.creator_queue
             ):
                 skipped_count += 1
                 continue
-            self.creator_queue.append((url, False))
+            self.creator_queue.append((normalized_url, False))
             added_count += 1
 
-        if added_count > 0:
+        if added_count > 0 or post_ids_changed:
             self.update_creator_queue_list()
+        if added_count > 0:
             self.creator_multi_url_input.clear()
 
         summary = translate("bulk_add_summary", added_count, skipped_count)
         if invalid_count:
             summary += f" ({invalid_count} invalid)"
         self.append_log_to_console(translate("log_info", summary), "INFO")
-
-    def add_creator_to_queue(self):
-        url = self.creator_url_input.text().strip()
-        if not url:
-            self.append_log_to_console(
-                translate("log_error", translate("no_url_entered")), "ERROR"
-            )
-            return
-        normalized_url = url.rstrip("/")
-        if any(item[0].rstrip("/") == normalized_url for item in self.creator_queue):
-            self.append_log_to_console(
-                translate("log_warning", translate("url_already_in_queue")), "WARNING"
-            )
-            return
-        if (
-            hasattr(self, "validation_thread")
-            and self.validation_thread is not None
-            and self.validation_thread.isRunning()
-        ):
-            self.append_log_to_console(
-                translate("log_warning", translate("validation_in_progress")), "WARNING"
-            )
-            return
-        self.background_task_label.setText(translate("validating_url"))
-        self.background_task_progress.setRange(0, 0)
-        self.validation_thread = ValidationThread(url, self._create_thread_settings())
-        self.validation_thread.result.connect(
-            lambda valid: self.on_validation_finished(url, valid)
-        )
-        self.validation_thread.log.connect(self.append_log_to_console)
-        self.validation_thread.finished.connect(self.cleanup_validation_thread)
-        self.active_threads.append(self.validation_thread)
-        self.validation_thread.start()
-
-    def cleanup_validation_thread(self):
-        """Clean up the validation thread after it finishes."""
-        if self.validation_thread in self.active_threads:
-            self.active_threads.remove(self.validation_thread)
-        if self.validation_thread:
-            self.validation_thread.deleteLater()
-            self.validation_thread = None
-
-    def on_validation_finished(self, url, valid):
-        self.background_task_progress.setRange(0, 100)
-        self.background_task_progress.setValue(0)
-        self.background_task_label.setText(translate("idle"))
-        if valid:
-            self.creator_queue.append((url, False))
-            self.update_creator_queue_list()
-            self.creator_url_input.clear()
-            self.append_log_to_console(
-                translate("log_info", translate("added_creator_url", url)), "INFO"
-            )
-        else:
-            self.append_log_to_console(
-                translate("log_error", translate("invalid_creator_url", url)), "ERROR"
-            )
 
     def create_view_handler(self, url, checked):
         def handler():
@@ -3914,6 +3739,7 @@ class CreatorDownloaderTab(QWidget):
                         found = True
                         break
                 if found:
+                    self._batch_post_ids.pop(url.rstrip("/"), None)
                     self.update_creator_queue_list()
                     self.append_log_to_console(
                         translate("log_info", translate("link_removed", url)), "INFO"
@@ -3953,7 +3779,14 @@ class CreatorDownloaderTab(QWidget):
             view_button.clicked.connect(self.create_view_handler(url, checked))
             layout.addWidget(view_button)
 
-            label = QLabel(url)
+            # Surface any post link(s) this creator was queued from, so it is
+            # visible that the post part was understood rather than dropped.
+            requested_post_ids = self._batch_post_ids.get(url.rstrip("/"))
+            label_text = url
+            if requested_post_ids:
+                ids = ", ".join(sorted(str(p) for p in requested_post_ids))
+                label_text = f"{url} ({translate('batch_post_link_tag', ids)})"
+            label = QLabel(label_text)
             label.setStyleSheet("color: white;")
             label.setAlignment(
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -3989,6 +3822,7 @@ class CreatorDownloaderTab(QWidget):
         self.current_creator_url = url
         self.checked_urls.clear()
         self.posts_to_download = []
+        self._post_link_selection_pending = False
         self.filtered_posts = []  # Clear filtered posts cache
         self.all_detected_posts = []  # Clear previous creator's posts
         self.post_url_map = {}  # Clear previous creator's post URL mapping
@@ -4026,7 +3860,7 @@ class CreatorDownloaderTab(QWidget):
         self.set_fetching_ui_state(True)
 
         # Read skip-keywords and scope directly from the inline UI widgets.
-        # Scope is a set of independently-toggled checkboxes now — a post is
+        # Scope is a set of independently-toggled checkboxes now 窶・a post is
         # skipped if the keyword matches in ANY enabled scope.
         raw_keywords = self.skip_keywords_edit.text().strip()
         skip_keywords = [kw.strip() for kw in raw_keywords.split(",") if kw.strip()] if raw_keywords else []
@@ -4170,13 +4004,13 @@ class CreatorDownloaderTab(QWidget):
     def set_fetching_ui_state(self, is_fetching):
         """Enable/disable UI elements during fetching.
 
-        When *disabling* (is_fetching=False) while a fast-mode batch
-        download is in progress, the call is skipped so that the
-        download-lock established by ``set_downloading_ui_state(True)``
-        stays in effect.
+        While a sequential batch download is in progress the unlock is
+        skipped, so the download-lock established by
+        ``set_downloading_ui_state(True)`` stays in effect for the whole
+        batch rather than flickering between creators.
         """
-        if not is_fetching and self._fast_mode_downloading:
-            # Keep everything locked — the download-state lock takes
+        if not is_fetching and self._batch_downloading:
+            # Keep everything locked 窶・the download-state lock takes
             # precedence over the fetching-state unlock.
             return
 
@@ -4185,8 +4019,8 @@ class CreatorDownloaderTab(QWidget):
         self.creator_cancel_btn.setEnabled(is_fetching)
 
         # Creator queue operations
-        self.creator_url_input.setEnabled(not is_fetching)
-        self.creator_add_to_queue_btn.setEnabled(not is_fetching)
+        self.creator_multi_url_input.setEnabled(not is_fetching)
+        self.creator_multi_url_add_btn.setEnabled(not is_fetching)
         self.creator_add_from_file_btn.setEnabled(not is_fetching)
         self.creator_queue_list.setEnabled(not is_fetching)
 
@@ -4226,10 +4060,7 @@ class CreatorDownloaderTab(QWidget):
         """Lock/unlock ALL UI controls during an active download.
 
         Only the Cancel button and Expand Logs remain enabled while
-        downloading.  When *unlocking* (is_downloading=False) and fast
-        mode is still active, controls that fast-mode locks (category
-        checkboxes, auto-rename, download-text, check-all) stay
-        disabled, and the multi-URL input stays read-only-visible.
+        downloading.
         """
         enabled = not is_downloading
 
@@ -4238,14 +4069,10 @@ class CreatorDownloaderTab(QWidget):
         self.creator_cancel_btn.setEnabled(is_downloading)
 
         # Queue input area
-        self.creator_url_input.setEnabled(enabled)
-        self.creator_add_to_queue_btn.setEnabled(enabled)
-        self.creator_add_from_file_btn.setEnabled(enabled)
-        self.creator_queue_list.setEnabled(enabled)
-
-        # Multi-URL fast mode inputs
         self.creator_multi_url_input.setEnabled(enabled)
         self.creator_multi_url_add_btn.setEnabled(enabled)
+        self.creator_add_from_file_btn.setEnabled(enabled)
+        self.creator_queue_list.setEnabled(enabled)
 
         # Category checkboxes
         self.creator_main_check.setEnabled(enabled)
@@ -4253,7 +4080,6 @@ class CreatorDownloaderTab(QWidget):
         self.creator_content_check.setEnabled(enabled)
 
         # Options
-        self.creator_fast_mode_check.setEnabled(enabled)
         self.creator_auto_rename_check.setEnabled(enabled)
         self.creator_download_text_check.setEnabled(enabled)
 
@@ -4296,21 +4122,6 @@ class CreatorDownloaderTab(QWidget):
             self._parent.status_label.setText(
                 translate("preparing_files") if is_downloading else translate("idle")
             )
-
-        # When re-enabling after download, respect fast-mode locks so
-        # that controls toggled off by fast mode stay disabled.
-        if enabled and self.fast_mode:
-            self.creator_main_check.setEnabled(False)
-            self.creator_attachments_check.setEnabled(False)
-            self.creator_content_check.setEnabled(False)
-            self.creator_auto_rename_check.setEnabled(False)
-            self.creator_download_text_check.setEnabled(False)
-            self.creator_skip_folder_check.setEnabled(False)
-            self.creator_skip_folder_combo.setEnabled(False)
-            if hasattr(self, "creator_force_compressed_folder_check"):
-                self.creator_force_compressed_folder_check.setEnabled(False)
-            self.creator_check_all.setEnabled(False)
-            self.creator_check_all_all.setEnabled(False)
 
     def prev_page(self):
         """Go to previous page"""
@@ -4415,9 +4226,20 @@ class CreatorDownloaderTab(QWidget):
         self.background_task_progress.setValue(0)
         self.background_task_label.setText(translate("idle"))
 
-        # Fast mode auto-download: select all posts and start download
-        if self._fast_mode_downloading:
-            self._fast_mode_auto_download()
+        # If this creator was queued from a post link, select that post as soon
+        # as its posts are loaded - not only during a batch download. The
+        # filtered list is rebuilt asynchronously, so flag it for
+        # on_filter_finished to re-apply (and reveal the page the post is on)
+        # once the rows actually exist.
+        self._post_link_selection_pending = bool(
+            self._batch_post_ids.get((self.current_creator_url or "").rstrip("/"))
+        )
+        if self._post_link_selection_pending:
+            self._apply_post_link_selection()
+
+        # Batch auto-download: select all posts and start download
+        if self._batch_downloading:
+            self._batch_auto_download()
 
     def on_post_detection_error(self, error_message):
         self.append_log_to_console(translate("log_error", error_message), "ERROR")
@@ -4454,134 +4276,105 @@ class CreatorDownloaderTab(QWidget):
             )
             return
 
-        # Fast mode: auto-detect and download all creators in queue
-        if self.fast_mode:
-            self._fast_mode_pending_urls = [url for url, _ in self.creator_queue]
-            self._fast_mode_downloading = True
-            self.downloading = True
-            self.set_downloading_ui_state(True)
-            self.append_log_to_console(
-                translate(
-                    "log_info",
-                    translate(
-                        "fast_mode_batch_start",
-                        len(self._fast_mode_pending_urls),
-                    ),
-                ),
-                "INFO",
-            )
-            self._fast_mode_process_next()
-            return
-
-        if not self.posts_to_download:
-            self.append_log_to_console(
-                translate("log_warning", translate("no_posts_selected")), "WARNING"
-            )
-            return
-
+        # Batch mode: walk the queue, auto-detecting and downloading all
+        # posts for each queued creator in turn.
+        self._batch_pending_urls = [url for url, _ in self.creator_queue]
+        self._batch_downloading = True
         self.downloading = True
         self.set_downloading_ui_state(True)
-        if self._parent and hasattr(self._parent, "status_label"):
-            self._parent.status_label.setText(translate("preparing_files"))
-        self.creator_download_btn.setEnabled(False)
-        self.creator_cancel_btn.setEnabled(True)
-        self.creator_overall_progress.setValue(0)
-        self.total_posts_to_download = len(self.posts_to_download)
-        self.completed_posts.clear()
-        self.completed_files.clear()
-        self.total_files_to_download = 0
-        self.creator_overall_progress_label.setText(
-            translate("overall_progress", 0, 0, 0, self.total_posts_to_download)
-        )
-        self.current_file_index = -1
-        self.creator_file_progress.setValue(0)
-        self.creator_file_progress_label.setText(translate("file_progress", 0))
-        self.update_progress_bar_style()
-
-        self.background_task_label.setText(translate("preparing_files"))
-        self.background_task_progress.setRange(0, 100)
-        self.background_task_progress.setValue(0)
-
-        if not self.current_creator_url:
-            self.append_log_to_console(
-                translate("log_warning", translate("no_creator_viewed")), "WARNING"
-            )
-            self.creator_download_finished()
-            return
-        urls = [self.current_creator_url]
         self.append_log_to_console(
             translate(
                 "log_info",
-                translate("preparing_files_creator", self.current_creator_url),
+                translate(
+                    "batch_download_start",
+                    len(self._batch_pending_urls),
+                ),
             ),
             "INFO",
         )
+        self._batch_process_next()
 
-        self.append_log_to_console(
-            translate(
-                "log_info", translate("posts_to_download_num", self.posts_to_download)
-            ),
-            "INFO",
-        )
-        self.prepare_files_for_download(urls)
-
-    def _fast_mode_process_next(self):
-        """Process the next creator URL in the fast mode queue."""
-        if not self._fast_mode_pending_urls:
-            self._fast_mode_downloading = False
+    def _batch_process_next(self):
+        """Process the next creator URL in the batch queue."""
+        if not self._batch_pending_urls:
+            self._batch_downloading = False
             self.append_log_to_console(
-                translate("log_info", translate("fast_mode_batch_complete")),
+                translate("log_info", translate("batch_download_complete")),
                 "INFO",
             )
             self.downloading = False
             self.set_downloading_ui_state(False)
             return
 
-        url = self._fast_mode_pending_urls.pop(0)
-        remaining = len(self._fast_mode_pending_urls)
+        url = self._batch_pending_urls.pop(0)
+        remaining = len(self._batch_pending_urls)
         self.append_log_to_console(
             translate(
                 "log_info",
-                translate("fast_mode_processing_creator", url, remaining),
+                translate("batch_processing_creator", url, remaining),
             ),
             "INFO",
         )
-        # This triggers post detection → on_post_population_finished
-        # which will call _fast_mode_auto_download when _fast_mode_downloading is True
+        # This triggers post detection 竊・on_post_population_finished
+        # which will call _batch_auto_download when _batch_downloading is True
         self.check_creator_from_queue(url)
 
-    def _fast_mode_auto_download(self):
-        """Called after post population in fast-mode to auto-select all and download."""
+    def _batch_auto_download(self):
+        """Called after post population in a batch run to auto-select posts and download."""
         if not self.current_creator_url:
             self.append_log_to_console(
                 translate("log_warning", translate("no_creator_viewed")), "WARNING"
             )
-            self._fast_mode_process_next()
+            self._batch_process_next()
             return
 
         if not self.all_detected_posts:
             self.append_log_to_console(
                 translate(
                     "log_warning",
-                    translate("fast_mode_no_posts_found", self.current_creator_url),
+                    translate("batch_no_posts_found", self.current_creator_url),
                 ),
                 "WARNING",
             )
-            self._fast_mode_remove_creator_url(self.current_creator_url)
-            self._fast_mode_process_next()
+            self._batch_remove_creator_url(self.current_creator_url)
+            self._batch_process_next()
             return
 
-        # Auto-select ALL posts
-        for post_title, (post_id, thumbnail_url) in self.all_detected_posts:
-            self.checked_urls[post_id] = True
-        self.posts_to_download = [
-            post_id for _, (post_id, _) in self.all_detected_posts
-        ]
+        # Auto-select posts. If this creator was queued from a post link, only
+        # the requested post(s) are selected; otherwise all detected posts are.
+        requested_post_ids = self._batch_post_ids.get(
+            (self.current_creator_url or "").rstrip("/")
+        )
+        if requested_post_ids:
+            if not self._apply_post_link_selection():
+                self.append_log_to_console(
+                    translate(
+                        "log_warning",
+                        translate(
+                            "batch_post_link_not_found",
+                            self.current_creator_url,
+                        ),
+                    ),
+                    "WARNING",
+                )
+                self._batch_remove_creator_url(self.current_creator_url)
+                self._batch_process_next()
+                return
+        else:
+            # Auto-select ALL posts
+            for post_title, (post_id, thumbnail_url) in self.all_detected_posts:
+                self.checked_urls[post_id] = True
+            self.posts_to_download = [
+                post_id for _, (post_id, _) in self.all_detected_posts
+            ]
+            self._sync_filtered_posts_checked()
+        self.display_current_page()
+        self.update_check_all_state()
         self.append_log_to_console(
             translate(
                 "log_info",
                 translate(
-                    "fast_mode_auto_selected",
+                    "batch_auto_selected",
                     len(self.posts_to_download),
                     self.current_creator_url,
                 ),
@@ -4620,6 +4413,73 @@ class CreatorDownloaderTab(QWidget):
             "INFO",
         )
         self.prepare_files_for_download(urls)
+
+    def _remember_batch_post_id(self, creator_url, post_id):
+        """Record (or clear) the post-link restriction for a creator URL.
+
+        A post id adds to the set for that creator; passing ``None`` clears the
+        restriction, because a plain creator link means "all posts". Returns
+        True when the stored state actually changed.
+        """
+        creator_url = (creator_url or "").rstrip("/")
+        if post_id:
+            known_post_ids = self._batch_post_ids.setdefault(creator_url, set())
+            if str(post_id) not in known_post_ids:
+                known_post_ids.add(str(post_id))
+                return True
+            return False
+        return self._batch_post_ids.pop(creator_url, None) is not None
+
+    def _apply_post_link_selection(self):
+        """Apply this creator's post-link restriction, if any.
+
+        Marks the requested posts checked, re-stamps the cached rows and moves
+        to the page holding the first requested post. Idempotent and does not
+        render, so it is safe to re-apply after the post list is rebuilt.
+        Returns the selected post ids (empty list when nothing matched).
+        """
+        requested_post_ids = self._batch_post_ids.get(
+            (self.current_creator_url or "").rstrip("/")
+        )
+        if not requested_post_ids:
+            return []
+        matching = [
+            post_id
+            for _title, (post_id, _thumb) in self.all_detected_posts
+            if str(post_id) in requested_post_ids
+        ]
+        for post_id in matching:
+            self.checked_urls[post_id] = True
+        self.posts_to_download = matching
+        self._sync_filtered_posts_checked()
+        self._goto_page_for_post_ids(requested_post_ids)
+        return matching
+
+    def _sync_filtered_posts_checked(self):
+        """Re-stamp the cached rows' checked flag from checked_urls.
+
+        Each row renders its checkbox from the cached tuple, so updating
+        checked_urls alone does not change what the user sees.
+        """
+        self.filtered_posts = [
+            (
+                title,
+                post_id,
+                thumbnail_url,
+                self.checked_urls.get(post_id, is_checked),
+            )
+            for title, post_id, thumbnail_url, is_checked in self.filtered_posts
+        ]
+
+    def _goto_page_for_post_ids(self, post_ids):
+        """Move to the page containing the first of the given post ids."""
+        wanted = {str(post_id) for post_id in post_ids}
+        for index, (_title, post_id, _thumb, _checked) in enumerate(
+            self.filtered_posts
+        ):
+            if str(post_id) in wanted:
+                self.current_page = index // self.posts_per_page + 1
+                return
 
     def prepare_files_for_download(self, urls):
         if (
@@ -4845,7 +4705,7 @@ class CreatorDownloaderTab(QWidget):
             )
 
         # Ensure the native thread has fully exited before we let the object
-        # be garbage-collected — otherwise Qt prints
+        # be garbage-collected 窶・otherwise Qt prints
         # "QThread: Destroyed while thread is still running" and crashes.
         try:
             if thread.isRunning():
@@ -4916,9 +4776,10 @@ class CreatorDownloaderTab(QWidget):
             )
 
     def cancel_creator_download(self):
-        # Stop fast-mode processing loop
-        self._fast_mode_downloading = False
-        self._fast_mode_pending_urls.clear()
+        # Stop the batch processing loop
+        self._batch_downloading = False
+        self._batch_pending_urls.clear()
+        self._batch_post_ids.clear()
 
         if not self.active_threads:
             self.append_log_to_console(
@@ -4980,7 +4841,7 @@ class CreatorDownloaderTab(QWidget):
             self.background_task_progress.setRange(0, 0)
 
             # Start cancellation thread to handle cleanup.
-            # Store separately — do NOT add to active_threads because
+            # Store separately 窶・do NOT add to active_threads because
             # on_cancellation_finished deletes everything in that list
             # and deleting the CancellationThread while its system thread
             # is still tearing down causes "Destroyed while running".
@@ -5031,8 +4892,9 @@ class CreatorDownloaderTab(QWidget):
         self.creator_file_progress_label.setText(translate("downloads_terminated"))
         self.creator_overall_progress_label.setText(translate("downloads_terminated"))
         self.downloading = False
-        self._fast_mode_downloading = False
-        self._fast_mode_pending_urls.clear()
+        self._batch_downloading = False
+        self._batch_pending_urls.clear()
+        self._batch_post_ids.clear()
         self.set_downloading_ui_state(False)
         self.total_files_to_download = 0
         self.completed_files.clear()
@@ -5149,9 +5011,10 @@ class CreatorDownloaderTab(QWidget):
                 )
             )
 
-    def _fast_mode_remove_creator_url(self, url: str) -> None:
-        """In fast mode, remove a single completed creator URL from the queue."""
+    def _batch_remove_creator_url(self, url: str) -> None:
+        """Remove a single completed creator URL from the queue during a batch run."""
         normalized = url.rstrip("/")
+        self._batch_post_ids.pop(normalized, None)
         before_len = len(self.creator_queue)
         self.creator_queue = [
             (u, c) for u, c in self.creator_queue if u.rstrip("/") != normalized
@@ -5161,7 +5024,7 @@ class CreatorDownloaderTab(QWidget):
             self.append_log_to_console(
                 translate(
                     "log_info",
-                    translate("fast_mode_removed_creator", url),
+                    translate("batch_removed_creator", url),
                 ),
                 "INFO",
             )
@@ -5174,13 +5037,13 @@ class CreatorDownloaderTab(QWidget):
         )
         self.update_overall_progress()
 
-        # Fast mode: remove creator from queue once all its posts complete
-        if self.fast_mode and self.current_creator_url:
+        # Batch run: remove creator from queue once all its posts complete
+        if self._batch_downloading and self.current_creator_url:
             if (
                 len(self.completed_posts) >= self.total_posts_to_download
                 and self.total_posts_to_download > 0
             ):
-                self._fast_mode_remove_creator_url(self.current_creator_url)
+                self._batch_remove_creator_url(self.current_creator_url)
 
         if len(
             self.completed_posts
@@ -5247,9 +5110,9 @@ class CreatorDownloaderTab(QWidget):
         self.creator_file_progress_label.setText(translate("downloads_complete"))
         self.creator_overall_progress_label.setText(translate("downloads_complete"))
 
-        # Fast mode: safety-net removal (item should already be gone)
-        if self.fast_mode and self.current_creator_url:
-            self._fast_mode_remove_creator_url(self.current_creator_url)
+        # Batch run: safety-net removal (item should already be gone)
+        if self._batch_downloading and self.current_creator_url:
+            self._batch_remove_creator_url(self.current_creator_url)
 
         self.total_files_to_download = 0
         self.completed_files.clear()
@@ -5266,12 +5129,12 @@ class CreatorDownloaderTab(QWidget):
         self.checkbox_toggle_thread = None
         self.validation_thread = None
 
-        # Fast mode: advance to the next creator in the queue
-        if self._fast_mode_downloading:
-            self._fast_mode_process_next()
+        # Batch run: advance to the next creator in the queue
+        if self._batch_downloading:
+            self._batch_process_next()
             return
 
-        # Normal mode: fully restore UI
+        # Single-creator run: fully restore UI
         self.set_downloading_ui_state(False)
 
     def show_skip_keywords_help(self):
@@ -5285,12 +5148,12 @@ class CreatorDownloaderTab(QWidget):
                 "matching any keyword (case-insensitive, whole word) are "
                 "excluded entirely.\n\n"
                 "Use the 'Filter By' checkboxes to choose which fields are "
-                "checked. Any combination can be enabled at once — a post is "
+                "checked. Any combination can be enabled at once 窶・a post is "
                 "skipped if the keyword matches in ANY enabled field:\n"
-                "  • Title — checks the post title\n"
-                "  • Filenames — checks the main file and attachment names\n"
-                "  • Description — checks the post body text\n"
-                "  • Tags — checks the post's tags\n\n"
+                "  窶｢ Title 窶・checks the post title\n"
+                "  窶｢ Filenames 窶・checks the main file and attachment names\n"
+                "  窶｢ Description 窶・checks the post body text\n"
+                "  窶｢ Tags 窶・checks the post's tags\n\n"
                 "Matching is case-insensitive and whole-word. For example, "
                 "'sketch' matches 'Sketch' but not 'SketchBook'. To match "
                 "multiple variations, enter them as separate keywords: "
@@ -5308,7 +5171,7 @@ class CreatorDownloaderTab(QWidget):
                 "skip_files_keywords_help_text",
                 "Comma-separated keywords (e.g. JP, ZH). Individual files "
                 "matching any keyword (case-insensitive, whole word) are "
-                "excluded from download. Only the matched file is skipped — "
+                "excluded from download. Only the matched file is skipped 窶・"
                 "never the whole post. Independent from 'Skip Posts "
                 "Containing' above. Leave blank to disable.",
             ),
@@ -5323,7 +5186,7 @@ class CreatorDownloaderTab(QWidget):
                 "date_filter_help_text",
                 "Filter posts by their own publish date (not the date they "
                 "were imported/scraped). Enter dates as YYYY-MM-DD in "
-                "'From' and/or 'To' — both bounds are inclusive and both "
+                "'From' and/or 'To' 窶・both bounds are inclusive and both "
                 "are optional; leave either blank to disable that bound. "
                 "Posts with an unknown publish date are always kept.",
             ),
@@ -5530,6 +5393,15 @@ class CreatorDownloaderTab(QWidget):
         if self.current_page > self.total_pages:
             self.current_page = 1
 
+        # FilterThread snapshots checked_urls when it starts, so the rows it
+        # produces can miss a selection made while it was running (batch
+        # auto-select). Re-stamp from the live checked_urls and re-apply any
+        # post-link restriction before rendering, so the choice always shows.
+        self._sync_filtered_posts_checked()
+        if self._post_link_selection_pending:
+            self._post_link_selection_pending = False
+            self._apply_post_link_selection()
+
         # Display current page
         self.display_current_page()
 
@@ -5546,8 +5418,8 @@ class CreatorDownloaderTab(QWidget):
             "INFO",
         )
 
-        # Emit skip-keywords summary INFO lines LAST — after all detection,
-        # population, and filtering logs are done — so they appear at the
+        # Emit skip-keywords summary INFO lines LAST 窶・after all detection,
+        # population, and filtering logs are done 窶・so they appear at the
         # very end of the log.
         if getattr(self, "_pending_detection_summary", False):
             self._pending_detection_summary = False
@@ -5825,11 +5697,18 @@ class CreatorDownloaderTab(QWidget):
                 if not original_url:
                     continue
 
+                # Accept both creator and post URLs; post URLs collapse to the
+                # parent creator so the queue only ever holds creator URLs and
+                # a post link can drive the post-link auto-select.
+                normalized_url, post_id = resolve_creator_url(original_url)
+                normalized_url = normalized_url.rstrip("/")
+
                 # Skip if already in queue
-                normalized_url = original_url.rstrip("/")
                 if any(
                     item[0].rstrip("/") == normalized_url for item in self.creator_queue
                 ):
+                    # Still remember a post link for an already-queued creator.
+                    self._remember_batch_post_id(normalized_url, post_id)
                     self.append_log_to_console(
                         translate(
                             "log_warning",
@@ -5852,7 +5731,8 @@ class CreatorDownloaderTab(QWidget):
                         and (domain_config["domain"] in url)
                         and parts[-2] == "user"
                     ):
-                        self.creator_queue.append((original_url, False))
+                        self._remember_batch_post_id(normalized_url, post_id)
+                        self.creator_queue.append((normalized_url, False))
                         added_count += 1
                         self.append_log_to_console(
                             translate(

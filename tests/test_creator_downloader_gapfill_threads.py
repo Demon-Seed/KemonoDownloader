@@ -683,60 +683,6 @@ def test_download_worker_handles_cancellederror_from_download_file():
     asyncio.run(main())
 
 
-def test_validation_thread_stop_and_early_run_return():
-    settings = SimpleNamespace(api_request_max_retries=1, settings_tab=None)
-    t = cd.ValidationThread("https://kemono.cr/fanbox/user/1", settings)
-    t.stop()
-    t.run()
-    assert t.is_running is False
-
-
-def test_validation_thread_non_200_retry_branch(monkeypatch):
-    class Resp:
-        status_code = 500
-        text = ""
-
-    monkeypatch.setattr(
-        cd,
-        "get_session",
-        lambda *a, **k: SimpleNamespace(get=lambda *aa, **kk: Resp()),
-    )
-    monkeypatch.setattr(cd.time, "sleep", lambda _s: None)
-
-    settings = SimpleNamespace(api_request_max_retries=2, settings_tab=None)
-    t = cd.ValidationThread("https://kemono.cr/fanbox/user/1", settings)
-    t.log = SimpleNamespace(emit=lambda *a, **k: None)
-    out = []
-    t.result = SimpleNamespace(emit=lambda ok: out.append(ok))
-
-    t.run()
-
-    assert out == [False]
-
-
-def test_validation_thread_request_exception_retry_branch(monkeypatch):
-    monkeypatch.setattr(
-        cd,
-        "get_session",
-        lambda *a, **k: SimpleNamespace(
-            get=lambda *aa, **kk: (_ for _ in ()).throw(
-                cd.requests.RequestException("net")
-            )
-        ),
-    )
-    monkeypatch.setattr(cd.time, "sleep", lambda _s: None)
-
-    settings = SimpleNamespace(api_request_max_retries=2, settings_tab=None)
-    t = cd.ValidationThread("https://kemono.cr/fanbox/user/1", settings)
-    t.log = SimpleNamespace(emit=lambda *a, **k: None)
-    out = []
-    t.result = SimpleNamespace(emit=lambda ok: out.append(ok))
-
-    t.run()
-
-    assert out == [False]
-
-
 def test_checkbox_toggle_thread_stop_and_early_return():
     t = cd.CheckboxToggleThread([], {}, 2)
     t.stop()

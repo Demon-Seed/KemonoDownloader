@@ -51,27 +51,11 @@ def test_create_remove_handler_removes_url(monkeypatch, tmp_path):
     assert all(item[0] != url for item in tab.creator_queue)
 
 
-def test_add_creator_to_queue_validates_and_adds(monkeypatch, tmp_path):
+def test_add_multiple_creators_to_queue_validates_and_adds(monkeypatch, tmp_path):
     parent = make_parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
 
-    # Fake ValidationThread to immediately emit a successful result
-    class FakeVal:
-        def __init__(self, url, settings):
-            self.result = SimpleNamespace(connect=lambda cb: setattr(self, "_cb", cb))
-            self.log = SimpleNamespace(connect=lambda cb: None)
-            self.finished = SimpleNamespace(connect=lambda cb: None)
-
-        def start(self):
-            # call the connected callback to simulate result True
-            try:
-                self._cb(True)
-            except Exception:
-                pass
-
-    monkeypatch.setattr(cd, "ValidationThread", FakeVal)
-
     url = "https://kemono.cr/user/abc"
-    tab.creator_url_input.setText(url)
-    tab.add_creator_to_queue()
+    tab.creator_multi_url_input.setPlainText(url)
+    tab.add_multiple_creators_to_queue()
     assert any(u for u, _ in tab.creator_queue if u == url)

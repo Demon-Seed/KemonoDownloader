@@ -63,20 +63,20 @@ def make_tab(tmp_path):
     return cd.CreatorDownloaderTab(make_parent(tmp_path))
 
 
-def test_fast_mode_process_next_with_pending_calls_check_creator(tmp_path):
+def test_batch_process_next_with_pending_calls_check_creator(tmp_path):
     tab = make_tab(tmp_path)
-    tab._fast_mode_pending_urls = ["https://kemono.cr/fanbox/user/1", "u2"]
+    tab._batch_pending_urls = ["https://kemono.cr/fanbox/user/1", "u2"]
 
     called = []
     tab.check_creator_from_queue = lambda url: called.append(url)
 
-    tab._fast_mode_process_next()
+    tab._batch_process_next()
 
     assert called == ["https://kemono.cr/fanbox/user/1"]
-    assert tab._fast_mode_pending_urls == ["u2"]
+    assert tab._batch_pending_urls == ["u2"]
 
 
-def test_fast_mode_auto_download_with_posts_prepares_files(tmp_path):
+def test_batch_auto_download_with_posts_prepares_files(tmp_path):
     tab = make_tab(tmp_path)
     tab.current_creator_url = "https://kemono.cr/fanbox/user/1"
     tab.all_detected_posts = [("Post A", ("101", None)), ("Post B", ("102", None))]
@@ -84,7 +84,7 @@ def test_fast_mode_auto_download_with_posts_prepares_files(tmp_path):
     prepared = []
     tab.prepare_files_for_download = lambda urls: prepared.append(urls)
 
-    tab._fast_mode_auto_download()
+    tab._batch_auto_download()
 
     assert tab.checked_urls["101"] is True
     assert tab.checked_urls["102"] is True
@@ -297,8 +297,8 @@ def test_on_cancellation_finished_runtimeerror_branch(tmp_path):
     tab.active_threads = [BadDeleteThread()]
     tab._cancellation_thread = CancelThread()
     tab.downloading = True
-    tab._fast_mode_downloading = True
-    tab._fast_mode_pending_urls = ["u1"]
+    tab._batch_downloading = True
+    tab._batch_pending_urls = ["u1"]
     tab.total_files_to_download = 2
     tab.completed_files = {"a"}
     tab.failed_files = {"b": "err"}
@@ -308,5 +308,5 @@ def test_on_cancellation_finished_runtimeerror_branch(tmp_path):
 
     assert tab._cancellation_thread is None
     assert tab.downloading is False
-    assert tab._fast_mode_downloading is False
-    assert tab._fast_mode_pending_urls == []
+    assert tab._batch_downloading is False
+    assert tab._batch_pending_urls == []

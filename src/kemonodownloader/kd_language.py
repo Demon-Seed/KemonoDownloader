@@ -3771,7 +3771,58 @@ class KDLanguage:
                 "korean": "{0}의 체크박스가 {1}으로 전환됨, checked_urls 수: {2}",
                 "chinese-simplified": "{0} 的复选框切换到 {1}，checked_urls 数量: {2}",
             },
-            # ── Fast Mode & Multi-URL translations ──
+            # ── Multi-URL & sequential batch download translations ──
+            "batch_download_start": {
+                "english": "Starting batch download for {0} creator(s) in queue.",
+                "japanese": "キュー内の{0}人のクリエイターの一括ダウンロードを開始します。",
+                "korean": "큐에 있는 {0}명의 크리에이터 일괄 다운로드를 시작합니다.",
+                "chinese-simplified": "开始批量下载队列中的 {0} 个创作者。",
+            },
+            "batch_download_complete": {
+                "english": "Batch download complete.",
+                "japanese": "一括ダウンロードが完了しました。",
+                "korean": "일괄 다운로드가 완료되었습니다.",
+                "chinese-simplified": "批量下载完成。",
+            },
+            "batch_processing_creator": {
+                "english": "Processing creator {0} ({1} remaining).",
+                "japanese": "クリエイター {0} を処理中（残り {1} 件）。",
+                "korean": "크리에이터 {0} 처리 중 (나머지 {1}개).",
+                "chinese-simplified": "正在处理创作者 {0}（剩余 {1} 个）。",
+            },
+            "batch_no_posts_found": {
+                "english": "No posts found for creator {0}, skipping.",
+                "japanese": "クリエイター {0} の投稿が見つかりません。スキップします。",
+                "korean": "크리에이터 {0}의 게시물을 찾을 수 없습니다. 건너뜁니다.",
+                "chinese-simplified": "未找到创作者 {0} 的帖子，跳过。",
+            },
+            "batch_auto_selected": {
+                "english": "Auto-selected {0} post(s) for {1}.",
+                "japanese": "{1} の {0} 件の投稿を自動選択しました。",
+                "korean": "{1}에 대해 {0}개의 게시물을 자동 선택했습니다.",
+                "chinese-simplified": "为 {1} 自动选择了 {0} 个帖子。",
+            },
+            "batch_removed_creator": {
+                "english": "Removed completed creator {0} from queue.",
+                "japanese": "完了したクリエイター {0} をキューから削除しました。",
+                "korean": "완료된 크리에이터 {0}을(를) 큐에서 제거했습니다.",
+                "chinese-simplified": "已从队列中移除已完成的创作者 {0}。",
+            },
+            "batch_post_link_not_found": {
+                "english": "Post link(s) for {0} matched no available post; skipping.",
+                "japanese": "{0} の投稿リンクに一致する投稿が見つかりません。スキップします。",
+                "korean": "{0}의 게시물 링크와 일치하는 게시물이 없습니다. 건너뜁니다.",
+                "chinese-simplified": "{0} 的帖子链接未匹配到任何可用帖子，跳过。",
+            },
+            "batch_post_link_tag": {
+                "english": "post {0}",
+                "japanese": "投稿 {0}",
+                "korean": "게시물 {0}",
+                "chinese-simplified": "帖子 {0}",
+            },
+            # ── Fast Mode translations (Post Downloader only) ──
+            # The Creator Downloader no longer has Fast Mode; these keys are
+            # still consumed by post_downloader.py.
             "fast_mode": {
                 "english": "Fast Mode",
                 "japanese": "高速モード",
@@ -3857,42 +3908,6 @@ class KDLanguage:
                 "korean": "빠른 모드: 완료된 {0}개의 게시물을 큐에서 제거했습니다.",
                 "chinese-simplified": "快速模式：已从队列中移除 {0} 个已完成的帖子。",
             },
-            "fast_mode_removed_creator": {
-                "english": "Fast Mode: removed completed creator {0} from queue.",
-                "japanese": "高速モード: 完了したクリエイター {0} をキューから削除しました。",
-                "korean": "빠른 모드: 완료된 크리에이터 {0}을(를) 큐에서 제거했습니다.",
-                "chinese-simplified": "快速模式：已从队列中移除已完成的创作者 {0}。",
-            },
-            "fast_mode_batch_start": {
-                "english": "Fast Mode: starting batch download for {0} creator(s).",
-                "japanese": "高速モード: {0}人のクリエイターの一括ダウンロードを開始します。",
-                "korean": "빠른 모드: {0}명의 크리에이터 일괄 다운로드를 시작합니다.",
-                "chinese-simplified": "快速模式：开始批量下载 {0} 个创作者。",
-            },
-            "fast_mode_batch_complete": {
-                "english": "Fast Mode: batch download complete.",
-                "japanese": "高速モード: 一括ダウンロードが完了しました。",
-                "korean": "빠른 모드: 일괄 다운로드가 완료되었습니다.",
-                "chinese-simplified": "快速模式：批量下载完成。",
-            },
-            "fast_mode_processing_creator": {
-                "english": "Fast Mode: processing creator {0} ({1} remaining).",
-                "japanese": "高速モード: クリエイター {0} を処理中（残り {1} 件）。",
-                "korean": "빠른 모드: 크리에이터 {0} 처리 중 (나머지 {1}개).",
-                "chinese-simplified": "快速模式：正在处理创作者 {0}（剩余 {1} 个）。",
-            },
-            "fast_mode_no_posts_found": {
-                "english": "Fast Mode: no posts found for creator {0}, skipping.",
-                "japanese": "高速モード: クリエイター {0} の投稿が見つかりません。スキップします。",
-                "korean": "빠른 모드: 크리에이터 {0}의 게시물을 찾을 수 없습니다. 건너뜁니다.",
-                "chinese-simplified": "快速模式：未找到创作者 {0} 的帖子，跳过。",
-            },
-            "fast_mode_auto_selected": {
-                "english": "Fast Mode: auto-selected {0} post(s) for {1}.",
-                "japanese": "高速モード: {1} の {0} 件の投稿を自動選択しました。",
-                "korean": "빠른 모드: {1}에 대해 {0}개의 게시물을 자동 선택했습니다.",
-                "chinese-simplified": "快速模式：为 {1} 自动选择了 {0} 个帖子。",
-            },
             "multi_url_placeholder": {
                 "english": "Paste multiple post URLs here, one per line…",
                 "japanese": "複数の投稿URLをここに貼り付けてください（1行に1つ）…",
@@ -3900,10 +3915,10 @@ class KDLanguage:
                 "chinese-simplified": "在此粘贴多个帖子URL，每行一个…",
             },
             "multi_url_placeholder_creator": {
-                "english": "Paste multiple creator URLs here, one per line…",
-                "japanese": "複数のクリエイターURLをここに貼り付けてください（1行に1つ）…",
-                "korean": "여기에 여러 크리에이터 URL을 붙여넣으세요 (한 줄에 하나)…",
-                "chinese-simplified": "在此粘贴多个创作者URL，每行一个…",
+                "english": "Paste creator or post URLs here, one per line…",
+                "japanese": "クリエイターまたは投稿のURLをここに貼り付けてください（1行に1つ）…",
+                "korean": "여기에 크리에이터 또는 게시물 URL을 붙여넣으세요 (한 줄에 하나)…",
+                "chinese-simplified": "在此粘贴创作者或帖子URL，每行一个…",
             },
             "add_all_to_queue": {
                 "english": "Add All to Queue",

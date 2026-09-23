@@ -48,17 +48,16 @@ def make_parent(tmp_path):
     return parent
 
 
-def test_append_log_and_toggle_fast_mode(tmp_path):
+def test_append_log_and_multi_url_input(tmp_path):
     parent = make_parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
 
     tab.append_log_to_console("Test message", "INFO")
     assert "Test message" in tab.creator_console.toHtml()
 
-    tab.toggle_fast_mode(2)  # enable
-    assert tab.fast_mode is True
-    tab.toggle_fast_mode(0)  # disable
-    assert tab.fast_mode is False
+    # Fast Mode is gone; the multi-URL input is the only entry point.
+    assert not hasattr(tab, "toggle_fast_mode")
+    assert tab.creator_multi_url_input.isVisibleTo(tab)
 
 
 def test_add_multiple_creators_and_remove(monkeypatch, tmp_path):
@@ -142,10 +141,8 @@ def test_creator_tab_basic_interactions(tmp_path, monkeypatch):
     parent = Parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
 
-    # Fast mode toggle disables category checkboxes
-    tab.toggle_fast_mode(2)
-    assert tab.fast_mode is True
-    assert not tab.creator_main_check.isEnabled()
+    # Category checkboxes are no longer locked by Fast Mode.
+    assert tab.creator_main_check.isEnabled()
 
     # Add a creator url via multi-url input
     test_url = "https://kemono.cr/user/1"

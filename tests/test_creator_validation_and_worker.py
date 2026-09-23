@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from kemonodownloader.creator_downloader import (
     CreatorDownloadThread,
     ThreadSettings,
-    ValidationThread,
 )
 
 
@@ -22,42 +21,6 @@ def make_settings():
         simultaneous_downloads=1,
         settings_tab=settings_tab,
     )
-
-
-def test_validation_thread_success(monkeypatch):
-    settings = make_settings()
-    url = "https://kemono.cr/user/creatorid"
-    thread = ValidationThread(url, settings)
-
-    # Stub session.get to return a response containing the domain_check word
-    class FakeResp:
-        status_code = 200
-
-        text = "This page mentions kemono somewhere"
-
-    monkeypatch.setattr(
-        "kemonodownloader.creator_downloader.get_session",
-        lambda settings_tab=None: SimpleNamespace(get=lambda *a, **k: FakeResp()),
-    )
-
-    # Capture result emission by replacing the signal with a simple emitter
-    thread.result = SimpleNamespace(emit=lambda val: setattr(thread, "_result", val))
-    thread.log = SimpleNamespace(emit=lambda *a, **k: None)
-
-    thread.run()
-    assert getattr(thread, "_result", False) is True
-
-
-def test_validation_thread_invalid_url():
-    settings = make_settings()
-    url = "https://example.com/invalid"
-    thread = ValidationThread(url, settings)
-
-    thread.result = SimpleNamespace(emit=lambda val: setattr(thread, "_result", val))
-    thread.log = SimpleNamespace(emit=lambda *a, **k: None)
-
-    thread.run()
-    assert getattr(thread, "_result", False) is False
 
 
 def test_download_worker_invokes_download_file(monkeypatch):
@@ -80,15 +43,19 @@ def test_download_worker_invokes_download_file(monkeypatch):
 
     called = {}
 
-    async def fake_download(file_url, folder, idx, total):
+    async def fake_download(file_url, folder, idx, total, page_number):
         called["url"] = file_url
+        called["page_number"] = page_number
 
     # Monkeypatch the async download_file
     td.download_file = fake_download
+    # download_worker loops while is_running, which defaults to False in __init__.
+    td.is_running = True
 
     async def run_worker():
         q = asyncio.Queue()
-        await q.put((0, "https://kemono.cr/files/x.png"))
+        # download_worker unpacks (file_index, file_url, page_number).
+        await q.put((0, "https://kemono.cr/files/x.png", None))
         # Run the worker in the background and wait for the queue to be processed.
         worker_task = asyncio.create_task(td.download_worker(q, "/tmp", total_files=1))
         await q.join()
@@ -102,6 +69,7 @@ def test_download_worker_invokes_download_file(monkeypatch):
 
     asyncio.run(run_worker())
     assert called.get("url") == "https://kemono.cr/files/x.png"
+    assert called.get("page_number") is None
 
 
 def test_safe_emit_ignores_when_destroyed():

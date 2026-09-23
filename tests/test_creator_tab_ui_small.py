@@ -45,10 +45,10 @@ def test_add_multiple_creators_to_queue_basic(tmp_path):
     assert tab.creator_multi_url_input.toPlainText().strip() == ""
 
 
-def test_toggle_fast_mode_disables_controls(tmp_path):
+def test_category_checks_enabled_without_fast_mode(tmp_path):
     parent = make_parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
 
-    # Enable fast mode
-    tab.toggle_fast_mode(2)
-    assert tab.creator_main_check.isEnabled() is False
+    # No Fast Mode toggle exists any more; category checkboxes stay enabled.
+    assert not hasattr(tab, "toggle_fast_mode")
+    assert tab.creator_main_check.isEnabled() is True

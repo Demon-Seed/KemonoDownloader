@@ -23,9 +23,8 @@ def test_creator_tab_ui_basics(monkeypatch, qapp, tmp_path):
     tab.update_ui_text()
     assert tab.creator_download_btn.text() != ""
 
-    # toggle_fast_mode: enable fast mode and verify state updated
-    tab.toggle_fast_mode(2)  # Checked
-    assert tab.fast_mode is True
+    # Fast Mode was removed; the multi-URL input is always available.
+    assert not hasattr(tab, "toggle_fast_mode")
 
     # Add multiple creators: include one valid and one invalid URL
     valid = "https://kemono.cr/user/123"
@@ -35,12 +34,13 @@ def test_creator_tab_ui_basics(monkeypatch, qapp, tmp_path):
     # valid should have been added
     assert any(valid in u for u, _ in tab.creator_queue)
 
-    # add_creator_to_queue: empty input logs error
-    tab.creator_url_input.setText("")
-    tab.add_creator_to_queue()
-    # Add duplicate prevention: add same valid URL again triggers warning
-    tab.creator_url_input.setText(valid)
-    tab.add_creator_to_queue()  # this will attempt validation (spawn thread), but duplicate check will catch it
+    # Empty input logs an error and leaves the queue untouched
+    tab.creator_multi_url_input.setPlainText("")
+    tab.add_multiple_creators_to_queue()
+    # Duplicate prevention: adding the same valid URL again is skipped
+    tab.creator_multi_url_input.setPlainText(valid)
+    tab.add_multiple_creators_to_queue()
+    assert sum(1 for u, _ in tab.creator_queue if u == valid) == 1
 
     # create_remove_handler should remove entry when user confirms
     pre_len = len(tab.creator_queue)

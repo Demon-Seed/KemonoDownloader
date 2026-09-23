@@ -499,47 +499,4 @@ def test_post_detection_unexpected_and_json_error(monkeypatch, qapp):
     assert any(lvl == "ERROR" for _, lvl in logs2)
 
 
-def test_validation_thread_success_and_failure(monkeypatch, qapp):
-    # success: response text contains domain substring
-    class FakeResp:
-        def __init__(self, text, status=200):
-            self.status_code = status
-            self.text = text
 
-    def session_success(tab=None):
-        class S:
-            def get(self, url, headers=None, timeout=None):
-                return FakeResp("Kemono content and more")
-
-        return S()
-
-    monkeypatch.setattr(cd, "get_session", session_success)
-    settings = type("S", (), {"api_request_max_retries": 1, "settings_tab": None})()
-    vt = cd.ValidationThread("https://kemono.cr/user/1", settings)
-    result = []
-    vt.result.connect(lambda v: result.append(v))
-    vt.run()
-    assert result and result[0] is True
-
-    # failure: network error -> logs
-    import requests as _requests
-
-    def session_fail(tab=None):
-        class S:
-            def get(self, url, headers=None, timeout=None):
-                raise _requests.RequestException("network down")
-
-        return S()
-
-    monkeypatch.setattr(cd, "get_session", session_fail)
-    vt2 = cd.ValidationThread("https://kemono.cr/user/1", settings)
-    logs = []
-    vt2.log.connect(lambda m, lvl: logs.append((m, lvl)))
-    vt2.run()
-    assert (
-        any(
-            "failed_to_validate" in str(m) or "network_error_attempt" in str(m)
-            for m, _ in logs
-        )
-        or vt2.result
-    )

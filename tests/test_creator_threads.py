@@ -83,33 +83,3 @@ def test_checkbox_toggle_thread(qapp):
     assert new_checked[1] is True and new_checked[2] is True
     assert set(posts_to_download) == {1, 2}
 
-
-def test_validation_thread_invalid_url(qapp):
-    settings = SimpleNamespace(api_request_max_retries=1, settings_tab=None)
-    t = cd.ValidationThread("http://bad/url", settings)
-    t.log = _mk_signal_mock()
-    t.result = _mk_signal_mock()
-    t.run()
-    t.result.emit.assert_called_with(False)
-
-
-def test_validation_thread_success(monkeypatch, qapp):
-    settings = SimpleNamespace(api_request_max_retries=1, settings_tab=None)
-
-    class Resp:
-        status_code = 200
-
-        @property
-        def text(self):
-            return "This page mentions kemono somewhere"
-
-    class S:
-        def get(self, url, headers=None, timeout=None):
-            return Resp()
-
-    monkeypatch.setattr(cd, "get_session", lambda st: S())
-    t = cd.ValidationThread("https://kemono.cr/user/1", settings)
-    t.log = _mk_signal_mock()
-    t.result = _mk_signal_mock()
-    t.run()
-    t.result.emit.assert_called_with(True)

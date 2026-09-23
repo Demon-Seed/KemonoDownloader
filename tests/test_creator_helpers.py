@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from kemonodownloader.creator_downloader import (
     PreviewThread,
     ThreadSettings,
-    ValidationThread,
     get_domain_config,
     get_headers,
     get_session,
@@ -40,26 +39,6 @@ def test_get_session_with_http_and_socks(tmp_path):
     )
     sess2 = get_session(settings_tab2)
     assert sess2 is not None
-
-
-def test_validation_thread_success(monkeypatch):
-    # Fake session response for validation
-    class FakeResp:
-        status_code = 200
-        text = "kemono"
-
-    class FakeSession:
-        def get(self, *a, **k):
-            return FakeResp()
-
-    monkeypatch.setattr(
-        "kemonodownloader.creator_downloader.get_session", lambda *a, **k: FakeSession()
-    )
-
-    settings = ThreadSettings(1, 1, 1, 1, 1, settings_tab=SimpleNamespace())
-    vt = ValidationThread("https://kemono.cr/a/user/1", settings)
-    # Run directly (synchronous) — should not raise
-    vt.run()
 
 
 def test_preview_thread_loads_cached_image(tmp_path):

@@ -149,8 +149,17 @@ class TestKemonoDownloader:
                 QMessageBox, "exec", lambda *a: QMessageBox.StandardButton.Ok
             )
 
+            # show_update_notification opens the release page in a real browser
+            # via a function-local `import webbrowser`; stub it so the test does
+            # not spawn a browser window.
+            import webbrowser
+
+            opened = []
+            monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
+
             # Test version notifications
             window.show_update_notification("1.0.0", "http://test")
+            assert opened == ["http://test"]
             window.show_error_notification("Error message")
 
             # Test status logging

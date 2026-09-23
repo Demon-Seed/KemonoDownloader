@@ -4,7 +4,6 @@ from kemonodownloader.creator_downloader import (
     CheckboxToggleThread,
     FilterThread,
     PostPopulationThread,
-    ValidationThread,
 )
 
 
@@ -52,27 +51,6 @@ def test_filter_thread_filters_by_search_and_checked():
 
     assert "filtered" in results
     assert any(item[0].startswith("Alpha") for item in results["filtered"])
-
-
-def test_validation_thread_success(monkeypatch):
-    # Provide a fake session whose response text contains the domain check
-    fake_resp = FakeResponse(status_code=200, text="Welcome to kemono")
-    monkeypatch.setattr(
-        "kemonodownloader.creator_downloader.get_session",
-        lambda settings_tab=None: FakeSession(fake_resp),
-    )
-
-    settings = SimpleNamespace(api_request_max_retries=1, settings_tab=None)
-    thread = ValidationThread("https://kemono.cr/fanbox/user/1", settings)
-    out = {}
-
-    def cb(result):
-        out["result"] = result
-
-    thread.result.connect(cb)
-    thread.run()
-
-    assert out.get("result") is True
 
 
 def test_checkbox_toggle_thread_updates_checked_state():

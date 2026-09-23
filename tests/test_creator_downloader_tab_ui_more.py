@@ -30,7 +30,7 @@ def make_parent(tmp_path):
     return parent
 
 
-def test_toggle_fast_mode_and_states(qtbot, monkeypatch, tmp_path):
+def test_multi_url_input_always_visible(qtbot, monkeypatch, tmp_path):
     # Keep thread settings simple
     monkeypatch.setattr(
         cd.CreatorDownloaderTab,
@@ -47,19 +47,12 @@ def test_toggle_fast_mode_and_states(qtbot, monkeypatch, tmp_path):
     parent = make_parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
 
-    # Toggle fast mode ON (2 == Qt.Checked)
-    tab.toggle_fast_mode(2)
-    assert tab.fast_mode is True
-    # Fast mode should force check-all on
-    assert tab.creator_check_all.isChecked()
-    assert tab.creator_check_all_all.isChecked()
-    # Some controls should be disabled when fast mode is on
-    assert not tab.creator_main_check.isEnabled()
-
-    # Toggle fast mode OFF
-    tab.toggle_fast_mode(0)
-    assert tab.fast_mode is False
-    assert not tab.creator_multi_url_input.isVisible()
+    # The multi-URL input replaced the old single-URL row, so it is always
+    # visible and there is no fast-mode toggle to disable it.
+    assert tab.creator_multi_url_input.isVisibleTo(tab)
+    assert tab.creator_multi_url_add_btn.isVisibleTo(tab)
+    assert not hasattr(tab, "toggle_fast_mode")
+    assert not hasattr(tab, "fast_mode")
 
 
 def test_pagination_and_display(qtbot, monkeypatch, tmp_path):

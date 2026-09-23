@@ -3864,50 +3864,6 @@ class TestCreatorDownloadThread:
         assert "https://kemono.cr/f1.jpg" in download_thread.completed_files
 
 
-class TestValidationThread:
-    @pytest.fixture
-    def val_thread(self, qapp):
-        from kemonodownloader.creator_downloader import ValidationThread
-
-        settings = MagicMock()
-        settings.api_request_max_retries = 1
-        return ValidationThread("https://kemono.cr/fanbox/user/123", settings)
-
-    def test_invalid_format(self, qapp):
-        from kemonodownloader.creator_downloader import ValidationThread
-
-        settings = MagicMock()
-        thread = ValidationThread("https://invalid.com", settings)
-
-        results = []
-        thread.result.connect(results.append)
-        thread.run()
-        assert results[0] is False
-
-    def test_validation_success(self, val_thread, mock_downloader_deps):
-        mock_session = mock_downloader_deps
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = "Welcome to Kemono"
-        mock_session.get.return_value = mock_resp
-
-        results = []
-        val_thread.result.connect(results.append)
-        val_thread.run()
-        assert results[0] is True
-
-    def test_validation_failure(self, val_thread, mock_downloader_deps):
-        mock_session = mock_downloader_deps
-        mock_resp = MagicMock()
-        mock_resp.status_code = 404
-        mock_session.get.return_value = mock_resp
-
-        results = []
-        val_thread.result.connect(results.append)
-        val_thread.run()
-        assert results[0] is False
-
-
 class TestPreviewThread:
     @pytest.fixture
     def preview_thread(self, qapp, tmp_path):
@@ -3989,22 +3945,9 @@ class TestUIComponents:
 
 class TestCreatorDownloaderTab:
     def test_init(self, creator_tab):
-        assert creator_tab.creator_url_input is not None
-        assert creator_tab.creator_add_to_queue_btn is not None
+        assert creator_tab.creator_multi_url_input is not None
+        assert creator_tab.creator_multi_url_add_btn is not None
         assert creator_tab.creator_queue_list.count() == 0
-
-    def test_add_creator_to_queue(self, creator_tab):
-        url = "https://kemono.cr/fanbox/user/123"
-        creator_tab.creator_url_input.setText(url)
-        # Mock ValidationThread to avoid starting a real thread
-        with patch("kemonodownloader.creator_downloader.ValidationThread"):
-            creator_tab.add_creator_to_queue()
-
-        # Manually trigger the callback since we mocked the thread
-        creator_tab.on_validation_finished(url, True)
-
-        assert creator_tab.creator_queue_list.count() == 1
-        assert creator_tab.creator_queue[0][0] == url
 
     def test_add_multiple_creators_to_queue(self, creator_tab):
         # Use valid-looking URLs that pass the length/format check
@@ -4014,29 +3957,21 @@ class TestCreatorDownloaderTab:
         creator_tab.add_multiple_creators_to_queue()
         assert creator_tab.creator_queue_list.count() == 2
 
-    def test_toggle_fast_mode(self, creator_tab):
-        # Initially False
-        assert creator_tab.fast_mode is False
-        creator_tab.creator_fast_mode_check.setChecked(True)
-        assert creator_tab.fast_mode is True
-        assert creator_tab.creator_multi_url_input.isHidden() is False
-        # Check all should be forced
-        assert creator_tab.creator_check_all.isChecked() is True
-
-        creator_tab.creator_fast_mode_check.setChecked(False)
-        assert creator_tab.fast_mode is False
-        assert creator_tab.creator_multi_url_input.isVisible() is False
-
-    def test_on_validation_finished(self, creator_tab):
-        url = "https://kemono.cr/fanbox/user/123"
-        creator_tab.on_validation_finished(url, True)
+    def test_post_url_is_canonicalized_to_creator(self, creator_tab):
+        # Pasting a post URL should queue the parent creator.
+        creator_tab.creator_multi_url_input.setPlainText(
+            "https://kemono.cr/fanbox/user/1/post/999"
+        )
+        creator_tab.add_multiple_creators_to_queue()
         assert creator_tab.creator_queue_list.count() == 1
-        assert creator_tab.creator_queue[0][0] == url
+        assert creator_tab.creator_queue[0][0] == "https://kemono.cr/fanbox/user/1"
 
-        # Validation failure
-        url2 = "https://kemono.cr/fanbox/user/456"
-        creator_tab.on_validation_finished(url2, False)
-        assert creator_tab.creator_queue_list.count() == 1  # Still 1
+    def test_fast_mode_removed_from_creator_tab(self, creator_tab):
+        # Fast Mode no longer exists on the Creator tab.
+        assert not hasattr(creator_tab, "creator_fast_mode_check")
+        assert not hasattr(creator_tab, "fast_mode")
+        # The multi-URL input is always present instead.
+        assert creator_tab.creator_multi_url_input.isVisibleTo(creator_tab)
 
     def test_remove_creator_from_queue(self, creator_tab, monkeypatch):
         url = "https://kemono.cr/fanbox/user/123"
@@ -4121,22 +4056,21 @@ class TestCreatorDownloaderTab:
         assert creator_tab.total_files_to_download == 1
 
     def test_start_creator_download(self, creator_tab, monkeypatch):
-        # Set up state so it reaches prepare_files_for_download
-        creator_tab.current_creator_url = "https://kemono.cr/u/1"
-        creator_tab.posts_to_download = ["p1"]
-        creator_tab.all_files_map = {
-            creator_tab.current_creator_url: [("Title", ("p1", "thumb"))]
-        }
-
+        # Starting a download now walks the creator queue as a sequential batch:
+        # the first queued URL is handed to check_creator_from_queue (post
+        # detection), rather than calling prepare_files_for_download directly.
         creator_tab.creator_queue = [("https://kemono.cr/u/1", True)]
 
-        monkeypatch.setattr(creator_tab, "prepare_files_for_download", MagicMock())
+        processed = []
+        monkeypatch.setattr(
+            creator_tab, "check_creator_from_queue", lambda url: processed.append(url)
+        )
 
         creator_tab.start_creator_download()
-        # Should call prepare_files_for_download with the checked URL
-        creator_tab.prepare_files_for_download.assert_called_once_with(
-            ["https://kemono.cr/u/1"]
-        )
+
+        assert processed == ["https://kemono.cr/u/1"]
+        assert creator_tab._batch_downloading is True
+        assert creator_tab._batch_pending_urls == []
 
     def test_cancel_creator_download(self, creator_tab, monkeypatch):
         # Mock CancellationThread to avoid starting a real thread

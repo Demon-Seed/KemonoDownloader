@@ -33,31 +33,6 @@ def test_checkbox_toggle_thread():
     assert "1" in posts
 
 
-def test_validation_thread_success_and_fail(monkeypatch):
-    # success path: response contains domain check
-    class FakeResp:
-        status_code = 200
-
-        @property
-        def text(self):
-            return "kemono content"
-
-    monkeypatch.setattr(
-        cd,
-        "get_session",
-        lambda s=None: SimpleNamespace(
-            get=lambda url, headers=None, timeout=None: FakeResp()
-        ),
-    )
-    settings = SimpleNamespace(settings_tab=None, api_request_max_retries=1)
-    vt = cd.ValidationThread("https://kemono.cr/user/1", settings)
-    res = {}
-    vt.result = SimpleNamespace(emit=lambda v: res.setdefault("ok", v))
-    vt.log = SimpleNamespace(emit=lambda *a, **k: None)
-    vt.run()
-    assert res.get("ok") is True
-
-
 def test_logs_window_update_and_clear(tmp_path):
     class Parent:
         def __init__(self):
@@ -156,44 +131,6 @@ class DummySignal:
     def emit(self, *args):
         self.emitted = True
         self.last_args = args
-
-
-def test_validation_thread_invalid_url():
-    class DummySettings:
-        api_request_max_retries = 1
-        settings_tab = None
-
-    t = cd.ValidationThread("https://kemono.cr/bad/link", DummySettings())
-    t.log = DummySignal()
-    t.result = DummySignal()
-    t.run()
-    assert t.result.emitted is True
-    assert t.result.last_args == (False,)
-
-
-def test_validation_thread_success(monkeypatch):
-    class DummySettings:
-        api_request_max_retries = 1
-        settings_tab = None
-
-    class FakeResp:
-        status_code = 200
-
-        def __init__(self):
-            self.text = "Welcome to kemono site"
-
-    class FakeSession:
-        def get(self, url, headers=None, timeout=None):
-            return FakeResp()
-
-    monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: FakeSession())
-
-    t = cd.ValidationThread("https://kemono.cr/user/abc", DummySettings())
-    t.log = DummySignal()
-    t.result = DummySignal()
-    t.run()
-    assert t.result.emitted is True
-    assert t.result.last_args == (True,)
 
 
 def test_get_desc_folder_for_post_strategies(tmp_path):
@@ -386,19 +323,6 @@ def test_preview_thread_uses_cache(tmp_path):
     pt.run()
     assert captured.get("url") == url
     assert captured.get("pix") is not None
-
-
-def test_validation_thread_detects_invalid_url():
-    settings = SimpleNamespace(settings_tab=None)
-    vt = cd.ValidationThread("https://kemono.cr/bad", settings)
-    captured = {}
-
-    def on_result(val):
-        captured["result"] = val
-
-    vt.result.connect(on_result)
-    vt.run()
-    assert captured.get("result") is False
 
 
 def test_post_detection_thread_invalid_url_emits_error():

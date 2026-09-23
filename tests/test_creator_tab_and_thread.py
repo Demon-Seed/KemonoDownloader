@@ -30,20 +30,16 @@ def test_create_thread_settings_defaults(tmp_path):
     assert ts.settings_tab is None
 
 
-def test_toggle_fast_mode_updates_ui_and_logs(tmp_path):
+def test_category_checks_not_locked_after_fast_mode_removal(tmp_path):
     parent = _FakeParent(str(tmp_path))
     tab = CreatorDownloaderTab(parent)
 
-    # Enable fast mode (Qt.Checked == 2)
-    tab.toggle_fast_mode(2)
-    assert tab.fast_mode is True
-    # Controls that should be disabled when fast mode is on
-    assert not tab.creator_main_check.isEnabled()
-    assert not tab.creator_attachments_check.isEnabled()
-    assert not tab.creator_content_check.isEnabled()
-
-    # Console should contain the fast mode enabled info
-    assert "Fast Mode enabled" in tab.creator_console.toPlainText()
+    # Fast Mode was removed from the Creator tab, so the download category
+    # checkboxes are never force-disabled.
+    assert not hasattr(tab, "toggle_fast_mode")
+    assert tab.creator_main_check.isEnabled()
+    assert tab.creator_attachments_check.isEnabled()
+    assert tab.creator_content_check.isEnabled()
 
 
 def test_add_multiple_creators_to_queue_and_duplicates_and_invalid(tmp_path):
