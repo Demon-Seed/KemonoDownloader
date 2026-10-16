@@ -737,16 +737,28 @@ class KDLanguage:
                 "chinese-simplified": "按文件顺序重命名并排序",
             },
             "auto_rename_info_title": {
-                "english": "Rename & Sort by File order",
-                "japanese": "ファイル順にリネームして並べ替え",
-                "korean": "파일 순서대로 이름 바꾸기 및 정렬",
-                "chinese-simplified": "按文件顺序重命名并排序",
+                "english": "Rename & Sort Help",
+                "japanese": "リネームと並べ替えのヘルプ",
+                "korean": "이름 바꾸기 및 정렬 도움말",
+                "chinese-simplified": "重命名与排序帮助",
             },
             "auto_rename_info_text": {
                 "english": "Adds a number in front of every filename so files sort in download order.\n\nIn per-post folders the number is only the file's position within its own post:\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\nWhen posts share a folder (Folder Structure set to 'Single creator folder' or 'Subfolders by file type', or a post whose folder was skipped by 'Skip Post Folder'), the post's own order is added in front of it, so every post stays one contiguous, ordered block:\n  1_1_first.jpg, 1_2_second.jpg, 2_1_next_post.jpg\n\nNote: with 'Always Post Folder for Compressed Files' enabled, archives keep their own post folder and get only the position number, while the rest of that post's files are skipped into the shared folder and get the post-order number too.",
                 "japanese": "すべてのファイル名の先頭に番号を付け、ダウンロード順に並ぶようにします。\n\n投稿ごとのフォルダでは、番号はその投稿内でのファイルの位置だけになります:\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\n複数の投稿が同じフォルダを共有する場合（フォルダ構造が「単一のクリエイターフォルダ」または「ファイル形式ごとのサブフォルダ」の場合、または「投稿フォルダをスキップ」でフォルダが省略された投稿）、投稿自身の順序がさらに前に付き、各投稿が連続した並び順のブロックになります:\n  1_1_first.jpg, 1_2_second.jpg, 2_1_next_post.jpg\n\n注: 「圧縮ファイルは常に投稿フォルダ」が有効な場合、アーカイブは専用の投稿フォルダを保持して位置番号のみが付き、その投稿の残りのファイルは共有フォルダに保存されて投稿順の番号も付きます。",
                 "korean": "모든 파일 이름 앞에 번호를 붙여 다운로드 순서대로 정렬되게 합니다.\n\n게시물별 폴더에서는 번호가 해당 게시물 안에서의 파일 위치만을 나타냅니다:\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\n여러 게시물이 하나의 폴더를 공유하는 경우(폴더 구조가 '단일 크리에이터 폴더' 또는 '파일 형식별 하위 폴더'인 경우, 또는 '게시물 폴더 건너뛰기'로 폴더가 생략된 게시물), 게시물 자체의 순서가 그 앞에 추가되어 각 게시물이 하나의 연속된 정렬 블록으로 유지됩니다:\n  1_1_first.jpg, 1_2_second.jpg, 2_1_next_post.jpg\n\n참고: '압축 파일은 항상 게시물 폴더'가 활성화되면 압축 파일은 자체 게시물 폴더를 유지하고 위치 번호만 붙으며, 해당 게시물의 나머지 파일은 공유 폴더로 이동하여 게시물 순서 번호도 함께 붙습니다.",
                 "chinese-simplified": "在每个文件名前面添加编号，使文件按下载顺序排列。\n\n在使用按帖子创建子文件夹时，编号仅表示该文件在其帖子内的位置：\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\n当多个帖子共用同一个文件夹时（文件夹结构设为“单一创作者文件夹”或“按文件类型创建子文件夹”，或帖子被“跳过帖子文件夹”省略了文件夹），会在最前面再加上帖子自身的顺序，使每个帖子保持为一段连续且有序的区块：\n  1_1_first.jpg, 1_2_second.jpg, 2_1_next_post.jpg\n\n注意：启用“压缩文件始终使用帖子文件夹”时，压缩文件会保留自己的帖子文件夹并只带有位置编号，而该帖子其余的文件会被放入共享文件夹，并同时带有帖子顺序编号。",
+            },
+            "downloader_box_info_title": {
+                "english": "Downloader Box Help",
+                "japanese": "ダウンローダーボックスのヘルプ",
+                "korean": "다운로더 박스 도움말",
+                "chinese-simplified": "下载器面板帮助",
+            },
+            "downloader_box_info_text": {
+                "english": "Key: Post Title | (Publish Date) | [Last Downloaded Date]\nand Double Click to view a posts thumbnail.",
+                "japanese": "キー: 投稿タイトル |（公開日）| [最終ダウンロード日]\nダブルクリックで投稿のサムネイルを表示します。",
+                "korean": "키: 게시물 제목 | (게시 날짜) | [마지막 다운로드 날짜]\n더블 클릭하면 게시물의 썸네일을 볼 수 있습니다.",
+                "chinese-simplified": "图例：帖子标题 |（发布日期）| [上次下载日期]\n双击可查看帖子缩略图。",
             },
             "post_auto_rename_info_text": {
                 "english": "Adds a number in front of every filename so the post's files sort in download order:\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\nEach post is saved in its own folder, so the numbering always starts at 1 for every post.",
@@ -1019,10 +1031,10 @@ class KDLanguage:
                 "chinese-simplified": "跳过帖子文件夹",
             },
             "skip_folder_info_title": {
-                "english": "Skip Post Folder",
-                "japanese": "投稿フォルダをスキップ",
-                "korean": "게시물 폴더 건너뛰기",
-                "chinese-simplified": "跳过帖子文件夹",
+                "english": "Skip Post Folder Help",
+                "japanese": "投稿フォルダをスキップのヘルプ",
+                "korean": "게시물 폴더 건너뛰기 도움말",
+                "chinese-simplified": "跳过帖子文件夹帮助",
             },
             "skip_folder_info_text": {
                 "english": "When enabled, posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.\n\nFor example, if set to 1, single-image posts will not get their own folder — the image will be placed directly in the creator's folder.\n\nThis only applies when Folder Structure is set to 'Per-post folders'.\n\nThe archive icon toggle next to this button ignores compressed files (ZIP, 7z, RAR) when deciding whether to skip the post folder — those files will always be saved in their own post folder, even if Skip Post Folder would otherwise apply to that post.",
@@ -1356,6 +1368,24 @@ class KDLanguage:
                 "japanese": "投稿: {0}",
                 "korean": "게시물: {0}",
                 "chinese-simplified": "投稿: {0}",
+            },
+            "last_downloaded_creator": {
+                "english": "Last Downloaded from Creator: {0}",
+                "japanese": "この投稿者からの最終ダウンロード: {0}",
+                "korean": "이 크리에이터에서 마지막 다운로드: {0}",
+                "chinese-simplified": "上次从此创作者下载：{0}",
+            },
+            "never_downloaded": {
+                "english": "Never",
+                "japanese": "なし",
+                "korean": "없음",
+                "chinese-simplified": "从未",
+            },
+            "not_available": {
+                "english": "N/A",
+                "japanese": "N/A",
+                "korean": "N/A",
+                "chinese-simplified": "N/A",
             },
             "page_info": {
                 "english": "Page {0} of {1}",
@@ -2581,7 +2611,7 @@ class KDLanguage:
                 "<b>3.6 Managing Downloads</b><br>"
                 "- <b>Canceling Downloads</b>: Click the 'Cancel' button (marked with an 'X' icon) to stop all active downloads. The progress bars will turn yellow, and the labels will update to 'Downloads Terminated'. The 'Post Downloader' tab will be re-enabled.<br>"
                 "- <b>Removing Creators from Queue</b>: Click the 'X' button next to a creator URL in the 'Creator Queue' list to remove it. You'll be prompted to confirm the removal. If removed during an active download, the download for that creator's posts will be canceled.<br>"
-                "- <b>Previewing Images</b>: Select a post in the 'Posts to Download' list, then click the eye icon button below the list to preview its thumbnail (if available). Only JPG, JPEG, PNG, and GIF files are supported for preview. A modal window will open showing the image, with a progress bar while it loads.<br>"
+                "- <b>Previewing Images</b>: Select a post in the 'Posts to Download' list, then double-click the post to preview its thumbnail (if available). Only JPG, JPEG, PNG, and GIF files are supported for preview. A modal window will open showing the image, with a progress bar while it loads.<br>"
                 "- <b>Note</b>: If no posts are selected when you click 'Download', a warning will appear in the console: '[WARNING] No posts selected for download.'<br><br>"
                 "<b>3.7 Where Files Are Saved</b><br>"
                 "- Files are saved in the directory specified in the Settings tab (default is your user directory under 'Kemono Downloader/Downloads').<br>"
@@ -2646,7 +2676,7 @@ class KDLanguage:
                 "<b>3.6 ダウンロードの管理</b><br>"
                 "- <b>ダウンロードのキャンセル</b>：「キャンセル」ボタン（「X」アイコンでマーク）をクリックしてすべてのアクティブなダウンロードを停止します。進捗バーが黄色に変わり、ラベルが「ダウンロード中断」に更新されます。「投稿ダウンローダー」タブが再び有効になります。<br>"
                 "- <b>キューからのクリエイターの削除</b>：「クリエイターキュー」リストのクリエイターURL横の「X」ボタンをクリックして削除します。削除の確認が求められます。アクティブなダウンロード中に削除された場合、そのクリエイターの投稿のダウンロードがキャンセルされます。<br>"
-                "- <b>画像のプレビュー</b>：「ダウンロードする投稿」リストで投稿を選択し、リスト下の目アイコンボタンをクリックしてサムネイル（利用可能な場合）をプレビューします。JPG、JPEG、PNG、GIFファイルのみがプレビューに対応しています。画像を表示するモーダルウィンドウが開き、読み込み中に進捗バーが表示されます。<br>"
+                "- <b>画像のプレビュー</b>：「ダウンロードする投稿」リストで投稿をダブルクリックすると、そのサムネイル（利用可能な場合）をプレビューします。JPG、JPEG、PNG、GIFファイルのみがプレビューに対応しています。画像を表示するモーダルウィンドウが開き、読み込み中に進捗バーが表示されます。<br>"
                 "- <b>注意</b>：「ダウンロード」をクリックしたときに投稿が選択されていない場合、コンソールに警告が表示されます：「[警告] ダウンロードする投稿が選択されていません。」<br><br>"
                 "<b>3.7 ファイルの保存場所</b><br>"
                 "- ファイルは設定タブで指定されたディレクトリに保存されます（デフォルトはユーザーディレクトリ内の「Kemono Downloader/Downloads」）。<br>"
@@ -2709,7 +2739,7 @@ class KDLanguage:
                 "<b>3.6 다운로드 관리</b><br>"
                 "- <b>다운로드 취소</b>: '취소' 버튼('X' 아이콘으로 표시)을 클릭하여 모든 활성 다운로드를 중지합니다. 진행률 바가 노란색으로 변하고 레이블이 '다운로드 중단됨'으로 업데이트됩니다. '게시물 다운로더' 탭이 다시 활성화됩니다.<br>"
                 "- <b>대기열에서 크리에이터 제거</b>: '크리에이터 대기열' 목록에서 크리에이터 URL 옆의 'X' 버튼을 클릭하여 제거합니다. 제거 확인 메시지가 표시됩니다. 활성 다운로드 중에 제거되면 해당 크리에이터의 게시물 다운로드가 취소됩니다.<br>"
-                "- <b>이미지 미리보기</b>: '다운로드할 게시물' 목록에서 게시물을 선택한 후 목록 아래의 눈 아이콘 버튼을 클릭하여 썸네일(사용 가능한 경우)을 미리 봅니다. JPG, JPEG, PNG, GIF 파일만 미리보기가 지원됩니다. 이미지를 표시하는 모달 창이 열리며 로드 중에는 진행률 바가 표시됩니다.<br>"
+                "- <b>이미지 미리보기</b>: '다운로드할 게시물' 목록에서 게시물을 더블 클릭하면 해당 썸네일(사용 가능한 경우)을 미리 볼 수 있습니다. JPG, JPEG, PNG, GIF 파일만 미리보기가 지원됩니다. 이미지를 표시하는 모달 창이 열리며 로드 중에는 진행률 바가 표시됩니다.<br>"
                 "- <b>참고</b>: '다운로드'를 클릭했을 때 선택된 게시물이 없으면 콘솔에 경고가 표시됩니다: '[경고] 다운로드할 게시물이 선택되지 않았습니다.'<br><br>"
                 "<b>3.7 파일 저장 위치</b><br>"
                 "- 파일은 설정 탭에서 지정된 디렉토리에 저장됩니다(기본값은 사용자 디렉토리 내 'Kemono Downloader/Downloads').<br>"
@@ -2774,7 +2804,7 @@ class KDLanguage:
                 "<b>3.6 管理下载</b><br>"
                 "- <b>取消下载</b>：点击“取消”按钮（标有“X”图标）停止所有活动下载。进度条将变为黄色，标签将更新为“下载已终止”。“帖子下载器”选项卡将重新启用。<br>"
                 "- <b>从队列中删除创作者</b>：点击“创作者队列”列表中创作者 URL 旁边的“X”按钮删除。您将被提示确认删除。如果在活动下载期间删除，该创作者的帖子下载将被取消。<br>"
-                "- <b>预览图片</b>：在“待下载帖子”列表中选择帖子，然后点击列表下方的眼睛图标按钮预览其缩略图（如果可用）。仅支持 JPG、JPEG、PNG 和 GIF 文件的预览。将打开一个显示图片的模态窗口，加载时显示进度条。<br>"
+                "- <b>预览图片</b>：在“待下载帖子”列表中双击帖子即可预览其缩略图（如果可用）。仅支持 JPG、JPEG、PNG 和 GIF 文件的预览。将打开一个显示图片的模态窗口，加载时显示进度条。<br>"
                 "- <b>注意</b>：如果点击“下载”时未选择任何帖子，控制台将显示警告：“[警告] 未选择要下载的帖子。”<br><br>"
                 "<b>3.7 文件保存位置</b><br>"
                 "- 文件将保存在设置选项卡中指定的目录中（默认为用户目录下的“Kemono Downloader/Downloads”）。<br>"

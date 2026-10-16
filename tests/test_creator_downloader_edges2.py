@@ -119,6 +119,8 @@ def test_download_file_deletion_failure(monkeypatch, tmp_path):
         emit=lambda idx, url, ok: completed.append((idx, url, ok))
     )
     dummy.check_post_completion = lambda url: None
+    # Download-history hook called by download_file.
+    dummy._record_post_download = lambda *a, **k: None
     dummy.download_text = False
 
     # generate filename
@@ -225,6 +227,8 @@ def test_download_file_success(monkeypatch, tmp_path):
         emit=lambda idx, url, ok: completed.append((idx, url, ok))
     )
     dummy.check_post_completion = lambda url: None
+    # Download-history hooks called by download_file.
+    dummy._record_post_download = lambda *a, **k: None
     dummy.download_text = False
     dummy.generate_filename_and_folder = (
         lambda file_url, folder, file_index, total_files, post_id, post_title, page_number: (
@@ -299,6 +303,8 @@ def test_download_file_retry_exhaustion(monkeypatch, tmp_path):
     dummy.file_progress = SimpleNamespace(emit=lambda *a, **k: None)
     dummy.file_completed = SimpleNamespace(emit=lambda *a, **k: None)
     dummy.check_post_completion = lambda url: None
+    # Download-history hooks called by download_file.
+    dummy._record_post_download = lambda *a, **k: None
     dummy.download_text = False
     dummy.generate_filename_and_folder = (
         lambda file_url, folder, file_index, total_files, post_id, post_title, page_number: (

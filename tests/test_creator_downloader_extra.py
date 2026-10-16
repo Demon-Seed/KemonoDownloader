@@ -218,6 +218,8 @@ def test_download_file_skips_when_hash_matches(tmp_path, monkeypatch):
     dummy.completed_files = set()
     dummy.completed_files = set()
     dummy.check_post_completion = lambda url: None
+    # Download-history hook called by download_file.
+    dummy._record_post_download = lambda *a, **k: None
 
     dummy.download_text = False
     # provide _safe_emit helper used by the method

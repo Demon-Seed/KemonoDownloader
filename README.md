@@ -9,7 +9,8 @@
 * ### This is a Personal Fork Using 100% AI, I use it myself so it should be functional, but be aware anyway. Feel free to report bugs, though I am lazy.<br> 
 # Additions:<br>
 *99% of additions are in the 'Creator Downloader' tab, as I see no use for 'Post Downloader'*<br>
-*'Creator Downloader' now supports posts, see below for more info.*
+*'Creator Downloader' now supports posts, see below for more info.*<br>
+* Last-downloaded tracking: each post shows its publish date and the date its files were last downloaded, with the creator's most recent date next to the post count.<br>
 * Filtering (can be used in any combination, number skipped displays in log):<br>
   * Filter out posts by keyword (Title, Filenames, Description, Tags, or any combination.)<br>
   * Filter out files by keyword.<br>
@@ -27,9 +28,8 @@
 * Removed Fast Mode; batch downloading is handled by the multi-creator queue.<br>
 * Toggle boxes swapped from checked to unchecked by default.<br>
 * Changed retry timer from flat 1sec to an exponential (1,2,4,8 etc. capping at 30sec) to avoid hammering the API for no reason.<br>
-
-# Want Todo<br>
-* Some kind of way to easily track when a creator was last downloaded from.
+* Double-click a post in the list to preview its thumbnail, replacing the eye button.<br>
+* 'Rename & Sort by File order' behaviour changed: when posts share a folder, each post now keeps its own order prefix so its files stay together.<br>
 
 # Support OG DEV:<br>
 **Developed by VoxDroid** | **Fork by Claude & GLM 5.2 Lol**<br>

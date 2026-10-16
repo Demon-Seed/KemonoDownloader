@@ -46,6 +46,10 @@ from kemonodownloader.domain_config import (
     get_domain_config,
     get_domains,
 )
+from kemonodownloader.download_history import (
+    DownloadHistoryDB,
+    iso_to_local_date,
+)
 from kemonodownloader.hash_db import HashDB
 from kemonodownloader.kd_language import language_manager, translate
 
@@ -143,6 +147,23 @@ def resolve_creator_url(raw_url):
         creator_url = f"{parsed.scheme}://{parsed.netloc}/{creator_path}"
         return creator_url, (post_id or None)
     return candidate, None
+
+
+def split_creator_url(url):
+    """Return ``(service, creator_id)`` for a creator URL.
+
+    Creator URLs have the shape ``https://<host>/<service>/user/<creator_id>``
+    (optionally with a query string).  Anything unexpected yields
+    ``("unknown_service", "unknown_creator")`` so download-history lookups
+    stay harmless instead of raising.
+    """
+    url = (url or "").rstrip("/")
+    parts = url.split("/")
+    if len(parts) >= 3:
+        service = parts[-3].split("?")[0]
+        creator_id = parts[-1].split("?")[0]
+        return service, creator_id
+    return "unknown_service", "unknown_creator"
 
 
 class ThreadSettings:
@@ -1794,6 +1815,7 @@ class CreatorDownloadThread(QThread):
         self.download_text = download_text
         self.other_files_dir = other_files_dir
         self.hash_db = HashDB(self.other_files_dir)
+        self.history_db = DownloadHistoryDB(self.other_files_dir)
         self.max_concurrent = max_concurrent
         self.post_files_map = self.build_post_files_map()
         # 1-based selection order per post id; used by the auto-rename
@@ -1819,6 +1841,10 @@ class CreatorDownloadThread(QThread):
         # folder, and so we only need to check disk collisions once per post.
         self._post_folder_names = {}
         self._post_folder_names_lock = threading.Lock()
+        # Post ids already stamped after a real download in this run, so a
+        # multi-file post writes one row instead of one row per file.
+        self._history_lock = threading.Lock()
+        self._stamped_posts = set()
 
         self.completed_files_lock = threading.Lock()
         self.fetched_texts_lock = threading.Lock()
@@ -2552,6 +2578,9 @@ class CreatorDownloadThread(QThread):
                 self.hash_db.store(
                     url_hash, full_path, file_hash, file_url, actual_file_size
                 )
+                # The file is on disk now, so this post was last downloaded
+                # today.
+                self._record_post_download(post_id)
                 self._safe_emit(
                     self.log,
                     translate(
@@ -2673,6 +2702,31 @@ class CreatorDownloadThread(QThread):
             post_files = self.post_files_map[post_id]
             if all(f in self.completed_files for f in post_files):
                 self._safe_emit(self.post_completed, post_id)
+
+    def _record_post_download(self, post_id):
+        """Stamp a post's last-download date once one of its files hits disk.
+
+        Called for every file that is actually written to disk, but only the
+        first call per post reaches the database, so a 40-file post produces a
+        single row.  Files skipped by the hash-database dedup never call this,
+        so re-checking a post you already have leaves its date alone.
+        """
+        if not post_id:
+            return
+        with self._history_lock:
+            if post_id in self._stamped_posts:
+                return
+            self._stamped_posts.add(post_id)
+        try:
+            self.history_db.record_post(self.service, self.creator_id, post_id)
+        except Exception as e:
+            self._safe_emit(
+                self.log,
+                translate(
+                    "log_warning", f"Could not update download history: {e}"
+                ),
+                "WARNING",
+            )
 
     async def download_worker(self, queue, folder, total_files):
         while self.is_running:
@@ -3018,7 +3072,6 @@ class CreatorDownloaderTab(QWidget):
         self.all_detected_posts = []
         self.creator_queue = []
         self.downloading = False
-        self.current_preview_url = None
         self.cache_dir = self._parent.cache_folder if self._parent else ""
         self.other_files_dir = self._parent.other_files_folder if self._parent else ""
         self.current_creator_url = None
@@ -3044,6 +3097,16 @@ class CreatorDownloaderTab(QWidget):
         self._cancellation_thread = None
         self.post_titles_map = {}
         self.post_dates_map = {}  # post_id -> display string of the post's own publish date
+        # post_id -> "YYYY-MM-DD" of the last actual download, for the creator
+        # being viewed only.  Rendered in square brackets after the publish
+        # date in each row.
+        self._post_history_cache = {}
+        # Newest download timestamp recorded for the creator being viewed.
+        self._creator_last_download = None
+        # Lazily opened download-history database (see _history_db()).
+        self._history_db_instance = None
+        self._history_db_dir = None
+        self._history_db_failed_dir = None
         self.post_widget_cache = (
             {}
         )  # Maps post_title -> (item, widget) for O(1) lookups
@@ -3372,9 +3435,12 @@ class CreatorDownloaderTab(QWidget):
         self.skip_keywords_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
         skip_filter_layout.addWidget(self.skip_keywords_edit, stretch=1)
 
-        self.skip_keywords_help_btn = QPushButton("?")
+        self.skip_keywords_help_btn = QPushButton(
+            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+        )
+        self.skip_keywords_help_btn.setFixedSize(26, 26)
         self.skip_keywords_help_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+            "background: #4A5B7A; border-radius: 5px;"
         )
         self.skip_keywords_help_btn.clicked.connect(self.show_skip_keywords_help)
         skip_filter_layout.addWidget(self.skip_keywords_help_btn)
@@ -3426,11 +3492,16 @@ class CreatorDownloaderTab(QWidget):
         self.file_skip_keywords_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
         file_skip_filter_layout.addWidget(self.file_skip_keywords_edit, stretch=1)
 
-        self.file_skip_keywords_help_btn = QPushButton("?")
-        self.file_skip_keywords_help_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+        self.file_skip_keywords_help_btn = QPushButton(
+            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
         )
-        self.file_skip_keywords_help_btn.clicked.connect(self.show_file_skip_keywords_help)
+        self.file_skip_keywords_help_btn.setFixedSize(26, 26)
+        self.file_skip_keywords_help_btn.setStyleSheet(
+            "background: #4A5B7A; border-radius: 5px;"
+        )
+        self.file_skip_keywords_help_btn.clicked.connect(
+            self.show_file_skip_keywords_help
+        )
         file_skip_filter_layout.addWidget(self.file_skip_keywords_help_btn)
 
         post_list_layout.addLayout(file_skip_filter_layout)
@@ -3467,9 +3538,12 @@ class CreatorDownloaderTab(QWidget):
         self.date_to_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
         date_range_layout.addWidget(self.date_to_edit, stretch=1)
 
-        self.date_filter_help_btn = QPushButton("?")
+        self.date_filter_help_btn = QPushButton(
+            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+        )
+        self.date_filter_help_btn.setFixedSize(26, 26)
         self.date_filter_help_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+            "background: #4A5B7A; border-radius: 5px;"
         )
         self.date_filter_help_btn.clicked.connect(self.show_date_filter_help)
         date_range_layout.addWidget(self.date_filter_help_btn)
@@ -3494,6 +3568,20 @@ class CreatorDownloaderTab(QWidget):
         self.creator_check_all_all.stateChanged.connect(self.toggle_check_all_all)
         checkbox_layout.addWidget(self.creator_check_all_all)
 
+        # Info button for the post list itself: outside the list widget but
+        # still inside the group, right-aligned so it lines up with the help
+        # buttons on the filter rows above.
+        checkbox_layout.addStretch()
+        self.creator_box_info_btn = QPushButton(
+            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+        )
+        self.creator_box_info_btn.setFixedSize(26, 26)
+        self.creator_box_info_btn.setStyleSheet(
+            "background: #4A5B7A; border-radius: 5px;"
+        )
+        self.creator_box_info_btn.clicked.connect(self.show_downloader_box_info)
+        checkbox_layout.addWidget(self.creator_box_info_btn)
+
         post_list_layout.addLayout(checkbox_layout)
 
         self.creator_post_list = QListWidget()
@@ -3502,21 +3590,35 @@ class CreatorDownloaderTab(QWidget):
             QAbstractItemView.SelectionMode.ExtendedSelection
         )
         self.creator_post_list.itemSelectionChanged.connect(self.on_selection_changed)
-        self.creator_post_list.currentItemChanged.connect(
-            self.update_current_preview_url
-        )
+        # Double-clicking a row previews that post's thumbnail, replacing the
+        # old eye button.  Both wirings call the same handler: the per-row
+        # widget handler catches clicks landing on the row's own children,
+        # this one catches anything that reaches the view.
+        self.creator_post_list.itemDoubleClicked.connect(self.preview_thumbnail)
         post_list_layout.addWidget(self.creator_post_list)
 
+        # Counters row: the post count on the left, with the creator-level
+        # "Last Downloaded from Creator" date centred in the space to its
+        # right and held well clear of the count by expanding spacers.
         bottom_layout = QHBoxLayout()
         self.creator_post_count_label = QLabel()
         self.creator_post_count_label.setStyleSheet("color: white;")
         bottom_layout.addWidget(self.creator_post_count_label)
 
-        # Pagination controls
+        bottom_layout.addStretch()
+        self.creator_last_download_label = QLabel()
+        self.creator_last_download_label.setStyleSheet("color: white;")
+        self.creator_last_download_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        bottom_layout.addWidget(self.creator_last_download_label)
+        bottom_layout.addStretch()
+
+        post_list_layout.addLayout(bottom_layout)
+
+        # Pagination controls sit on their own row below the counters.
+        controls_layout = QHBoxLayout()
         self.page_label = QLabel()
         self.page_label.setStyleSheet("color: white;")
-        bottom_layout.addStretch()
-        bottom_layout.addWidget(self.page_label)
+        controls_layout.addWidget(self.page_label)
 
         self.prev_page_btn = QPushButton(
             qta.icon("fa5s.chevron-left", color="white"), ""
@@ -3526,7 +3628,7 @@ class CreatorDownloaderTab(QWidget):
         )
         self.prev_page_btn.clicked.connect(self.prev_page)
         self.prev_page_btn.setEnabled(False)
-        bottom_layout.addWidget(self.prev_page_btn)
+        controls_layout.addWidget(self.prev_page_btn)
 
         self.next_page_btn = QPushButton(
             qta.icon("fa5s.chevron-right", color="white"), ""
@@ -3536,18 +3638,11 @@ class CreatorDownloaderTab(QWidget):
         )
         self.next_page_btn.clicked.connect(self.next_page)
         self.next_page_btn.setEnabled(False)
-        bottom_layout.addWidget(self.next_page_btn)
+        controls_layout.addWidget(self.next_page_btn)
 
-        bottom_layout.addStretch()
-        self.creator_view_button = QPushButton(qta.icon("fa5s.eye", color="white"), "")
-        self.creator_view_button.setStyleSheet(
-            "background: #4A5B7A; padding: 2px; border-radius: 5px; min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px;"
-        )
-        self.creator_view_button.clicked.connect(self.view_current_item)
-        self.creator_view_button.setEnabled(False)
-        bottom_layout.addWidget(self.creator_view_button)
+        controls_layout.addStretch()
 
-        post_list_layout.addLayout(bottom_layout)
+        post_list_layout.addLayout(controls_layout)
         self.post_list_group.setLayout(post_list_layout)
         right_layout.addWidget(self.post_list_group)
 
@@ -3619,11 +3714,27 @@ class CreatorDownloaderTab(QWidget):
         )
         if hasattr(self, "creator_auto_rename_info_btn"):
             self.creator_auto_rename_info_btn.setToolTip(
-                _t("auto_rename_info_title", "Rename & Sort by File order")
+                _t("auto_rename_info_title", "Rename & Sort Help")
             )
         if hasattr(self, "creator_skip_folder_info_btn"):
             self.creator_skip_folder_info_btn.setToolTip(
-                _t("skip_folder_info_title", "Skip Post Folder")
+                _t("skip_folder_info_title", "Skip Post Folder Help")
+            )
+        if hasattr(self, "skip_keywords_help_btn"):
+            self.skip_keywords_help_btn.setToolTip(
+                _t("skip_posts_keywords_help_title", "Skip Posts Help")
+            )
+        if hasattr(self, "file_skip_keywords_help_btn"):
+            self.file_skip_keywords_help_btn.setToolTip(
+                _t("skip_files_keywords_help_title", "Skip Files Help")
+            )
+        if hasattr(self, "date_filter_help_btn"):
+            self.date_filter_help_btn.setToolTip(
+                _t("date_filter_help_title", "Post Date Filter Help")
+            )
+        if hasattr(self, "creator_box_info_btn"):
+            self.creator_box_info_btn.setToolTip(
+                _t("downloader_box_info_title", "Downloader Box Help")
             )
         if hasattr(self, "creator_force_compressed_folder_check"):
             self.creator_force_compressed_folder_check.setToolTip(
@@ -3642,6 +3753,7 @@ class CreatorDownloaderTab(QWidget):
             translate("overall_progress", 0, 0, 0, 0)
         )
         self.creator_post_count_label.setText(translate("posts_count", 0))
+        self._update_last_download_label()
         self.background_task_label.setText(translate("idle"))
 
         self.creator_download_btn.setText(translate("download"))
@@ -3706,11 +3818,118 @@ class CreatorDownloaderTab(QWidget):
             self.background_task_progress.setValue(0)
             self.background_task_label.setText(translate("idle"))
 
+    # ------------------------------------------------------------------
+    # Download history ("last downloaded") tracking
+    # ------------------------------------------------------------------
+
+    def _history_db(self):
+        """Return the download-history database, or None when unavailable.
+
+        Opened on first use rather than in __init__ so that constructing the
+        tab never touches the disk, and re-opened if the "Other Files" folder
+        changes.  A failed open is remembered so it is not retried on every
+        row render.
+        """
+        if not self.other_files_dir:
+            return None
+        if self._history_db_dir != self.other_files_dir:
+            if self._history_db_failed_dir == self.other_files_dir:
+                return None
+            try:
+                self._history_db_instance = DownloadHistoryDB(self.other_files_dir)
+                self._history_db_dir = self.other_files_dir
+                self._history_db_failed_dir = None
+            except Exception as e:
+                self._history_db_instance = None
+                self._history_db_failed_dir = self.other_files_dir
+                if hasattr(self, "creator_console"):
+                    self.append_log_to_console(
+                        translate("log_warning", f"Download history unavailable: {e}"),
+                        "WARNING",
+                    )
+        return self._history_db_instance
+
+    def _current_creator_identity(self):
+        """Return ``(service, creator_id)`` for the creator being viewed."""
+        return split_creator_url(self.current_creator_url)
+
+    def _load_creator_history(self):
+        """Reload the creator-level date and redraw the label beside the count."""
+        self._creator_last_download = None
+        db = self._history_db()
+        if db is not None and self.current_creator_url:
+            try:
+                service, creator_id = self._current_creator_identity()
+                self._creator_last_download = db.get_creator_time(
+                    service, creator_id
+                )
+            except Exception:
+                self._creator_last_download = None
+        self._update_last_download_label()
+
+    def _update_last_download_label(self):
+        """Re-text the "Last Downloaded from Creator" label.
+
+        Always visible: "N/A" while no creator is being viewed, "Never" for a
+        creator with nothing recorded, otherwise the newest date.
+        """
+        if not hasattr(self, "creator_last_download_label"):
+            return
+        if not self.current_creator_url:
+            value = translate("not_available")
+        else:
+            value = iso_to_local_date(self._creator_last_download) or translate(
+                "never_downloaded"
+            )
+        self.creator_last_download_label.setText(
+            translate("last_downloaded_creator", value)
+        )
+
+    def _load_post_history(self):
+        """Cache this creator's per-post last-download dates for row rendering."""
+        self._post_history_cache = {}
+        db = self._history_db()
+        if db is None or not self.current_creator_url:
+            return
+        try:
+            service, creator_id = self._current_creator_identity()
+            recorded = db.get_post_times(service, creator_id)
+        except Exception:
+            return
+        for post_id, timestamp in recorded.items():
+            date_text = iso_to_local_date(timestamp)
+            if date_text:
+                self._post_history_cache[str(post_id)] = date_text
+
+    def refresh_download_history_ui(self):
+        """Re-read the history and restamp the visible rows + creator label."""
+        self._load_post_history()
+        self._load_creator_history()
+        for item, widget in self.post_widget_cache.values():
+            post_id = item.data(Qt.UserRole + 1)
+            key = getattr(widget, "post_key", None)
+            if post_id is None or not key or not hasattr(widget, "label"):
+                continue
+            date_text = self._post_history_cache.get(str(post_id))
+            widget.label.setText(f"{key} [{date_text}]" if date_text else key)
+
+    def show_downloader_box_info(self):
+        """Explain the post rows shown in the downloader box."""
+        QMessageBox.information(
+            self,
+            _t("downloader_box_info_title", "Downloader Box Help"),
+            _t(
+                "downloader_box_info_text",
+                "Key: Post Title | (Publish Date) | [Last Downloaded Date]\n"
+                "and Double Click to view a posts thumbnail.",
+            ),
+        )
+
     def show_auto_rename_info(self):
         """Show a dialog explaining what Rename & Sort by File order does."""
         QMessageBox.information(
             self,
-            _t("auto_rename_info_title", "Rename & Sort by File order"),
+            _t("auto_rename_info_title", "Rename & Sort Help"),
             _t(
                 "auto_rename_info_text",
                 "Adds a number in front of every filename so files sort in download order.\n\nIn per-post folders the number is only the file's position within its own post:\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\nWhen posts share a folder (Folder Structure set to 'Single creator folder' or 'Subfolders by file type', or a post whose folder was skipped by 'Skip Post Folder'), the post's own order is added in front of it, so every post stays one contiguous, ordered block:\n  1_1_first.jpg, 1_2_second.jpg, 2_1_next_post.jpg\n\nNote: with 'Always Post Folder for Compressed Files' enabled, archives keep their own post folder and get only the position number, while the rest of that post's files are skipped into the shared folder and get the post-order number too.",
@@ -3721,7 +3940,7 @@ class CreatorDownloaderTab(QWidget):
         """Show a dialog explaining what Skip Post Folder does."""
         QMessageBox.information(
             self,
-            _t("skip_folder_info_title", "Skip Post Folder"),
+            _t("skip_folder_info_title", "Skip Post Folder Help"),
             _t(
                 "skip_folder_info_text",
                 "When enabled, posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.\n\nFor example, if set to 1, single-image posts will not get their own folder — the image will be placed directly in the creator's folder.\n\nThis only applies when Folder Structure is set to 'Per-post folders'.\n\nThe archive icon toggle next to this button ignores compressed files (ZIP, 7z, RAR) when deciding whether to skip the post folder — those files will always be saved in their own post folder, even if Skip Post Folder would otherwise apply to that post.",
@@ -3910,6 +4129,12 @@ class CreatorDownloaderTab(QWidget):
         self.post_dates_map = {}  # Clear previous creator's post dates
         self.current_page = 1  # Reset pagination
         self.total_pages = 1
+
+        # Switch the download-history tracking over to this creator.  Doing it
+        # here (rather than only after the posts arrive) means the creator's
+        # date shows up even before the post list is populated.
+        self._load_creator_history()
+        self._load_post_history()
 
         self.creator_post_list.clear()
         self.post_widget_cache.clear()
@@ -4117,8 +4342,9 @@ class CreatorDownloaderTab(QWidget):
             not is_fetching and self.current_page < self.total_pages
         )
 
-        # View button
-        self.creator_view_button.setEnabled(not is_fetching)
+        # Post list info button
+        if hasattr(self, "creator_box_info_btn"):
+            self.creator_box_info_btn.setEnabled(not is_fetching)
 
         # Tab switching (disable other tabs during fetching)
         if self._parent and hasattr(self._parent, "tabs"):
@@ -4168,7 +4394,8 @@ class CreatorDownloaderTab(QWidget):
         self.creator_check_all.setEnabled(enabled)
         self.creator_check_all_all.setEnabled(enabled)
         self.creator_post_list.setEnabled(enabled)
-        self.creator_view_button.setEnabled(enabled)
+        if hasattr(self, "creator_box_info_btn"):
+            self.creator_box_info_btn.setEnabled(enabled)
 
         # Inline skip-keywords filter
         self.skip_keywords_edit.setEnabled(enabled)
@@ -4271,6 +4498,9 @@ class CreatorDownloaderTab(QWidget):
     def on_post_population_finished(self, post_url_map, all_detected_posts):
         self.post_url_map = post_url_map
         self.all_detected_posts = all_detected_posts
+        # Load this creator's per-post last-download dates before any row is
+        # rendered, so the list does not redraw when the data arrives.
+        self._load_post_history()
         for post_title, (post_id, thumbnail_url) in self.all_detected_posts:
             self.checked_urls[post_id] = False
         for i, (queue_url, _) in enumerate(self.creator_queue):
@@ -5059,6 +5289,10 @@ class CreatorDownloaderTab(QWidget):
         # finishing a download must never remove or alter queued creators.
         self.set_downloading_ui_state(False)
 
+        # Reflect the freshly written download dates in the rows and in the
+        # "last downloaded from creator" label.
+        self.refresh_download_history_ui()
+
     def show_skip_keywords_help(self):
         """Show help text explaining the inline skip-keywords post filter."""
         QMessageBox.information(
@@ -5416,7 +5650,12 @@ class CreatorDownloaderTab(QWidget):
         check_box.clicked.connect(lambda: self.toggle_checkbox_state(text))
         layout.addWidget(check_box)
 
-        label = QLabel(text)
+        # *text* already ends with the post's publish date in parentheses, so
+        # the last-download date goes straight after it in square brackets —
+        # and only when the post actually has one.
+        download_date = self._post_history_cache.get(str(post_id))
+        display_text = f"{text} [{download_date}]" if download_date else text
+        label = QLabel(display_text)
         label.setStyleSheet("color: white;")
         label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(label, stretch=1)
@@ -5427,6 +5666,14 @@ class CreatorDownloaderTab(QWidget):
         self.creator_post_list.setItemWidget(item, widget)
         widget.check_box = check_box
         widget.label = label
+        # The undecorated title doubles as the post_url_map / cache key, so
+        # keep it even though the label text may carry a date suffix.
+        widget.post_key = text
+        # Rows are child widgets, so the list view does not always receive the
+        # double-click itself; handle it here too (see _on_row_double_click).
+        widget.mouseDoubleClickEvent = (
+            lambda event, row=item: self._on_row_double_click(row, event)
+        )
         widget.setStyleSheet("background-color: #2A3B5A; border-radius: 5px;")
 
         # Cache the widget for O(1) lookups
@@ -5473,7 +5720,9 @@ class CreatorDownloaderTab(QWidget):
         count = 0
         for widget in widgets_to_update:
             if hasattr(widget, "label"):
-                title = widget.label.text()
+                # The label may carry a "[last downloaded]" suffix, so prefer
+                # the undecorated key stored when the row was built.
+                title = getattr(widget, "post_key", widget.label.text())
                 post_id, _ = self.post_url_map.get(title, (None, None))
                 if post_id:
                     self.checked_urls[post_id] = new_state
@@ -5536,36 +5785,36 @@ class CreatorDownloaderTab(QWidget):
             "INFO",
         )
 
-    def update_current_preview_url(self, current, previous):
-        if current:
-            widget = self.creator_post_list.itemWidget(current)
-            if widget:
-                self.current_preview_url = current.data(Qt.UserRole)
-                self.creator_view_button.setEnabled(True)
-            else:
-                self.current_preview_url = None
-                self.creator_view_button.setEnabled(False)
-        else:
-            self.current_preview_url = None
-            self.creator_view_button.setEnabled(False)
+    def _on_row_double_click(self, item, event):
+        """Handle a double-click on a post row.
 
-    def view_current_item(self):
-        if self.current_preview_url:
-            if self.current_preview_url.lower().endswith(
-                (".jpg", ".jpeg", ".png", ".gif", ".webp")
-            ):
-                modal = ImageModal(self.current_preview_url, self.cache_dir, self)
-                modal.exec()
-            else:
-                self.append_log_to_console(
-                    translate(
-                        "log_warning",
-                        translate(
-                            "viewing_not_supported_for_url", self.current_preview_url
-                        ),
-                    ),
-                    "WARNING",
-                )
+        Accepting the event stops it propagating to the list view, which would
+        otherwise open a second preview for the same gesture.
+        """
+        event.accept()
+        self.preview_thumbnail(item)
+
+    def preview_thumbnail(self, item):
+        """Preview the thumbnail of a post row (double-click action)."""
+        if item is None:
+            return
+        thumbnail_url = item.data(Qt.UserRole)
+        if not thumbnail_url:
+            # Posts without a thumbnail have nothing to show.
+            return
+        if str(thumbnail_url).lower().endswith(
+            (".jpg", ".jpeg", ".png", ".gif", ".webp")
+        ):
+            modal = ImageModal(str(thumbnail_url), self.cache_dir, self)
+            modal.exec()
+        else:
+            self.append_log_to_console(
+                translate(
+                    "log_warning",
+                    translate("viewing_not_supported_for_url", thumbnail_url),
+                ),
+                "WARNING",
+            )
 
     def on_selection_changed(self):
         # Reset previous styles
