@@ -89,7 +89,7 @@ def test_download_worker_exception_is_logged(monkeypatch, tmp_path):
         settings.simultaneous_downloads,
     )
 
-    async def _raise(self, url, folder, idx, total):
+    async def _raise(self, url, folder, idx, total, page_number):
         raise Exception("boom")
 
     # Bind the coroutine as a method
@@ -100,7 +100,7 @@ def test_download_worker_exception_is_logged(monkeypatch, tmp_path):
 
     async def run_worker():
         q = asyncio.Queue()
-        q.put_nowait((0, file_url))
+        q.put_nowait((0, file_url, 1))
         # Run the worker as a background task so we can stop it after work is done.
         worker_task = asyncio.create_task(thread.download_worker(q, str(tmp_path), 1))
         # Wait for the queued item to be processed

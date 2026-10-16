@@ -53,8 +53,8 @@ def test_post_population_thread_maps_posts(qapp):
     t.log = _mk_signal_mock()
     t.run()
     expected = {
-        "Title1 (ID: 1)": (1, "thumb1"),
-        "Title2 (ID: 2)": (2, "thumb2"),
+        "Title1 (Unknown date)": (1, "thumb1"),
+        "Title2 (Unknown date)": (2, "thumb2"),
     }
     t.finished.emit.assert_called_once_with(expected, detected_posts)
 

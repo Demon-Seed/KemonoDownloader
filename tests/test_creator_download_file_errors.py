@@ -42,7 +42,7 @@ def test_download_file_makedirs_failure(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cd.os, "makedirs", bad_makedirs)
 
-    asyncio.run(t.download_file(file_url, str(tmp_path / "dl"), 0, 1))
+    asyncio.run(t.download_file(file_url, str(tmp_path / "dl"), 0, 1, page_number=1))
 
     assert file_url in t.failed_files
 
@@ -61,6 +61,6 @@ def test_download_file_requests_exception(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cd, "get_session", lambda st: S())
 
-    asyncio.run(t.download_file(file_url, str(tmp_path / "dl"), 0, 1))
+    asyncio.run(t.download_file(file_url, str(tmp_path / "dl"), 0, 1, page_number=1))
 
     assert file_url in t.failed_files

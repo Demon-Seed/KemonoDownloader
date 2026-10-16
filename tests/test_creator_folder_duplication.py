@@ -41,7 +41,7 @@ def test_creator_folder_not_duplicated():
 
     # Now call generator with folder already being creator_folder
     target_folder, filename = t.generate_filename_and_folder(
-        "https://kemono.cr/media/abc/image.jpg", creator_folder, 0, 1, "1", "My Post"
+        "https://kemono.cr/media/abc/image.jpg", creator_folder, 0, 1, "1", "My Post", page_number=1
     )
 
     # target_folder should not contain duplication
@@ -50,6 +50,6 @@ def test_creator_folder_not_duplicated():
     # Also check when passing base download folder it still builds correct path
     base_folder = os.path.normpath(t.download_folder)
     target_folder2, filename2 = t.generate_filename_and_folder(
-        "https://kemono.cr/media/abc/image2.jpg", base_folder, 0, 1, "1", "My Post"
+        "https://kemono.cr/media/abc/image2.jpg", base_folder, 0, 1, "1", "My Post", page_number=1
     )
     assert target_folder2.count(creator_folder_name) == 1

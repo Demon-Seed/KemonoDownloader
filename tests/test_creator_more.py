@@ -33,7 +33,7 @@ def test_generate_filename_template_fallback(qapp, tmp_path):
     )
 
     folder, filename = thread.generate_filename_and_folder(
-        "https://kemono.cr/some/file.txt", str(tmp_path), 0, 1, "1", "Title"
+        "https://kemono.cr/some/file.txt", str(tmp_path), 0, 1, "1", "Title", page_number=1
     )
     # Template formatting should have fallen back to post_id_orig_name
     assert (
@@ -117,7 +117,7 @@ def test_download_file_folder_creation_error(monkeypatch, qapp, tmp_path):
         lambda idx, url, success: completed.append((idx, url, success))
     )
 
-    asyncio.run(thread.download_file(file_url, download_folder, 0, 1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, 1, page_number=1))
 
     # file_completed should have been emitted with success False
     assert any(not c[2] for c in completed)
@@ -165,7 +165,7 @@ def test_download_file_request_exception_retries(monkeypatch, qapp, tmp_path):
         lambda idx, url, success: completed.append((idx, url, success))
     )
 
-    asyncio.run(thread.download_file(file_url, download_folder, 0, 1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, 1, page_number=1))
 
     assert any(not c[2] for c in completed)
     assert file_url in thread.failed_files

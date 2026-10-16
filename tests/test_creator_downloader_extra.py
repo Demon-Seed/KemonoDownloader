@@ -30,10 +30,13 @@ def test_generate_filename_and_folder_variants(tmp_path):
     dummy.post_titles_map = {("fanbox", "42", "101"): "My Post"}
     dummy.creator_name = "Creator"
     dummy.auto_rename_enabled = True
-    dummy.post_file_counters = {}
-    import threading
-
-    dummy.post_file_counters_lock = threading.Lock()
+    dummy.post_files_map = {}
+    dummy.skip_folder_enabled = False
+    dummy.skip_folder_threshold = 1
+    dummy.force_folder_for_compressed = False
+    dummy.COMPRESSED_EXTENSIONS = (".zip", ".7z", ".rar")
+    dummy.get_post_folder_name = lambda pid, title, cf: f"{pid}_{title}"
+    dummy.get_post_order = lambda pid: 1
     # Default settings (no template)
     dummy.settings = make_settings(None, "per_post")
 
@@ -45,6 +48,7 @@ def test_generate_filename_and_folder_variants(tmp_path):
         1,
         "101",
         "My Post",
+        page_number=1,
     )
     assert "42_Creator" in target_folder
     assert filename.endswith(".png")
@@ -59,6 +63,7 @@ def test_generate_filename_and_folder_variants(tmp_path):
         1,
         "101",
         "My Post",
+        page_number=1,
     )
     assert os.path.basename(tf) == "pdf"
 
@@ -220,7 +225,7 @@ def test_download_file_skips_when_hash_matches(tmp_path, monkeypatch):
 
     # Monkeypatch generate_filename_and_folder to avoid filesystem complexity
     dummy.generate_filename_and_folder = (
-        lambda file_url, folder, file_index, total_files, post_id, post_title: (
+        lambda file_url, folder, file_index, total_files, post_id, post_title, page_number: (
             str(tmp_path),
             "existing.jpg",
         )
@@ -229,7 +234,7 @@ def test_download_file_skips_when_hash_matches(tmp_path, monkeypatch):
     # Run the async download_file
     asyncio.run(
         cd.CreatorDownloadThread.download_file(
-            dummy, "http://example.com/file.jpg", str(tmp_path), 0, 1
+            dummy, "http://example.com/file.jpg", str(tmp_path), 0, 1, page_number=1
         )
     )
 
@@ -376,7 +381,7 @@ def test_creator_generate_filename_and_desc_folder(tmp_path, monkeypatch):
         0,
         1,
         "1",
-        "Cool Post",
+        "Cool Post", page_number=1
     )
     assert "pic" in filename
     # Folder should be <download_root>/<creator_folder>/<post_folder>
@@ -471,7 +476,7 @@ def test_generate_filename_strategies_and_download_text_dup(tmp_path, monkeypatc
         0,
         1,
         "1",
-        "Cool Post",
+        "Cool Post", page_number=1
     )
     assert os.path.basename(folder_single).startswith("42_")
 
@@ -496,7 +501,7 @@ def test_generate_filename_strategies_and_download_text_dup(tmp_path, monkeypatc
         0,
         1,
         "1",
-        "Cool Post",
+        "Cool Post", page_number=1
     )
     assert (
         os.path.basename(folder_bytype).lower() in ("png", "other")
@@ -665,7 +670,7 @@ def test_generate_filename_and_folder_and_auto_rename(tmp_path, qapp, monkeypatc
     )
 
     target_folder, filename = th.generate_filename_and_folder(
-        file_url, str(tmp_path), 0, 1, "42", "My Title"
+        file_url, str(tmp_path), 0, 1, "42", "My Title", page_number=1
     )
 
     # Filename should include auto-rename prefix and post id/orig name
@@ -681,7 +686,7 @@ def test_generate_filename_and_folder_and_auto_rename(tmp_path, qapp, monkeypatc
 
     # second call increments auto-rename counter
     target2, filename2 = th.generate_filename_and_folder(
-        file_url, str(tmp_path), 1, 1, "42", "My Title"
+        file_url, str(tmp_path), 1, 1, "42", "My Title", page_number=2
     )
     assert filename2.startswith("2_")
 

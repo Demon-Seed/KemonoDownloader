@@ -55,6 +55,6 @@ def test_download_file_skips_existing_hash(tmp_path):
     }
 
     # Run the coroutine — lookup should short-circuit and mark as completed
-    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1))
+    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
 
     assert file_url in t.completed_files

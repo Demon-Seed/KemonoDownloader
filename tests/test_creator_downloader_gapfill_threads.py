@@ -594,6 +594,12 @@ def test_get_desc_folder_strategy_exception_falls_back_per_post(tmp_path):
         )
     )
     dummy = SimpleNamespace(settings=bad_settings)
+    dummy.post_files_map = {}
+    dummy.skip_folder_enabled = False
+    dummy.skip_folder_threshold = 1
+    dummy.get_post_folder_name = lambda pid, title, cf: (
+        f"{pid}_{cd.sanitize_filename(title)}"
+    )
 
     desc = cd.CreatorDownloadThread.get_desc_folder_for_post(
         dummy, str(tmp_path), "11", "My Post"
@@ -677,7 +683,7 @@ def test_download_worker_handles_cancellederror_from_download_file():
 
     async def main():
         q = asyncio.Queue()
-        await q.put((0, "u1"))
+        await q.put((0, "u1", 1))
         await cd.CreatorDownloadThread.download_worker(dummy, q, "/tmp", 1)
 
     asyncio.run(main())
@@ -1068,24 +1074,19 @@ def _make_creator_thread(tmp_path, file_url, download_text=False):
 def test_download_file_desc_folder_makedirs_failure_is_ignored(monkeypatch, tmp_path):
     file_url = "https://kemono.cr/files/raw.bin"
     thread = _make_creator_thread(tmp_path, file_url, download_text=True)
+    thread.creator_name = "Creator"
 
     desc_folder = str(tmp_path / "desc_folder")
     thread.get_desc_folder_for_post = lambda *a, **k: desc_folder
     text_calls = []
 
-    async def fake_download_text(*_a, **_k):
-        text_calls.append(True)
+    async def fake_download_text(post_id, post_folder):
+        text_calls.append(post_folder)
 
     thread.download_post_text_if_needed = fake_download_text
 
-    existing = tmp_path / "existing.bin"
-    existing.write_bytes(b"abc")
-    file_hash = cd.hashlib.md5(existing.read_bytes()).hexdigest()
-    thread.hash_db.lookup = lambda _h: {
-        "file_path": str(existing),
-        "file_hash": file_hash,
-        "file_size": existing.stat().st_size,
-    }
+    # Fresh file (no dedup hit), so the description download is attempted.
+    thread.hash_db.lookup = lambda _h: None
 
     real_makedirs = os.makedirs
 
@@ -1096,9 +1097,31 @@ def test_download_file_desc_folder_makedirs_failure_is_ignored(monkeypatch, tmp_
 
     monkeypatch.setattr(cd.os, "makedirs", fake_makedirs)
 
-    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1))
+    class OkResp:
+        status_code = 200
+        headers = {"content-length": "3"}
 
-    assert text_calls == [True]
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size=8192):
+            yield b"abc"
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        cd,
+        "get_session",
+        lambda *a, **k: SimpleNamespace(get=lambda *aa, **kk: OkResp()),
+    )
+
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
+
+    # The description downloader is handed the resolved folder even though
+    # creating it may fail, and the file download itself still succeeds.
+    assert text_calls == [desc_folder]
+    assert file_url in thread.completed_files
 
 
 def test_download_file_cancellation_before_connection(monkeypatch, tmp_path):
@@ -1119,7 +1142,7 @@ def test_download_file_cancellation_before_connection(monkeypatch, tmp_path):
         lambda *a, **k: SimpleNamespace(get=lambda *aa, **kk: None),
     )
 
-    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1))
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
 
     assert file_url in thread.failed_files
 
@@ -1129,6 +1152,8 @@ def test_download_file_bad_content_length_header(monkeypatch, tmp_path):
     thread = _make_creator_thread(tmp_path, file_url, download_text=False)
 
     class Resp:
+        status_code = 200
+
         def raise_for_status(self):
             return None
 
@@ -1148,7 +1173,7 @@ def test_download_file_bad_content_length_header(monkeypatch, tmp_path):
         lambda *a, **k: SimpleNamespace(get=lambda *aa, **kk: Resp()),
     )
 
-    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1))
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
 
     assert file_url in thread.completed_files
 
@@ -1175,7 +1200,7 @@ def test_download_file_deletion_outer_exception_is_ignored(monkeypatch, tmp_path
     )
 
     thread.generate_filename_and_folder = (
-        lambda file_url, folder, file_index, total_files, post_id, post_title: (
+        lambda file_url, folder, file_index, total_files, post_id, post_title, page_number: (
             str(tmp_path),
             "known.bin",
         )
@@ -1190,6 +1215,6 @@ def test_download_file_deletion_outer_exception_is_ignored(monkeypatch, tmp_path
 
     monkeypatch.setattr(cd.os.path, "exists", flaky_exists)
 
-    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1))
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
 
     assert file_url in thread.failed_files

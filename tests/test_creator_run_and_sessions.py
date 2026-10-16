@@ -65,7 +65,7 @@ def test_creator_run_executes_download_loop(tmp_path):
     # Avoid network when fetching creator info
     thread.fetch_creator_and_post_info = lambda: None
 
-    async def fake_download(file_url, folder, file_index, total_files):
+    async def fake_download(file_url, folder, file_index, total_files, page_number):
         # simulate work
         thread.completed_files.add(file_url)
 

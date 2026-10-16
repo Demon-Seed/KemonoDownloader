@@ -50,7 +50,7 @@ def test_generate_filename_respects_existing_creator_folder(tmp_path):
     folder_arg = os.path.join(base, creator_folder_name)
 
     target_folder, filename = thread.generate_filename_and_folder(
-        file_url, folder_arg, 0, 1, "1", "MyPost"
+        file_url, folder_arg, 0, 1, "1", "MyPost", page_number=1
     )
 
     # Should not duplicate the creator folder segment

@@ -2155,11 +2155,25 @@ class PostDownloaderTab(QWidget):
         fast_mode_layout.addStretch()
         left_layout.addLayout(fast_mode_layout)
 
-        # Auto rename checkbox
+        # Auto rename checkbox, with an info button explaining the numbering
+        auto_rename_layout = QHBoxLayout()
+        auto_rename_layout.setContentsMargins(0, 0, 0, 0)
         self.auto_rename_checkbox = QCheckBox()
         self.auto_rename_checkbox.setChecked(True)  # Set to checked by default
         self.auto_rename_checkbox.setStyleSheet("color: white;")
-        left_layout.addWidget(self.auto_rename_checkbox)
+        auto_rename_layout.addWidget(self.auto_rename_checkbox)
+
+        self.auto_rename_info_btn = QPushButton(
+            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+        )
+        self.auto_rename_info_btn.setFixedSize(26, 26)
+        self.auto_rename_info_btn.setStyleSheet(
+            "background: #4A5B7A; border-radius: 5px;"
+        )
+        self.auto_rename_info_btn.clicked.connect(self.show_auto_rename_info)
+        auto_rename_layout.addWidget(self.auto_rename_info_btn)
+        auto_rename_layout.addStretch()
+        left_layout.addLayout(auto_rename_layout)
 
         # Download text checkbox
         self.post_download_text_check = QCheckBox(translate("download_text"))
@@ -2365,7 +2379,13 @@ class PostDownloaderTab(QWidget):
         self.post_search_input.setPlaceholderText(translate("search_items"))
 
         self.update_post_queue_list()
-        self.auto_rename_checkbox.setText(translate("auto_rename"))
+        # Qt swallows a single "&" as a mnemonic marker, so escape it to show
+        # a literal ampersand in the label.
+        self.auto_rename_checkbox.setText(
+            translate("auto_rename").replace("&", "&&")
+        )
+        if hasattr(self, "auto_rename_info_btn"):
+            self.auto_rename_info_btn.setToolTip(translate("auto_rename_info_title"))
         self.fast_mode_check.setText(translate("fast_mode"))
         self.fast_mode_info_btn.setToolTip(translate("fast_mode_info_title"))
         self.multi_url_input.setPlaceholderText(translate("multi_url_placeholder"))
@@ -2403,11 +2423,21 @@ class PostDownloaderTab(QWidget):
             translate("fast_mode_info_text"),
         )
 
+    def show_auto_rename_info(self):
+        """Show a dialog explaining what Rename & Sort by File order does."""
+        QMessageBox.information(
+            self,
+            translate("auto_rename_info_title"),
+            translate("post_auto_rename_info_text"),
+        )
+
     def toggle_fast_mode(self, state):
         """Toggle fast mode on/off. When on, disables manual options and enables auto-queue processing."""
         self.fast_mode = state == 2  # Qt.CheckState.Checked
         # When fast mode is ON: disable manual option controls, show multi-URL input
         self.auto_rename_checkbox.setEnabled(not self.fast_mode)
+        if hasattr(self, "auto_rename_info_btn"):
+            self.auto_rename_info_btn.setEnabled(not self.fast_mode)
         self.post_download_text_check.setEnabled(not self.fast_mode)
         self.post_check_all.setEnabled(not self.fast_mode)
         self.download_all_links.setEnabled(not self.fast_mode)
@@ -2981,6 +3011,8 @@ class PostDownloaderTab(QWidget):
         if hasattr(self, "fast_mode_info_btn"):
             self.fast_mode_info_btn.setEnabled(enabled)
         self.auto_rename_checkbox.setEnabled(enabled)
+        if hasattr(self, "auto_rename_info_btn"):
+            self.auto_rename_info_btn.setEnabled(enabled)
         self.post_download_text_check.setEnabled(enabled)
 
         # File selection controls

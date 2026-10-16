@@ -73,7 +73,7 @@ def test_generate_filename_and_folder(tmp_path):
     )
     thread.creator_name = "Creator Name"
     target_folder, filename = thread.generate_filename_and_folder(
-        files_to_download[0], download_folder, 0, 1, "1", "Post Title"
+        files_to_download[0], download_folder, 0, 1, "1", "Post Title", page_number=1
     )
     assert "123_Creator Name" in target_folder
     assert filename.endswith(".jpg")
@@ -95,10 +95,10 @@ def test_generate_filename_and_folder(tmp_path):
     )
     thread2.creator_name = "Creator Name"
     tf1, fn1 = thread2.generate_filename_and_folder(
-        files_to_download[0], download_folder, 0, 1, "1", "Post Title"
+        files_to_download[0], download_folder, 0, 1, "1", "Post Title", page_number=1
     )
     tf2, fn2 = thread2.generate_filename_and_folder(
-        files_to_download[0], download_folder, 1, 1, "1", "Post Title"
+        files_to_download[0], download_folder, 1, 1, "1", "Post Title", page_number=2
     )
     assert fn1 != fn2
 
@@ -134,7 +134,7 @@ def test_generate_folder_strategies(tmp_path):
     )
     thread.creator_name = "Creator Name"
     target_folder, filename = thread.generate_filename_and_folder(
-        files_to_download[0], download_folder, 0, 1, "1", "Post Title"
+        files_to_download[0], download_folder, 0, 1, "1", "Post Title", page_number=1
     )
     # expecting extension folder under creator folder
     # creator_name is used verbatim in folder construction
@@ -163,7 +163,7 @@ def test_generate_folder_strategies(tmp_path):
     )
     thread2.creator_name = "Creator Name"
     target_folder2, filename2 = thread2.generate_filename_and_folder(
-        files_to_download[0], download_folder, 0, 1, "1", "Post Title"
+        files_to_download[0], download_folder, 0, 1, "1", "Post Title", page_number=1
     )
     assert target_folder2.endswith(os.path.join("123_Creator Name"))
 
@@ -376,7 +376,7 @@ def test_creator_download_thread_uses_hash_db_entry(tmp_path):
 
     import asyncio
 
-    asyncio.run(thread.download_file(file_url, str(tmp_path / "dl"), 0, 1))
+    asyncio.run(thread.download_file(file_url, str(tmp_path / "dl"), 0, 1, page_number=1))
 
     # we expect progress 100 and a successful completion call
     assert any(100 in args for (_, args) in calls)
@@ -552,11 +552,11 @@ def test_download_file_size_mismatch_deletes_incomplete_and_marks_failed(
 
     import asyncio
 
-    asyncio.run(thread.download_file(file_url, download_folder, 0, 1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, 1, page_number=1))
 
     # Ensure incomplete file was removed and the file is marked as failed
     target_folder, filename = thread.generate_filename_and_folder(
-        file_url, download_folder, 0, 1, "1", "Post Title"
+        file_url, download_folder, 0, 1, "1", "Post Title", page_number=1
     )
     full_path = os.path.join(target_folder, filename.replace("/", "_"))
     assert not os.path.exists(full_path)
@@ -657,10 +657,10 @@ def test_download_file_retries_and_succeeds(monkeypatch, tmp_path):
 
     thread._safe_emit = fake_safe_emit
 
-    asyncio.run(thread.download_file(file_url, download_folder, 0, 1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, 1, page_number=1))
 
     target_folder, filename = thread.generate_filename_and_folder(
-        file_url, download_folder, 0, 1, "1", "Post Title"
+        file_url, download_folder, 0, 1, "1", "Post Title", page_number=1
     )
     full_path = os.path.join(target_folder, filename.replace("/", "_"))
 

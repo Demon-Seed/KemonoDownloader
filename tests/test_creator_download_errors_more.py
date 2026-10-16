@@ -7,6 +7,8 @@ from kemonodownloader import creator_downloader as cd
 
 
 class FakeResp:
+    status_code = 200
+
     def __init__(self, chunks, headers=None):
         self._chunks = chunks
         self.headers = headers or {}
@@ -61,7 +63,7 @@ def test_download_size_mismatch_marks_failed(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: FS())
 
-    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1))
+    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
     assert file_url in t.failed_files
     assert file_url not in t.completed_files
 
@@ -91,5 +93,5 @@ def test_download_retries_on_request_exception_then_succeeds(tmp_path, monkeypat
 
     monkeypatch.setattr(cd.asyncio, "sleep", nosleep)
 
-    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1))
+    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
     assert file_url in t.completed_files

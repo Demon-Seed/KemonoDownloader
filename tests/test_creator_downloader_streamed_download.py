@@ -84,7 +84,7 @@ def test_streamed_download_writes_file_and_updates_hashdb(monkeypatch, tmp_path)
     )
 
     # Run the async download
-    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1, page_number=1))
 
     # Confirm the file was marked completed
     assert file_url in thread.completed_files

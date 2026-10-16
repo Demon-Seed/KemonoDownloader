@@ -148,7 +148,8 @@ def test_creator_download_thread_generate_filename_and_folder_and_counters(tmp_p
     assert creator_id in target_folder
 
     # With auto-rename enabled the page number (detection order) prefixes the
-    # filename, zero-padded so it sorts numerically.
+    # filename. This post has its own folder, so the prefix is not padded and
+    # carries no post-order component.
     thread.auto_rename_enabled = True
     target_folder2, filename2 = thread.generate_filename_and_folder(
         file_url,
@@ -159,7 +160,7 @@ def test_creator_download_thread_generate_filename_and_folder_and_counters(tmp_p
         post_titles_map[(service, creator_id, post_id)],
         1,
     )
-    assert filename2.startswith("001_")
+    assert filename2.startswith("1_")
     # A later page keeps its own prefix rather than a running per-thread counter.
     _, filename3 = thread.generate_filename_and_folder(
         file_url,
@@ -170,7 +171,7 @@ def test_creator_download_thread_generate_filename_and_folder_and_counters(tmp_p
         post_titles_map[(service, creator_id, post_id)],
         2,
     )
-    assert filename3.startswith("002_")
+    assert filename3.startswith("2_")
 
 
 def test_get_desc_folder_for_post_respects_strategy(tmp_path):

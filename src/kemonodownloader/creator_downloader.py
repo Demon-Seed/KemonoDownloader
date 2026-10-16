@@ -430,7 +430,7 @@ def _keyword_matches_text(keywords, text):
     """Case-insensitive whole-word match of any keyword in *text*,
     treating non-alphanumeric characters (including _, -, ., /, spaces,
     curly braces, etc.) as valid word boundaries (in addition to string
-    start/end).  No normalization is performed 窶・the keyword must appear
+    start/end).  No normalization is performed — the keyword must appear
     exactly (case-insensitive) as a whole word in the text.  This avoids
     false positives from camelCase splitting (e.g. 'sketch' will NOT match
     'SketchBook').  Shared by PostDetectionThread (post/title-level skip)
@@ -493,7 +493,7 @@ class PostDetectionThread(QThread):
             # Legacy default when the caller doesn't specify scopes at all.
             self.skip_keywords_scopes = {"title"}
         else:
-            # Respect the caller's exact selection 窶・including an empty
+            # Respect the caller's exact selection — including an empty
             # set, which means no scope is checked and therefore no
             # post should be skipped by keyword.
             self.skip_keywords_scopes = set(skip_keywords_scopes)
@@ -1796,6 +1796,9 @@ class CreatorDownloadThread(QThread):
         self.hash_db = HashDB(self.other_files_dir)
         self.max_concurrent = max_concurrent
         self.post_files_map = self.build_post_files_map()
+        # 1-based selection order per post id; used by the auto-rename
+        # prefix so that posts sharing a folder stay contiguous.
+        self.post_order_map = self.build_post_order_map()
         self.completed_files = set()
         self.failed_files = {}  # Map file_url to error message
         self.post_titles_map = post_titles_map
@@ -1846,6 +1849,43 @@ class CreatorDownloadThread(QThread):
             if post_id in post_files_map:
                 post_files_map[post_id].append(file_url)
         return post_files_map
+
+    def build_post_order_map(self):
+        """Map each post id to its 1-based position in the selection order.
+
+        ``files_to_download`` is assembled by concurrent detection threads
+        (``FilePreparationThread._worker``), so the order of posts *within*
+        that flat list is not deterministic. ``selected_posts`` keeps the
+        order the user selected/detected the posts in, which is the order
+        the auto-rename prefix must follow so that every post stays a
+        contiguous, internally ordered block when posts share a folder.
+        """
+        post_order_map = {}
+        for post_id in self.selected_posts:
+            if post_id not in post_order_map:
+                post_order_map[post_id] = len(post_order_map) + 1
+        # Defensive: ids that reached the queue without being listed in
+        # ``selected_posts`` (e.g. files whose url is missing from
+        # ``files_to_posts_map`` default to the creator id) still need a
+        # stable slot instead of colliding with post 1.
+        for file_url in self.files_to_download:
+            post_id = self.files_to_posts_map.get(file_url)
+            if post_id is not None and post_id not in post_order_map:
+                post_order_map[post_id] = len(post_order_map) + 1
+        return post_order_map
+
+    def get_post_order(self, post_id):
+        """Return the 1-based selection order of *post_id*.
+
+        Unknown ids are appended to the end of the order so they still form
+        a single stable block. This only mutates on the first miss, which
+        happens on the download event loop thread.
+        """
+        order = self.post_order_map.get(post_id)
+        if order is None:
+            order = len(self.post_order_map) + 1
+            self.post_order_map[post_id] = order
+        return order
 
     def fetch_creator_and_post_info(self):
         """Fetch creator name and retrieve post titles from post_titles_map."""
@@ -1999,7 +2039,7 @@ class CreatorDownloadThread(QThread):
             if "{post_id}" in template:
                 candidate = base_name
             else:
-                # Simple disk-existence check 窶・append _1, _2, ... until
+                # Simple disk-existence check — append _1, _2, ... until
                 # a free name is found. No marker files, no cross-session
                 # tracking; just a basic collision guard.
                 candidate = base_name
@@ -2079,22 +2119,9 @@ class CreatorDownloadThread(QThread):
                 pass
             formatted = f"{context['post_id']}_{context['orig_name']}"
 
-        # Apply auto-rename prefix if enabled. The per-post page number
-        # is computed once at enqueue time (detection order), so pages
-        # stay in reading order even when downloaded concurrently.
-        # Zero-padding keeps lexicographic sorting (e.g. Windows
-        # Explorer) in numeric order.
-        prefix = ""
-        if self.auto_rename_enabled:
-            post_file_count = len(self.post_files_map.get(post_id, []))
-            width = max(3, len(str(post_file_count)))
-            prefix = f"{page_number:0{width}d}_"
-
-        # Build final filename and sanitize
-        filename_no_ext = sanitize_filename(prefix + formatted)
-        final_filename = f"{filename_no_ext}{file_ext}"
-
-        # Determine target folder
+        # Determine the target folder before the filename: the auto-rename
+        # prefix depends on whether this file lands in a folder of its own
+        # or in a folder that is shared with other posts.
         # Creator folder name
         creator_folder_name = (
             f"{self.creator_id}_{self.creator_name or self.creator_id}"
@@ -2107,6 +2134,10 @@ class CreatorDownloadThread(QThread):
         else:
             creator_folder = os.path.join(folder, creator_folder_name)
 
+        # ``post_folder_name`` stays None whenever the file lands in a folder
+        # that can also hold files of other posts: single_folder,
+        # by_file_type, or a per-post download whose post folder was skipped.
+        post_folder_name = None
         if strategy == "single_folder":
             target_folder = creator_folder
         elif strategy == "by_file_type":
@@ -2128,6 +2159,26 @@ class CreatorDownloadThread(QThread):
                     post_id, post_title_safe, creator_folder
                 )
                 target_folder = os.path.join(creator_folder, post_folder_name)
+
+        # Apply auto-rename prefix if enabled. The per-post page number is
+        # computed once at enqueue time (detection order), so pages stay in
+        # reading order even when downloaded concurrently.
+        # In a per-post folder the folder itself already keeps that post's
+        # files together, so the plain page number is enough. In a shared
+        # folder every post restarts counting at 1, which would interleave
+        # the posts (1_a, 1_b, 2_a, ...), so the post's selection order is
+        # prepended to keep each post a contiguous, internally ordered block
+        # (1_1_a, 1_2_a, 2_1_b, ...).
+        prefix = ""
+        if self.auto_rename_enabled:
+            if post_folder_name is not None:
+                prefix = f"{page_number}_"
+            else:
+                prefix = f"{self.get_post_order(post_id)}_{page_number}_"
+
+        # Build final filename and sanitize
+        filename_no_ext = sanitize_filename(prefix + formatted)
+        final_filename = f"{filename_no_ext}{file_ext}"
 
         return target_folder, final_filename
 
@@ -2639,7 +2690,7 @@ class CreatorDownloadThread(QThread):
                     file_url, folder, file_index, total_files, page_number
                 )
             except asyncio.CancelledError:
-                return  # finally still runs 竊・task_done()
+                return  # finally still runs → task_done()
             except Exception as e:
                 self._safe_emit(
                     self.log,
@@ -3042,7 +3093,7 @@ class CreatorDownloaderTab(QWidget):
         left_layout = QVBoxLayout(left_widget)
 
         # URL input area: one URL per line. Both creator and post URLs are
-        # accepted 窶・post URLs are canonicalized to their parent creator.
+        # accepted — post URLs are canonicalized to their parent creator.
         self.creator_multi_url_input = QTextEdit()
         self.creator_multi_url_input.setPlaceholderText(
             translate("multi_url_placeholder_creator")
@@ -3113,11 +3164,26 @@ class CreatorDownloaderTab(QWidget):
         creator_categories_layout.addStretch()
         creator_options_layout.addLayout(creator_categories_layout)
 
-        # Auto rename checkbox
+        # Auto rename + sort by file order checkbox, with an info button
+        # that explains the naming rules (per-post vs shared folders).
+        auto_rename_layout = QHBoxLayout()
+        auto_rename_layout.setContentsMargins(0, 0, 0, 0)
         self.creator_auto_rename_check = QCheckBox()
         self.creator_auto_rename_check.setChecked(True)  # Default to enabled
         self.creator_auto_rename_check.setStyleSheet("color: white;")
-        creator_options_layout.addWidget(self.creator_auto_rename_check)
+        auto_rename_layout.addWidget(self.creator_auto_rename_check)
+
+        self.creator_auto_rename_info_btn = QPushButton(
+            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+        )
+        self.creator_auto_rename_info_btn.setFixedSize(26, 26)
+        self.creator_auto_rename_info_btn.setStyleSheet(
+            "background: #4A5B7A; border-radius: 5px;"
+        )
+        self.creator_auto_rename_info_btn.clicked.connect(self.show_auto_rename_info)
+        auto_rename_layout.addWidget(self.creator_auto_rename_info_btn)
+        auto_rename_layout.addStretch()
+        creator_options_layout.addLayout(auto_rename_layout)
 
         # Download text checkbox
         self.creator_download_text_check = QCheckBox(translate("download_text"))
@@ -3315,7 +3381,7 @@ class CreatorDownloaderTab(QWidget):
 
         post_list_layout.addLayout(skip_filter_layout)
 
-        # Skip scope toggles row 窶・each toggle is independent (multi-select),
+        # Skip scope toggles row — each toggle is independent (multi-select),
         # so a post is skipped if the keyword matches in ANY enabled scope.
         skip_scope_layout = QHBoxLayout()
         skip_scope_layout.setContentsMargins(0, 0, 0, 0)
@@ -3369,7 +3435,7 @@ class CreatorDownloaderTab(QWidget):
 
         post_list_layout.addLayout(file_skip_filter_layout)
 
-        # Post date range filter 窶・"From"/"To" bounds (both optional,
+        # Post date range filter — "From"/"To" bounds (both optional,
         # both inclusive). Filters by the post's own publish date, not
         # the import/scrape date.
         date_range_layout = QHBoxLayout()
@@ -3545,7 +3611,16 @@ class CreatorDownloaderTab(QWidget):
         self.creator_content_check.setText(translate("content_images"))
         self.creator_check_all.setText(translate("check_all"))
         self.creator_check_all_all.setText(translate("check_all_all"))
-        self.creator_auto_rename_check.setText(translate("auto_rename"))
+        # Qt swallows a single "&" as a mnemonic marker (Alt+<next char>) and
+        # underlines the character after it, so escape it to show a literal
+        # ampersand in the label.
+        self.creator_auto_rename_check.setText(
+            translate("auto_rename").replace("&", "&&")
+        )
+        if hasattr(self, "creator_auto_rename_info_btn"):
+            self.creator_auto_rename_info_btn.setToolTip(
+                _t("auto_rename_info_title", "Rename & Sort by File order")
+            )
         if hasattr(self, "creator_skip_folder_info_btn"):
             self.creator_skip_folder_info_btn.setToolTip(
                 _t("skip_folder_info_title", "Skip Post Folder")
@@ -3631,6 +3706,17 @@ class CreatorDownloaderTab(QWidget):
             self.background_task_progress.setValue(0)
             self.background_task_label.setText(translate("idle"))
 
+    def show_auto_rename_info(self):
+        """Show a dialog explaining what Rename & Sort by File order does."""
+        QMessageBox.information(
+            self,
+            _t("auto_rename_info_title", "Rename & Sort by File order"),
+            _t(
+                "auto_rename_info_text",
+                "Adds a number in front of every filename so files sort in download order.\n\nIn per-post folders the number is only the file's position within its own post:\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\nWhen posts share a folder (Folder Structure set to 'Single creator folder' or 'Subfolders by file type', or a post whose folder was skipped by 'Skip Post Folder'), the post's own order is added in front of it, so every post stays one contiguous, ordered block:\n  1_1_first.jpg, 1_2_second.jpg, 2_1_next_post.jpg\n\nNote: with 'Always Post Folder for Compressed Files' enabled, archives keep their own post folder and get only the position number, while the rest of that post's files are skipped into the shared folder and get the post-order number too.",
+            ),
+        )
+
     def show_skip_folder_info(self):
         """Show a dialog explaining what Skip Post Folder does."""
         QMessageBox.information(
@@ -3638,7 +3724,7 @@ class CreatorDownloaderTab(QWidget):
             _t("skip_folder_info_title", "Skip Post Folder"),
             _t(
                 "skip_folder_info_text",
-                "When enabled, posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.\n\nFor example, if set to 1, single-image posts will not get their own folder 窶・the image will be placed directly in the creator's folder.\n\nThis only applies when Folder Structure is set to 'Per-post folders'.\n\nThe archive icon toggle next to this button ignores compressed files (ZIP, 7z, RAR) when deciding whether to skip the post folder 窶・those files will always be saved in their own post folder, even if Skip Post Folder would otherwise apply to that post.",
+                "When enabled, posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.\n\nFor example, if set to 1, single-image posts will not get their own folder — the image will be placed directly in the creator's folder.\n\nThis only applies when Folder Structure is set to 'Per-post folders'.\n\nThe archive icon toggle next to this button ignores compressed files (ZIP, 7z, RAR) when deciding whether to skip the post folder — those files will always be saved in their own post folder, even if Skip Post Folder would otherwise apply to that post.",
             ),
         )
 
@@ -3855,7 +3941,7 @@ class CreatorDownloaderTab(QWidget):
         self.set_fetching_ui_state(True)
 
         # Read skip-keywords and scope directly from the inline UI widgets.
-        # Scope is a set of independently-toggled checkboxes now 窶・a post is
+        # Scope is a set of independently-toggled checkboxes now — a post is
         # skipped if the keyword matches in ANY enabled scope.
         raw_keywords = self.skip_keywords_edit.text().strip()
         skip_keywords = [kw.strip() for kw in raw_keywords.split(",") if kw.strip()] if raw_keywords else []
@@ -4065,6 +4151,8 @@ class CreatorDownloaderTab(QWidget):
 
         # Options
         self.creator_auto_rename_check.setEnabled(enabled)
+        if hasattr(self, "creator_auto_rename_info_btn"):
+            self.creator_auto_rename_info_btn.setEnabled(enabled)
         self.creator_download_text_check.setEnabled(enabled)
 
         # Skip-folder toggle + dropdown
@@ -4585,7 +4673,7 @@ class CreatorDownloaderTab(QWidget):
             )
 
         # Ensure the native thread has fully exited before we let the object
-        # be garbage-collected 窶・otherwise Qt prints
+        # be garbage-collected — otherwise Qt prints
         # "QThread: Destroyed while thread is still running" and crashes.
         try:
             if thread.isRunning():
@@ -4712,7 +4800,7 @@ class CreatorDownloaderTab(QWidget):
             self.background_task_progress.setRange(0, 0)
 
             # Start cancellation thread to handle cleanup.
-            # Store separately 窶・do NOT add to active_threads because
+            # Store separately — do NOT add to active_threads because
             # on_cancellation_finished deletes everything in that list
             # and deleting the CancellationThread while its system thread
             # is still tearing down causes "Destroyed while running".
@@ -4982,12 +5070,12 @@ class CreatorDownloaderTab(QWidget):
                 "matching any keyword (case-insensitive, whole word) are "
                 "excluded entirely.\n\n"
                 "Use the 'Filter By' checkboxes to choose which fields are "
-                "checked. Any combination can be enabled at once 窶・a post is "
+                "checked. Any combination can be enabled at once — a post is "
                 "skipped if the keyword matches in ANY enabled field:\n"
-                "  窶｢ Title 窶・checks the post title\n"
-                "  窶｢ Filenames 窶・checks the main file and attachment names\n"
-                "  窶｢ Description 窶・checks the post body text\n"
-                "  窶｢ Tags 窶・checks the post's tags\n\n"
+                "  • Title — checks the post title\n"
+                "  • Filenames — checks the main file and attachment names\n"
+                "  • Description — checks the post body text\n"
+                "  • Tags — checks the post's tags\n\n"
                 "Matching is case-insensitive and whole-word. For example, "
                 "'sketch' matches 'Sketch' but not 'SketchBook'. To match "
                 "multiple variations, enter them as separate keywords: "
@@ -5005,7 +5093,7 @@ class CreatorDownloaderTab(QWidget):
                 "skip_files_keywords_help_text",
                 "Comma-separated keywords (e.g. JP, ZH). Individual files "
                 "matching any keyword (case-insensitive, whole word) are "
-                "excluded from download. Only the matched file is skipped 窶・"
+                "excluded from download. Only the matched file is skipped — "
                 "never the whole post. Independent from 'Skip Posts "
                 "Containing' above. Leave blank to disable.",
             ),
@@ -5020,7 +5108,7 @@ class CreatorDownloaderTab(QWidget):
                 "date_filter_help_text",
                 "Filter posts by their own publish date (not the date they "
                 "were imported/scraped). Enter dates as YYYY-MM-DD in "
-                "'From' and/or 'To' 窶・both bounds are inclusive and both "
+                "'From' and/or 'To' — both bounds are inclusive and both "
                 "are optional; leave either blank to disable that bound. "
                 "Posts with an unknown publish date are always kept.",
             ),
@@ -5252,8 +5340,8 @@ class CreatorDownloaderTab(QWidget):
             "INFO",
         )
 
-        # Emit skip-keywords summary INFO lines LAST 窶・after all detection,
-        # population, and filtering logs are done 窶・so they appear at the
+        # Emit skip-keywords summary INFO lines LAST — after all detection,
+        # population, and filtering logs are done — so they appear at the
         # very end of the log.
         if getattr(self, "_pending_detection_summary", False):
             self._pending_detection_summary = False

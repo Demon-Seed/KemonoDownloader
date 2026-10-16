@@ -15,8 +15,12 @@ def test_generate_filename_template_error_fallback():
     dummy.post_titles_map = {("fanbox", "42", "101"): "My Post"}
     dummy.creator_name = "Creator"
     dummy.auto_rename_enabled = False
-    dummy.post_file_counters = {}
-    dummy.post_file_counters_lock = threading.Lock()
+    dummy.post_files_map = {}
+    dummy.skip_folder_enabled = False
+    dummy.skip_folder_threshold = 1
+    dummy.force_folder_for_compressed = False
+    dummy.COMPRESSED_EXTENSIONS = (".zip", ".7z", ".rar")
+    dummy.get_post_folder_name = lambda pid, title, cf: f"{pid}_{title}"
     # Provide a template that references a missing key to force formatting error
     st = SimpleNamespace()
     st.get_creator_filename_template = lambda: "{does_not_exist}"
@@ -32,6 +36,7 @@ def test_generate_filename_template_error_fallback():
         1,
         "101",
         "My Post",
+        page_number=1,
     )
 
     assert filename.endswith(".png")
@@ -45,8 +50,12 @@ def test_auto_rename_counter_per_post():
     dummy.post_titles_map = {("fanbox", "42", "101"): "My Post"}
     dummy.creator_name = "Creator"
     dummy.auto_rename_enabled = True
-    dummy.post_file_counters = {}
-    dummy.post_file_counters_lock = threading.Lock()
+    dummy.post_files_map = {}
+    dummy.skip_folder_enabled = False
+    dummy.skip_folder_threshold = 1
+    dummy.force_folder_for_compressed = False
+    dummy.COMPRESSED_EXTENSIONS = (".zip", ".7z", ".rar")
+    dummy.get_post_folder_name = lambda pid, title, cf: f"{pid}_{title}"
     dummy.settings = SimpleNamespace(
         settings_tab=SimpleNamespace(
             get_creator_filename_template=lambda: None,
@@ -63,6 +72,7 @@ def test_auto_rename_counter_per_post():
         2,
         "101",
         "Title",
+        page_number=1,
     )
     _, f2 = cd.CreatorDownloadThread.generate_filename_and_folder(
         dummy,
@@ -72,6 +82,7 @@ def test_auto_rename_counter_per_post():
         2,
         "101",
         "Title",
+        page_number=2,
     )
 
     assert f1.startswith("1_")
@@ -112,7 +123,7 @@ def test_download_file_deletion_failure(monkeypatch, tmp_path):
 
     # generate filename
     dummy.generate_filename_and_folder = (
-        lambda file_url, folder, file_index, total_files, post_id, post_title: (
+        lambda file_url, folder, file_index, total_files, post_id, post_title, page_number: (
             str(tmp_path),
             "out.bin",
         )
@@ -147,7 +158,9 @@ def test_download_file_deletion_failure(monkeypatch, tmp_path):
     )
 
     asyncio.run(
-        cd.CreatorDownloadThread.download_file(dummy, file_url, str(tmp_path), 0, 1)
+        cd.CreatorDownloadThread.download_file(
+            dummy, file_url, str(tmp_path), 0, 1, page_number=1
+        )
     )
 
     assert file_url in dummy.failed_files
@@ -193,7 +206,7 @@ def test_download_file_success(monkeypatch, tmp_path):
     dummy.settings = SimpleNamespace(settings_tab=None, file_download_max_retries=1)
     dummy.files_to_download = [file_url]
     dummy.files_to_posts_map = {file_url: "101"}
-    dummy.domain_config = {"referer": "https://kemono.cr/"}
+    dummy.domain_config = {"referer": "https://kemono.cr/", "base_url": "https://kemono.cr"}
     dummy.is_running = True
     stored = []
     dummy.hash_db = SimpleNamespace(
@@ -214,7 +227,7 @@ def test_download_file_success(monkeypatch, tmp_path):
     dummy.check_post_completion = lambda url: None
     dummy.download_text = False
     dummy.generate_filename_and_folder = (
-        lambda file_url, folder, file_index, total_files, post_id, post_title: (
+        lambda file_url, folder, file_index, total_files, post_id, post_title, page_number: (
             str(tmp_path),
             "success.bin",
         )
@@ -245,7 +258,9 @@ def test_download_file_success(monkeypatch, tmp_path):
     monkeypatch.setattr(cd, "get_session", lambda s=None: FakeSession())
 
     asyncio.run(
-        cd.CreatorDownloadThread.download_file(dummy, file_url, str(tmp_path), 0, 1)
+        cd.CreatorDownloadThread.download_file(
+            dummy, file_url, str(tmp_path), 0, 1, page_number=1
+        )
     )
     assert not dummy.failed_files, dummy.failed_files
     full_path = os.path.join(str(tmp_path), "success.bin")
@@ -286,7 +301,7 @@ def test_download_file_retry_exhaustion(monkeypatch, tmp_path):
     dummy.check_post_completion = lambda url: None
     dummy.download_text = False
     dummy.generate_filename_and_folder = (
-        lambda file_url, folder, file_index, total_files, post_id, post_title: (
+        lambda file_url, folder, file_index, total_files, post_id, post_title, page_number: (
             str(tmp_path),
             "fail.bin",
         )
@@ -302,7 +317,9 @@ def test_download_file_retry_exhaustion(monkeypatch, tmp_path):
     monkeypatch.setattr(cd, "get_session", lambda s=None: Sess())
     # run
     asyncio.run(
-        cd.CreatorDownloadThread.download_file(dummy, file_url, str(tmp_path), 0, 1)
+        cd.CreatorDownloadThread.download_file(
+            dummy, file_url, str(tmp_path), 0, 1, page_number=1
+        )
     )
     assert file_url in dummy.failed_files
 
@@ -313,7 +330,7 @@ def test_download_worker_consumes_queue():
 
     calls = []
 
-    async def fake_download(file_url, folder, file_index, total_files):
+    async def fake_download(file_url, folder, file_index, total_files, page_number):
         calls.append((file_index, file_url))
         await asyncio.sleep(0)
 
@@ -321,7 +338,7 @@ def test_download_worker_consumes_queue():
 
     async def main():
         q = asyncio.Queue()
-        await q.put((0, "u1"))
+        await q.put((0, "u1", 1))
         t = asyncio.create_task(
             cd.CreatorDownloadThread.download_worker(dummy, q, "/tmp", 1)
         )

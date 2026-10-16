@@ -434,7 +434,7 @@ def test_download_file_short_circuit_with_hash(tmp_path):
         url_hash, str(existing), file_hash, file_url, existing.stat().st_size
     )
 
-    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1))
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
     assert file_url in thread.completed_files
 
 

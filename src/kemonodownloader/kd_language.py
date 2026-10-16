@@ -731,10 +731,28 @@ class KDLanguage:
                 "chinese-simplified": "失败",
             },
             "auto_rename": {
-                "english": "Auto Rename and sort File name by order",
-                "japanese": "自動リネームとファイル名を順序で並べ替え",
-                "korean": "자동 이름 바꾸기 및 순서별 파일 이름 정렬",
-                "chinese-simplified": "自动重命名并按顺序排序文件名",
+                "english": "Rename & Sort by File order",
+                "japanese": "ファイル順にリネームして並べ替え",
+                "korean": "파일 순서대로 이름 바꾸기 및 정렬",
+                "chinese-simplified": "按文件顺序重命名并排序",
+            },
+            "auto_rename_info_title": {
+                "english": "Rename & Sort by File order",
+                "japanese": "ファイル順にリネームして並べ替え",
+                "korean": "파일 순서대로 이름 바꾸기 및 정렬",
+                "chinese-simplified": "按文件顺序重命名并排序",
+            },
+            "auto_rename_info_text": {
+                "english": "Adds a number in front of every filename so files sort in download order.\n\nIn per-post folders the number is only the file's position within its own post:\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\nWhen posts share a folder (Folder Structure set to 'Single creator folder' or 'Subfolders by file type', or a post whose folder was skipped by 'Skip Post Folder'), the post's own order is added in front of it, so every post stays one contiguous, ordered block:\n  1_1_first.jpg, 1_2_second.jpg, 2_1_next_post.jpg\n\nNote: with 'Always Post Folder for Compressed Files' enabled, archives keep their own post folder and get only the position number, while the rest of that post's files are skipped into the shared folder and get the post-order number too.",
+                "japanese": "すべてのファイル名の先頭に番号を付け、ダウンロード順に並ぶようにします。\n\n投稿ごとのフォルダでは、番号はその投稿内でのファイルの位置だけになります:\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\n複数の投稿が同じフォルダを共有する場合（フォルダ構造が「単一のクリエイターフォルダ」または「ファイル形式ごとのサブフォルダ」の場合、または「投稿フォルダをスキップ」でフォルダが省略された投稿）、投稿自身の順序がさらに前に付き、各投稿が連続した並び順のブロックになります:\n  1_1_first.jpg, 1_2_second.jpg, 2_1_next_post.jpg\n\n注: 「圧縮ファイルは常に投稿フォルダ」が有効な場合、アーカイブは専用の投稿フォルダを保持して位置番号のみが付き、その投稿の残りのファイルは共有フォルダに保存されて投稿順の番号も付きます。",
+                "korean": "모든 파일 이름 앞에 번호를 붙여 다운로드 순서대로 정렬되게 합니다.\n\n게시물별 폴더에서는 번호가 해당 게시물 안에서의 파일 위치만을 나타냅니다:\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\n여러 게시물이 하나의 폴더를 공유하는 경우(폴더 구조가 '단일 크리에이터 폴더' 또는 '파일 형식별 하위 폴더'인 경우, 또는 '게시물 폴더 건너뛰기'로 폴더가 생략된 게시물), 게시물 자체의 순서가 그 앞에 추가되어 각 게시물이 하나의 연속된 정렬 블록으로 유지됩니다:\n  1_1_first.jpg, 1_2_second.jpg, 2_1_next_post.jpg\n\n참고: '압축 파일은 항상 게시물 폴더'가 활성화되면 압축 파일은 자체 게시물 폴더를 유지하고 위치 번호만 붙으며, 해당 게시물의 나머지 파일은 공유 폴더로 이동하여 게시물 순서 번호도 함께 붙습니다.",
+                "chinese-simplified": "在每个文件名前面添加编号，使文件按下载顺序排列。\n\n在使用按帖子创建子文件夹时，编号仅表示该文件在其帖子内的位置：\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\n当多个帖子共用同一个文件夹时（文件夹结构设为“单一创作者文件夹”或“按文件类型创建子文件夹”，或帖子被“跳过帖子文件夹”省略了文件夹），会在最前面再加上帖子自身的顺序，使每个帖子保持为一段连续且有序的区块：\n  1_1_first.jpg, 1_2_second.jpg, 2_1_next_post.jpg\n\n注意：启用“压缩文件始终使用帖子文件夹”时，压缩文件会保留自己的帖子文件夹并只带有位置编号，而该帖子其余的文件会被放入共享文件夹，并同时带有帖子顺序编号。",
+            },
+            "post_auto_rename_info_text": {
+                "english": "Adds a number in front of every filename so the post's files sort in download order:\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\nEach post is saved in its own folder, so the numbering always starts at 1 for every post.",
+                "japanese": "すべてのファイル名の先頭に番号を付け、その投稿のファイルがダウンロード順に並ぶようにします:\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\n各投稿は専用のフォルダに保存されるため、番号は投稿ごとに必ず 1 から始まります。",
+                "korean": "모든 파일 이름 앞에 번호를 붙여 해당 게시물의 파일이 다운로드 순서대로 정렬되게 합니다:\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\n각 게시물은 자체 폴더에 저장되므로 번호는 게시물마다 항상 1부터 시작합니다.",
+                "chinese-simplified": "在每个文件名前面添加编号，使该帖子的文件按下载顺序排列：\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\n每个帖子都保存在各自的文件夹中，因此每个帖子的编号始终从 1 开始。",
             },
             "creator_downloader_settings": {
                 "english": "Creator Downloader",

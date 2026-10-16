@@ -37,7 +37,7 @@ def test_generate_filename_and_folder_default(tmp_path):
 
     file_url = "https://kemono.cr/media/abc.png?f=orig.png"
     folder, filename = t.generate_filename_and_folder(
-        file_url, str(tmp_path / "dl"), 0, 1, "p1", "My Post"
+        file_url, str(tmp_path / "dl"), 0, 1, "p1", "My Post", page_number=1
     )
 
     assert filename.endswith(".png")
@@ -59,7 +59,7 @@ def test_generate_filename_single_folder_and_template(tmp_path):
     file_url = "https://kemono.cr/media/1.jpg?f=file.jpg"
 
     folder, filename = t.generate_filename_and_folder(
-        file_url, str(tmp_path / "dl"), 0, 2, "p1", "Title"
+        file_url, str(tmp_path / "dl"), 0, 2, "p1", "Title", page_number=1
     )
 
     # single_folder => target folder should end with creator folder

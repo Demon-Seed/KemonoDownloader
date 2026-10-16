@@ -63,7 +63,7 @@ def test_download_file_retries_records_failure(monkeypatch, tmp_path):
     )
 
     # Run the async download_file coroutine; it should exhaust retries and record a failure
-    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1, page_number=1))
 
     assert file_url in thread.failed_files
     # Ensure no completed files were recorded

@@ -46,7 +46,7 @@ def test_creator_download_run_processes_queue(monkeypatch, tmp_path):
     # Prevent network calls in fetch_creator_and_post_info
     thread.fetch_creator_and_post_info = lambda: None
 
-    async def fake_download_file(file_url, folder, file_index, total_files):
+    async def fake_download_file(file_url, folder, file_index, total_files, page_number):
         # mark as completed
         thread.completed_files.add(file_url)
 

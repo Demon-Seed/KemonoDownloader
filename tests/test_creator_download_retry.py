@@ -71,7 +71,7 @@ def test_download_size_mismatch_deletion_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(os, "remove", fake_remove)
 
     # Run the async download
-    asyncio.run(thread.download_file(file_url, target_folder, 0, total_files=1))
+    asyncio.run(thread.download_file(file_url, target_folder, 0, total_files=1, page_number=1))
 
     # The thread should have recorded a failure for this file
     assert file_url in thread.failed_files

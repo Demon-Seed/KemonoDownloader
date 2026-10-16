@@ -26,7 +26,7 @@ def test_post_population_thread_emits_map():
     thread.run()
     assert captured
     post_map, posts = captured[0]
-    assert any("Title A (ID: 1)" in k for k in post_map.keys())
+    assert any("Title A (Unknown date)" in k for k in post_map.keys())
 
 
 def test_filter_thread_filters_and_emits():

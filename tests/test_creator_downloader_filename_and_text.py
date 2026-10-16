@@ -49,7 +49,7 @@ def test_generate_filename_and_folder_strategies(tmp_path):
     thread.creator_name = "Alice"
 
     target_folder, filename = thread.generate_filename_and_folder(
-        file_url, download_folder, 0, 1, "1", "MyPost"
+        file_url, download_folder, 0, 1, "1", "MyPost", page_number=1
     )
     assert os.path.basename(target_folder) == "1_MyPost"
     assert filename.endswith(".png")
@@ -58,7 +58,7 @@ def test_generate_filename_and_folder_strategies(tmp_path):
     settings = make_settings(strategy="single_folder")
     thread.settings = settings
     target_folder_sf, _ = thread.generate_filename_and_folder(
-        file_url, download_folder, 0, 1, "1", "MyPost"
+        file_url, download_folder, 0, 1, "1", "MyPost", page_number=1
     )
     assert (
         os.path.basename(target_folder_sf)
@@ -69,7 +69,7 @@ def test_generate_filename_and_folder_strategies(tmp_path):
     settings = make_settings(strategy="by_file_type")
     thread.settings = settings
     target_folder_bt, _ = thread.generate_filename_and_folder(
-        file_url, download_folder, 0, 1, "1", "MyPost"
+        file_url, download_folder, 0, 1, "1", "MyPost", page_number=1
     )
     assert os.path.basename(target_folder_bt) == "png"
 
@@ -102,10 +102,10 @@ def test_auto_rename_prefix_increments(tmp_path):
     thread.creator_name = "Bob"
 
     _, fname1 = thread.generate_filename_and_folder(
-        file_url, download_folder, 0, 1, "1", "MyPost"
+        file_url, download_folder, 0, 1, "1", "MyPost", page_number=1
     )
     _, fname2 = thread.generate_filename_and_folder(
-        file_url, download_folder, 1, 1, "1", "MyPost"
+        file_url, download_folder, 1, 1, "1", "MyPost", page_number=2
     )
     assert fname1.startswith("1_")
     assert fname2.startswith("2_")
@@ -140,7 +140,7 @@ def test_template_error_fallback(tmp_path):
     thread.creator_name = "Carol"
 
     target_folder, filename = thread.generate_filename_and_folder(
-        file_url, download_folder, 0, 1, "1", "MyPost"
+        file_url, download_folder, 0, 1, "1", "MyPost", page_number=1
     )
     # Fallback uses post_id and original name
     assert (

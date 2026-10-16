@@ -37,7 +37,7 @@ def test_generate_filename_single_folder(tmp_path):
     t = _make_thread(tmp_path, settings)
     file_url = "https://kemono.cr/files/abc.jpg"
     target_folder, filename = t.generate_filename_and_folder(
-        file_url, str(tmp_path / "base"), 0, 1, "1", "Title 1"
+        file_url, str(tmp_path / "base"), 0, 1, "1", "Title 1", page_number=1
     )
 
     assert os.path.basename(target_folder) == "42_Creator"
@@ -56,7 +56,7 @@ def test_generate_filename_by_file_type(tmp_path):
     t = _make_thread(tmp_path, settings)
     file_url = "https://kemono.cr/files/f.jpg"
     target_folder, filename = t.generate_filename_and_folder(
-        file_url, str(tmp_path / "base"), 0, 1, "1", "Title 1"
+        file_url, str(tmp_path / "base"), 0, 1, "1", "Title 1", page_number=1
     )
 
     assert os.path.basename(target_folder) == "jpg"
@@ -74,10 +74,10 @@ def test_auto_rename_prefix_increments(tmp_path):
     t = _make_thread(tmp_path, settings, auto_rename=True)
     file_url = "https://kemono.cr/files/pic.png"
     _, filename1 = t.generate_filename_and_folder(
-        file_url, str(tmp_path / "base"), 0, 2, "1", "Title 1"
+        file_url, str(tmp_path / "base"), 0, 2, "1", "Title 1", page_number=1
     )
     _, filename2 = t.generate_filename_and_folder(
-        file_url, str(tmp_path / "base"), 1, 2, "1", "Title 1"
+        file_url, str(tmp_path / "base"), 1, 2, "1", "Title 1", page_number=2
     )
 
     assert filename1.startswith("1_")
@@ -96,7 +96,7 @@ def test_template_error_fallback(tmp_path):
     t = _make_thread(tmp_path, settings)
     file_url = "https://kemono.cr/files/x.txt"
     _, filename = t.generate_filename_and_folder(
-        file_url, str(tmp_path / "base"), 0, 1, "1", "Title 1"
+        file_url, str(tmp_path / "base"), 0, 1, "1", "Title 1", page_number=1
     )
 
     assert filename.startswith("1_")
@@ -114,7 +114,7 @@ def test_creator_folder_already_in_path(tmp_path):
     base = str(tmp_path / "base" / "42_Creator")
     os.makedirs(base, exist_ok=True)
     target_folder, _ = t.generate_filename_and_folder(
-        "https://kemono.cr/files/a.jpg", base, 0, 1, "1", "Title 1"
+        "https://kemono.cr/files/a.jpg", base, 0, 1, "1", "Title 1", page_number=1
     )
 
     # Should not append creator folder again

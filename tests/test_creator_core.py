@@ -139,7 +139,7 @@ def test_generate_filename_and_folder_variants(qapp, tmp_path):
         0,
         1,
         "111",
-        "My Post",
+        "My Post", page_number=1
     )
     assert os.path.basename(folder).startswith("111_")
     assert filename.endswith(".png")
@@ -152,7 +152,7 @@ def test_generate_filename_and_folder_variants(qapp, tmp_path):
         0,
         1,
         "111",
-        "My Post",
+        "My Post", page_number=1
     )
     # Should not create nested post folder
     assert os.path.basename(folder2) == f"{thread.creator_id}_{thread.creator_name}"
@@ -165,7 +165,7 @@ def test_generate_filename_and_folder_variants(qapp, tmp_path):
         0,
         1,
         "111",
-        "My Post",
+        "My Post", page_number=1
     )
     assert os.path.basename(folder3).lower() == "mp4"
 
@@ -410,7 +410,7 @@ def test_check_post_completion_emits(qapp):
         )
 
         # Run the async download_file which should short-circuit and mark the file as completed
-        asyncio.run(thread.download_file(file_url, download_folder, 0, 1))
+        asyncio.run(thread.download_file(file_url, download_folder, 0, 1, page_number=1))
         assert file_url in thread.completed_files
 
 

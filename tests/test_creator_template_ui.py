@@ -65,7 +65,7 @@ def test_invalid_template_falls_back_and_logs(qapp):
     t.creator_name = "Creator Name"
     # Should not raise even with invalid template
     folder, filename = t.generate_filename_and_folder(
-        "https://kemono.cr/media/abc/image.jpg", "/downloads", 0, 1, "1", "My Post"
+        "https://kemono.cr/media/abc/image.jpg", "/downloads", 0, 1, "1", "My Post", page_number=1
     )
     # Fallback format uses post_id_orig_name
     assert (

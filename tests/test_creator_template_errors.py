@@ -34,7 +34,7 @@ def test_template_bad_placeholder_fallsback_and_logs(tmp_path, qapp):
     th.log = SimpleNamespace(emit=MagicMock())
 
     target_folder, filename = th.generate_filename_and_folder(
-        file_url, str(tmp_path / "dl"), 0, 1, "1", "My Post"
+        file_url, str(tmp_path / "dl"), 0, 1, "1", "My Post", page_number=1
     )
 
     # Should fall back to post_id + original name (orig_name from URL 'foo')
@@ -73,7 +73,7 @@ def test_template_format_exception_with_autorename_prefix(tmp_path, qapp):
 
     # First call should increment the per-post counter to 1
     _, fname1 = th.generate_filename_and_folder(
-        file_url, str(tmp_path / "dl2"), 0, 1, "42", "Some Post"
+        file_url, str(tmp_path / "dl2"), 0, 1, "42", "Some Post", page_number=1
     )
     assert fname1.endswith("bar.jpg")
     # Should have prefix '1_' applied before the fallback name

@@ -49,7 +49,7 @@ def test_generate_filename_fallback_on_bad_template(tmp_path):
         0,
         1,
         post_id,
-        post_titles_map[(service, creator_id, post_id)],
+        post_titles_map[(service, creator_id, post_id)], page_number=1
     )
 
     # Fallback should include post_id and sanitized original name
@@ -99,7 +99,7 @@ def test_download_file_uses_hashdb_entry_and_skips_download(tmp_path):
 
     thread.hash_db = FakeHashDB()
 
-    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1))
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
 
     assert file_url in thread.completed_files
 
@@ -152,7 +152,7 @@ def test_download_file_size_mismatch_deletes_incomplete(monkeypatch, tmp_path):
         "kemonodownloader.creator_downloader.get_session", lambda *a, **k: FakeSession()
     )
 
-    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1))
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
 
     # The incomplete file should not exist and the file should be marked failed
     # It should have recorded a failure

@@ -56,7 +56,7 @@ def _make_thread(tmp_path, template=None, strategy="per_post", auto_rename=False
 def test_generate_filename_default(tmp_path):
     t = _make_thread(tmp_path)
     target_folder, final_filename = t.generate_filename_and_folder(
-        t.files_to_download[0], str(tmp_path), 0, 1, "1", "PostTitle"
+        t.files_to_download[0], str(tmp_path), 0, 1, "1", "PostTitle", page_number=1
     )
     assert final_filename.endswith(".png")
     assert "1_" in final_filename or "PostTitle" in target_folder
@@ -66,10 +66,10 @@ def test_generate_filename_auto_rename(tmp_path):
     t = _make_thread(tmp_path, auto_rename=True)
     t.auto_rename_enabled = True
     f1 = t.generate_filename_and_folder(
-        t.files_to_download[0], str(tmp_path), 0, 2, "1", "PostTitle"
+        t.files_to_download[0], str(tmp_path), 0, 2, "1", "PostTitle", page_number=1
     )[1]
     f2 = t.generate_filename_and_folder(
-        t.files_to_download[0], str(tmp_path), 1, 2, "1", "PostTitle"
+        t.files_to_download[0], str(tmp_path), 1, 2, "1", "PostTitle", page_number=2
     )[1]
     assert f1 != f2
     assert f1.startswith("1_") and f2.startswith("2_")
@@ -79,7 +79,7 @@ def test_generate_filename_custom_template(tmp_path):
     template = "{creator_id}_{post_id}_{orig_name}_{file_index}_{total_files}"
     t = _make_thread(tmp_path, template=template)
     folder, fname = t.generate_filename_and_folder(
-        t.files_to_download[0], str(tmp_path), 0, 3, "1", "PostTitle"
+        t.files_to_download[0], str(tmp_path), 0, 3, "1", "PostTitle", page_number=1
     )
     assert "123_1" in fname
 
@@ -87,7 +87,7 @@ def test_generate_filename_custom_template(tmp_path):
 def test_generate_filename_malformed_template_fallback(tmp_path):
     t = _make_thread(tmp_path, template="{nonexistent_key}")
     folder, fname = t.generate_filename_and_folder(
-        t.files_to_download[0], str(tmp_path), 0, 1, "1", "PostTitle"
+        t.files_to_download[0], str(tmp_path), 0, 1, "1", "PostTitle", page_number=1
     )
     assert fname.startswith("1_")  # fallback to safe default
 
@@ -135,7 +135,7 @@ def test_generate_filename_strategies_and_creator_folder(tmp_path):
     t = _make_thread(tmp_path, template=None, strategy="single_folder")
     t.creator_name = "CreatorName"
     target, fname = t.generate_filename_and_folder(
-        t.files_to_download[0], str(tmp_path), 0, 1, "1", "PostTitle"
+        t.files_to_download[0], str(tmp_path), 0, 1, "1", "PostTitle", page_number=1
     )
     assert os.path.normpath(target).endswith(
         os.path.normpath(str(tmp_path / f"{t.creator_id}_{t.creator_name}"))
@@ -147,7 +147,7 @@ def test_generate_filename_strategies_and_creator_folder(tmp_path):
     t2 = _make_thread(tmp_path, template=None, strategy="by_file_type")
     t2.creator_name = "CreatorName"
     target2, fname2 = t2.generate_filename_and_folder(
-        t2.files_to_download[0], str(tmp_path), 0, 1, "1", "PostTitle"
+        t2.files_to_download[0], str(tmp_path), 0, 1, "1", "PostTitle", page_number=1
     )
     assert os.path.basename(target2) in ("png", "other")
 
@@ -157,7 +157,7 @@ def test_generate_filename_strategies_and_creator_folder(tmp_path):
     t3 = _make_thread(tmp_path)
     t3.creator_name = "CreatorName"
     target3, fname3 = t3.generate_filename_and_folder(
-        t3.files_to_download[0], creator_folder, 0, 1, "1", "PostTitle"
+        t3.files_to_download[0], creator_folder, 0, 1, "1", "PostTitle", page_number=1
     )
     assert os.path.normpath(target3).startswith(os.path.normpath(creator_folder))
 

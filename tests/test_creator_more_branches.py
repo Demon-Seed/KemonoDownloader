@@ -57,7 +57,7 @@ def test_request_exception_records_failure(monkeypatch, tmp_path):
         download_text=False,
     )
 
-    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1, page_number=1))
 
     assert file_url in thread.failed_files
     assert "network error" in thread.failed_files[file_url]
@@ -180,7 +180,7 @@ def test_redownload_when_hash_size_mismatch(monkeypatch, tmp_path):
     )
     thread.hash_db = fake_db
 
-    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1, page_number=1))
 
     assert getattr(fake_db, "stored", False) is True
 

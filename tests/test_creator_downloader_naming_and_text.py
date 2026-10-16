@@ -60,7 +60,7 @@ def test_generate_filename_and_folder_default(tmp_path):
 
     # First file: should apply auto-rename prefix 1_
     target_folder, filename = thread.generate_filename_and_folder(
-        thread.files_to_download[0], str(tmp_path / "dl"), 0, 2, "p1", "My Post"
+        thread.files_to_download[0], str(tmp_path / "dl"), 0, 2, "p1", "My Post", page_number=1
     )
 
     assert filename.endswith(".jpg")
@@ -70,7 +70,7 @@ def test_generate_filename_and_folder_default(tmp_path):
 
     # Second file for same post should increment counter
     _, filename2 = thread.generate_filename_and_folder(
-        thread.files_to_download[1], str(tmp_path / "dl"), 1, 2, "p1", "My Post"
+        thread.files_to_download[1], str(tmp_path / "dl"), 1, 2, "p1", "My Post", page_number=2
     )
     assert filename2.startswith("2_")
 
@@ -195,7 +195,7 @@ def test_download_file_short_circuits_when_hash_matches(tmp_path):
 
     import asyncio
 
-    asyncio.run(thread.download_file(file_url, str(tmp_path / "dl"), 0, 1))
+    asyncio.run(thread.download_file(file_url, str(tmp_path / "dl"), 0, 1, page_number=1))
 
     assert file_url in thread.completed_files
 
@@ -217,7 +217,7 @@ def test_download_file_makedirs_failure(monkeypatch, tmp_path):
 
     import asyncio
 
-    asyncio.run(thread.download_file(file_url, str(tmp_path / "dl"), 0, 1))
+    asyncio.run(thread.download_file(file_url, str(tmp_path / "dl"), 0, 1, page_number=1))
 
     assert file_url in thread.failed_files
     assert captured and captured[-1][2] is False
@@ -251,7 +251,7 @@ def test_download_file_size_mismatch_triggers_failure(monkeypatch, tmp_path):
     # Limit retries to 1 via the settings already provided by make_thread
     import asyncio
 
-    asyncio.run(thread.download_file(file_url, str(tmp_path / "dl"), 0, 1))
+    asyncio.run(thread.download_file(file_url, str(tmp_path / "dl"), 0, 1, page_number=1))
 
     assert file_url in thread.failed_files
 
@@ -275,7 +275,7 @@ def test_download_file_request_exception_retries(monkeypatch, tmp_path):
 
     import asyncio
 
-    asyncio.run(thread.download_file(file_url, str(tmp_path / "dl"), 0, 1))
+    asyncio.run(thread.download_file(file_url, str(tmp_path / "dl"), 0, 1, page_number=1))
 
     assert file_url in thread.failed_files
     assert captured and captured[-1][2] is False
@@ -313,7 +313,7 @@ def test_generate_filename_template_fallback(tmp_path):
     logs = []
     thread.log = SimpleNamespace(emit=lambda msg, level: logs.append((msg, level)))
     target_folder, filename = thread.generate_filename_and_folder(
-        thread.files_to_download[0], str(tmp_path / "dl"), 0, 1, "p1", "My Post"
+        thread.files_to_download[0], str(tmp_path / "dl"), 0, 1, "p1", "My Post", page_number=1
     )
     assert filename
     assert logs, "Expected a log warning when template formatting fails"
@@ -352,7 +352,7 @@ def test_download_worker_processes_queue(monkeypatch, tmp_path):
     thread = make_thread(tmp_path)
     processed = []
 
-    async def fake_download(file_url, folder, file_index, total_files):
+    async def fake_download(file_url, folder, file_index, total_files, page_number):
         processed.append(file_url)
         # mark as completed for completeness
         thread.completed_files.add(file_url)
@@ -363,7 +363,7 @@ def test_download_worker_processes_queue(monkeypatch, tmp_path):
 
     async def runner():
         q = asyncio.Queue()
-        await q.put((0, thread.files_to_download[0]))
+        await q.put((0, thread.files_to_download[0], 1))
         task = asyncio.create_task(thread.download_worker(q, str(tmp_path / "dl"), 1))
         await asyncio.wait_for(q.join(), timeout=1.0)
         thread.is_running = False
@@ -404,7 +404,9 @@ def test_creator_download_thread_run_processes_all_files(monkeypatch, tmp_path):
     async def fake_worker(queue, folder, total_files):
         while True:
             try:
-                file_index, file_url = await asyncio.wait_for(queue.get(), timeout=0.1)
+                file_index, file_url, page_number = await asyncio.wait_for(
+                    queue.get(), timeout=0.1
+                )
             except asyncio.TimeoutError:
                 break
             with thread.completed_files_lock:

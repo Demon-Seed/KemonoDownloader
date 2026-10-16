@@ -119,7 +119,7 @@ def test_size_mismatch_deletes_incomplete_and_records_failure(monkeypatch, tmp_p
         download_text=False,
     )
 
-    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1, page_number=1))
 
     assert file_url not in thread.completed_files
     assert file_url in thread.failed_files
@@ -171,7 +171,7 @@ def test_cancellation_during_streaming_deletes_incomplete_and_records_failure(
         lambda settings_tab=None: FakeSessionCancel(chunks, thread),
     )
 
-    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1, page_number=1))
 
     # Cancellation should result in a failure and no completed file
     assert file_url not in thread.completed_files

@@ -74,7 +74,7 @@ def test_hash_db_size_mismatch_triggers_redownload(monkeypatch, tmp_path):
         lambda settings_tab=None: FakeSessionAlwaysError(),
     )
 
-    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1, page_number=1))
 
     # Because download failed after retries, it should be recorded as failed
     assert file_url in thread.failed_files

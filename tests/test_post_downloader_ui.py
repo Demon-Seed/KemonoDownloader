@@ -21,6 +21,7 @@ def test_toggle_fast_mode():
     tab = PostDownloaderTab.__new__(PostDownloaderTab)
     # Provide minimal attributes used by toggle_fast_mode
     tab.auto_rename_checkbox = DummyWidget()
+    tab.auto_rename_info_btn = DummyWidget()
     tab.post_download_text_check = DummyWidget()
     tab.post_check_all = DummyWidget()
     tab.download_all_links = DummyWidget()

@@ -46,7 +46,7 @@ def test_generate_filename_default(tmp_path):
     thread = make_thread(file_url, tmp_path, settings, auto_rename=False)
 
     target_folder, filename = thread.generate_filename_and_folder(
-        file_url, str(tmp_path), 0, 1, "1", "My Post"
+        file_url, str(tmp_path), 0, 1, "1", "My Post", page_number=1
     )
 
     expected_folder = os.path.join(str(tmp_path), "creator123_Alice", "1_My_Post")
@@ -60,7 +60,7 @@ def test_generate_filename_auto_rename(tmp_path):
     thread = make_thread(file_url, tmp_path, settings, auto_rename=True)
 
     target_folder, filename = thread.generate_filename_and_folder(
-        file_url, str(tmp_path), 0, 1, "1", "My Post"
+        file_url, str(tmp_path), 0, 1, "1", "My Post", page_number=1
     )
 
     # Auto-rename prefix should be applied (counter starts at 1)
@@ -73,7 +73,7 @@ def test_generate_filename_single_folder_strategy(tmp_path):
     thread = make_thread(file_url, tmp_path, settings, auto_rename=False)
 
     target_folder, filename = thread.generate_filename_and_folder(
-        file_url, str(tmp_path), 0, 1, "1", "My Post"
+        file_url, str(tmp_path), 0, 1, "1", "My Post", page_number=1
     )
 
     expected_folder = os.path.join(str(tmp_path), "creator123_Alice")
@@ -88,7 +88,7 @@ def test_generate_filename_bad_template_falls_back(tmp_path):
     thread = make_thread(file_url, tmp_path, settings, auto_rename=False)
 
     target_folder, filename = thread.generate_filename_and_folder(
-        file_url, str(tmp_path), 0, 1, "1", "My Post"
+        file_url, str(tmp_path), 0, 1, "1", "My Post", page_number=1
     )
 
     # Should fallback to default naming

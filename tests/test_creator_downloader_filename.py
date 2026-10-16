@@ -52,7 +52,7 @@ def test_generate_filename_and_folder_autorename_and_strategies(tmp_path):
     )
 
     target_folder, filename = thread.generate_filename_and_folder(
-        file_url, download_folder, 0, total_files=1, post_id="1", post_title="My Post"
+        file_url, download_folder, 0, total_files=1, post_id="1", post_title="My Post", page_number=1
     )
 
     # Expect auto-rename prefix '1_' and default template '{post_id}_{orig_name}'
@@ -81,7 +81,7 @@ def test_generate_filename_and_folder_autorename_and_strategies(tmp_path):
     )
 
     tfolder2, fname2 = thread2.generate_filename_and_folder(
-        file_url, download_folder, 0, total_files=1, post_id="1", post_title="My Post"
+        file_url, download_folder, 0, total_files=1, post_id="1", post_title="My Post", page_number=1
     )
     # creator folder should be the immediate child of download_folder
     creator_folder_name = os.path.basename(tfolder2)
@@ -121,7 +121,7 @@ def test_template_fallback_on_error(tmp_path):
     )
 
     tfolder, fname = thread.generate_filename_and_folder(
-        file_url, download_folder, 0, total_files=1, post_id="42", post_title="Title"
+        file_url, download_folder, 0, total_files=1, post_id="42", post_title="Title", page_number=1
     )
 
     # Fallback should produce filename like '{post_id}_{orig_name}.ext'

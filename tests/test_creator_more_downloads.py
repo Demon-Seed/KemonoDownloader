@@ -82,7 +82,7 @@ def test_generate_filename_by_file_type_and_creator_folder(tmp_path):
     # Pass folder that already ends with creator folder name
     creator_folder = os.path.join(str(tmp_path), "creator123_Alice")
     target_folder, filename = thread.generate_filename_and_folder(
-        file_url, creator_folder, 0, 1, "1", "MyPost"
+        file_url, creator_folder, 0, 1, "1", "MyPost", page_number=1
     )
     # Expect subfolder by file type
     assert target_folder.endswith(os.path.join("creator123_Alice", "png"))
@@ -131,6 +131,6 @@ def test_download_file_skips_when_hash_matches(tmp_path):
     called = []
     thread.file_completed = SimpleNamespace(emit=lambda *a, **k: called.append(True))
 
-    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1, page_number=1))
     assert file_url in thread.completed_files
     assert called

@@ -105,7 +105,7 @@ def test_download_file_makedirs_failure(monkeypatch, tmp_path):
     sig = DummySignal()
     t.file_completed = sig
 
-    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1))
+    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
     assert file_url in t.failed_files
     assert sig.emitted is True
 
@@ -139,7 +139,7 @@ def test_download_file_size_mismatch(monkeypatch, tmp_path):
     sig = DummySignal()
     t.file_completed = sig
 
-    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1))
+    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
     assert file_url in t.failed_files
     assert sig.emitted is True
 
@@ -148,7 +148,7 @@ def test_download_worker_processes_queue(tmp_path):
     t, file_url = make_thread(tmp_path)
     called = []
 
-    async def fake_download(f_url, folder, idx, total):
+    async def fake_download(f_url, folder, idx, total, page_number):
         called.append(f_url)
         # stop the worker after one item
         t.is_running = False
@@ -157,7 +157,7 @@ def test_download_worker_processes_queue(tmp_path):
 
     async def main():
         q = asyncio.Queue()
-        await q.put((0, file_url))
+        await q.put((0, file_url, 1))
         await t.download_worker(q, str(tmp_path), 1)
 
     asyncio.run(main())

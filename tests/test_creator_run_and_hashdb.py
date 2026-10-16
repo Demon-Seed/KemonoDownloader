@@ -191,6 +191,6 @@ def test_creator_skips_existing_hash_entry(monkeypatch, tmp_path):
     # Call download_file which should detect existing file and skip download
     import asyncio
 
-    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1, page_number=1))
 
     assert file_url in thread.completed_files

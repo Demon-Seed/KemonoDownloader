@@ -69,7 +69,9 @@ def test_creator_download_thread_run_simulated(monkeypatch, qapp, tmp_path):
     monkeypatch.setattr(thread, "fetch_creator_and_post_info", fake_fetch_info)
 
     # Async download_file that immediately marks completion
-    async def fake_download_file(self, file_url, folder, file_index, total_files):
+    async def fake_download_file(
+        self, file_url, folder, file_index, total_files, page_number
+    ):
         # create the target folder/file to mimic a real download
         target_dir = os.path.join(
             folder, f"{self.creator_id}_{self.creator_name}", "1_Title"

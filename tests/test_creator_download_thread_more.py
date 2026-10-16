@@ -34,7 +34,7 @@ def test_generate_filename_and_folder_strategies(tmp_path):
     )
     t = make_thread(tmp_path, settings_tab=settings_tab, auto_rename=False)
     folder, filename = t.generate_filename_and_folder(
-        "https://ex.org/files/f=example.png", str(tmp_path), 0, 1, "42", "A Title"
+        "https://ex.org/files/f=example.png", str(tmp_path), 0, 1, "42", "A Title", page_number=1
     )
     assert filename.endswith(".png")
     # Should create a per-post folder under the creator folder
@@ -45,7 +45,7 @@ def test_generate_filename_and_folder_strategies(tmp_path):
     settings_tab.get_creator_folder_strategy = lambda: "single_folder"
     t.settings.settings_tab = settings_tab
     folder2, _ = t.generate_filename_and_folder(
-        "https://ex.org/files/f=example.png", str(tmp_path), 0, 1, "42", "A Title"
+        "https://ex.org/files/f=example.png", str(tmp_path), 0, 1, "42", "A Title", page_number=1
     )
     assert os.path.basename(folder2) == f"creator1_{t.creator_name}"
 
@@ -53,7 +53,7 @@ def test_generate_filename_and_folder_strategies(tmp_path):
     settings_tab.get_creator_folder_strategy = lambda: "by_file_type"
     t.settings.settings_tab = settings_tab
     folder3, _ = t.generate_filename_and_folder(
-        "https://ex.org/files/f=example.png", str(tmp_path), 0, 1, "42", "A Title"
+        "https://ex.org/files/f=example.png", str(tmp_path), 0, 1, "42", "A Title", page_number=1
     )
     assert os.path.basename(folder3) == "png"
 
@@ -66,7 +66,7 @@ def test_generate_filename_template_fallback(tmp_path):
     )
     t = make_thread(tmp_path, settings_tab=settings_tab)
     folder, filename = t.generate_filename_and_folder(
-        "https://ex.org/files/f=example.png", str(tmp_path), 0, 1, "42", "OK"
+        "https://ex.org/files/f=example.png", str(tmp_path), 0, 1, "42", "OK", page_number=1
     )
     # Fallback uses post_id_origname
     assert filename.startswith("42_")
@@ -128,7 +128,7 @@ def test_download_file_skips_when_not_running(tmp_path):
     # Should return quickly without raising (async method)
     import asyncio
 
-    asyncio.run(t.download_file(t.files_to_download[0], str(tmp_path), 0, 1))
+    asyncio.run(t.download_file(t.files_to_download[0], str(tmp_path), 0, 1, page_number=1))
 
 
 def test_auto_rename_prefix_increments(tmp_path):
@@ -138,10 +138,10 @@ def test_auto_rename_prefix_increments(tmp_path):
     )
     t = make_thread(tmp_path, settings_tab=settings_tab, auto_rename=True)
     folder, fn1 = t.generate_filename_and_folder(
-        "https://ex.org/files/f=example.png", str(tmp_path), 0, 1, "42", "Title"
+        "https://ex.org/files/f=example.png", str(tmp_path), 0, 1, "42", "Title", page_number=1
     )
     _, fn2 = t.generate_filename_and_folder(
-        "https://ex.org/files/f=example.png", str(tmp_path), 1, 2, "42", "Title"
+        "https://ex.org/files/f=example.png", str(tmp_path), 1, 2, "42", "Title", page_number=2
     )
     assert fn1.startswith("1_")
     assert fn2.startswith("2_")

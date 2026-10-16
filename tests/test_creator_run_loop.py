@@ -40,7 +40,7 @@ def test_creator_download_thread_run_loop(monkeypatch, tmp_path):
 
     # Fake async worker that consumes one queue item and returns
     async def fake_worker(self, queue, folder, total_files):
-        file_index, file_url = await queue.get()
+        file_index, file_url, page_number = await queue.get()
         queue.task_done()
 
     # Bind the coroutine to the instance

@@ -211,7 +211,7 @@ def test_download_file_no_content_length_and_store(monkeypatch, tmp_path):
 
     t.hash_db = FakeHashDB()
 
-    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1))
+    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
 
     assert file_url in t.completed_files
     url_hash = hashlib.md5(file_url.encode()).hexdigest()
@@ -246,7 +246,7 @@ def test_download_file_request_exception_records_failure(monkeypatch, tmp_path):
         "kemonodownloader.creator_downloader.get_session", lambda *a, **k: S()
     )
 
-    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1))
+    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
 
     assert file_url in t.failed_files
 

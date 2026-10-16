@@ -197,7 +197,7 @@ def test_download_file_size_mismatch_triggers_redownload(monkeypatch, tmp_path):
     )
 
     # Run the download
-    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1, page_number=1))
 
     # Should have stored a new hash entry and marked completed
     url_hash = hashlib.md5(file_url.encode()).hexdigest()
@@ -245,7 +245,7 @@ def test_download_file_makedirs_failure_records_error(monkeypatch, tmp_path):
     monkeypatch.setattr(os, "makedirs", bad_makedirs)
 
     # Running should record a failure for this file_url
-    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1, page_number=1))
     assert file_url in thread.failed_files
 
 
@@ -288,5 +288,5 @@ def test_download_file_request_exception_records_failure(monkeypatch, tmp_path):
         "kemonodownloader.creator_downloader.get_session", lambda *a, **k: BadSession()
     )
 
-    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1))
+    asyncio.run(thread.download_file(file_url, download_folder, 0, total_files=1, page_number=1))
     assert file_url in thread.failed_files
