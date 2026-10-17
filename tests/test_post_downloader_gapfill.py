@@ -88,6 +88,7 @@ def test_post_module_import_executes_locale_windows_branches(monkeypatch):
 
 def test_preview_thread_invalid_content_length_progress_zero(monkeypatch, tmp_path):
     class Resp:
+        status_code = 200
         headers = {"content-length": "bad-int"}
 
         def raise_for_status(self):

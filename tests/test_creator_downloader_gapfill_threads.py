@@ -43,6 +43,7 @@ def test_get_session_clears_proxies_when_proxy_disabled():
 
 def test_preview_thread_bad_content_length_emits_zero_progress(monkeypatch, tmp_path):
     class Resp:
+        status_code = 200
         headers = {"content-length": "not-an-int"}
 
         def raise_for_status(self):

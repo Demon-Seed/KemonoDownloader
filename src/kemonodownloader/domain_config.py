@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import requests
 
@@ -176,6 +176,67 @@ def clean_file_url(file_url: str, domain_config: Dict[str, str]) -> str:
         full_url = urlunparse(parsed)
 
     return full_url
+
+
+def file_host_headers(
+    url: str,
+    base_headers: Dict[str, str],
+    domain_config: Optional[Dict[str, str]] = None,
+) -> Tuple[Dict[str, str], str]:
+    """Return ``(headers, file_base_url)`` for a request for the file at *url*.
+
+    File hosts (pawchive serves files from ``file.<domain>``) sit behind
+    DDoS-Guard, which reads a Referer belonging to another host, a
+    stylesheet ``Accept`` header, and request hints that do not match a
+    cross-origin subresource as a bot/hotlink signal and answers 403.
+    Downloads have always overridden the generic header set for this
+    reason; previews need exactly the same treatment.
+    """
+    cfg = domain_config if domain_config is not None else get_domain_config(url)
+    file_base_url = (cfg.get("file_base_url") or cfg.get("base_url", "")).rstrip("/")
+    headers = dict(base_headers or {})
+
+    if file_base_url:
+        headers["Referer"] = file_base_url + "/"
+    if cfg.get("base_url"):
+        headers["Origin"] = cfg["base_url"].rstrip("/")
+    headers["Accept"] = "*/*"
+    headers["Sec-Fetch-Dest"] = "empty"
+    headers["Sec-Fetch-Mode"] = "cors"
+    headers["Sec-Fetch-Site"] = "same-site"
+
+    return headers, file_base_url
+
+
+def warm_file_host(
+    session,
+    file_base_url: str,
+    user_agent: str = "",
+    referer: Optional[str] = None,
+) -> bool:
+    """Ask the file host for its DDoS-Guard clearance cookie.
+
+    The first request to a DDoS-Guard protected file host from a fresh
+    session can come back as a 403 challenge ("Are you a bot or using
+    download tools?").  Requesting the host root once makes it set its
+    ``__ddg*`` cookies, after which requests for actual files succeed.  A
+    404 from the root is normal (pawchive's file host has no index), so
+    only transport errors are treated as failures.  Best-effort: the
+    caller retries the file request either way.
+    """
+    if not str(file_base_url or "").strip() or session is None:
+        return False
+
+    guard_url = str(file_base_url).rstrip("/") + "/"
+    headers = {"Referer": referer or guard_url}
+    if user_agent:
+        headers["User-Agent"] = user_agent
+
+    try:
+        session.get(guard_url, headers=headers, timeout=(10, 10))
+    except Exception:
+        return False
+    return True
 
 
 def get_domain_config(url: str) -> Dict[str, str]:

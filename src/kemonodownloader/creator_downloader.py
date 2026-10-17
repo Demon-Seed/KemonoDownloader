@@ -43,8 +43,10 @@ from requests.adapters import HTTPAdapter  # type: ignore[import]
 
 from kemonodownloader.domain_config import (
     clean_file_url,
+    file_host_headers,
     get_domain_config,
     get_domains,
+    warm_file_host,
 )
 from kemonodownloader.download_history import (
     DownloadHistoryDB,
@@ -339,6 +341,9 @@ class PreviewThread(QThread):
         self.url = url
         self.cache_dir = cache_dir
         self.settings_tab = settings_tab
+        # Kept so preview requests can be shaped for the file host rather
+        # than for the site's API (see domain_config.file_host_headers).
+        self.domain_config = get_domain_config(url)
         self.total_size = 0
         self.downloaded_size = 0
         os.makedirs(self.cache_dir, exist_ok=True)
@@ -357,9 +362,23 @@ class PreviewThread(QThread):
                     return
 
             try:
-                response = get_session(self.settings_tab).get(
-                    self.url, headers=get_headers(), stream=True
+                session = get_session(self.settings_tab)
+                headers, file_base_url = file_host_headers(
+                    self.url, get_headers(), self.domain_config
                 )
+                response = session.get(self.url, headers=headers, stream=True)
+                if response.status_code == 403:
+                    # DDoS-Guard challenges the first request of a fresh session;
+                    # warming the file host sets its clearance cookie, so retry once
+                    # instead of failing the preview outright.
+                    response.close()
+                    warm_file_host(
+                        session,
+                        file_base_url,
+                        headers.get("User-Agent", ""),
+                        self.domain_config.get("referer"),
+                    )
+                    response = session.get(self.url, headers=headers, stream=True)
                 response.raise_for_status()
                 header = response.headers.get("content-length")
                 try:
@@ -382,10 +401,8 @@ class PreviewThread(QThread):
                 pixmap = QPixmap()
                 if not pixmap.loadFromData(QByteArray(bytes(downloaded_data))):
                     self.error.emit(
-                        translate(
-                            "failed_to_download",
-                            f"{self.url}: {translate('invalid_image_data')}",
-                        )
+                        f"{translate('failed_to_download')}: {self.url}: "
+                        f"{translate('invalid_image_data')}"
                     )
                     return
                 scaled_pixmap = pixmap.scaled(
@@ -398,14 +415,14 @@ class PreviewThread(QThread):
                 self.preview_ready.emit(self.url, scaled_pixmap)
             except requests.RequestException as e:
                 self.error.emit(
-                    translate("failed_to_download", f"{self.url}: {str(e)}")
+                    f"{translate('failed_to_download')}: {self.url}: {str(e)}"
                 )
             except Exception as e:
                 self.error.emit(translate("unexpected_error", f"{self.url}: {str(e)}"))
 
 
 class ImageModal(QDialog):
-    def __init__(self, url, cache_dir, parent=None):
+    def __init__(self, url, cache_dir, parent=None, settings_tab=None):
         super().__init__(parent)
         self._parent = parent
         self.setWindowTitle(translate("media_preview"))
@@ -422,15 +439,33 @@ class ImageModal(QDialog):
         self._layout.addWidget(self._progress_bar)
         self.setLayout(self._layout)
 
-        settings_tab = getattr(
-            getattr(self._parent, "parent", None), "settings_tab", None
-        )
+        if settings_tab is None:
+            settings_tab = self._resolve_settings_tab()
         self.preview_thread = PreviewThread(url, cache_dir, settings_tab)
         self.preview_thread.preview_ready.connect(self.display_image)
         self.preview_thread.progress.connect(self.update_progress)
         self.preview_thread.error.connect(self.display_error)
         self.preview_thread.finished.connect(self.preview_thread.deleteLater)
         self.preview_thread.start()
+
+    def _resolve_settings_tab(self):
+        """Return the Settings tab so previews honor the proxy settings.
+
+        The creator tab keeps its owner as ``_parent`` and never shadows
+        Qt's ``parent`` method, so ``self._parent.parent`` is a bound
+        method rather than the main window.  Resolving through it yielded
+        ``None``, which made previews bypass the proxy that downloads use.
+        """
+        owners = (
+            self._parent,
+            getattr(self._parent, "_parent", None),
+            getattr(self._parent, "parent", None),
+        )
+        for owner in owners:
+            candidate = getattr(owner, "settings_tab", None)
+            if candidate is not None:
+                return candidate
+        return None
 
     def update_progress(self, value):
         self._progress_bar.setValue(value)
@@ -5805,7 +5840,12 @@ class CreatorDownloaderTab(QWidget):
         if str(thumbnail_url).lower().endswith(
             (".jpg", ".jpeg", ".png", ".gif", ".webp")
         ):
-            modal = ImageModal(str(thumbnail_url), self.cache_dir, self)
+            modal = ImageModal(
+                str(thumbnail_url),
+                self.cache_dir,
+                self,
+                settings_tab=getattr(self._parent, "settings_tab", None),
+            )
             modal.exec()
         else:
             self.append_log_to_console(

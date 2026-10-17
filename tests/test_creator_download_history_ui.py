@@ -134,7 +134,7 @@ def make_modal_recorder(monkeypatch, opened):
     """Patch ImageModal with a recorder; returns nothing."""
 
     class FakeModal:
-        def __init__(self, url, cache_dir, parent=None):
+        def __init__(self, url, cache_dir, parent=None, settings_tab=None):
             opened.append(("open", url))
 
         def exec(self):

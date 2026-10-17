@@ -45,8 +45,10 @@ from PyQt6.QtWidgets import (
 from kemonodownloader.creator_downloader import get_session
 from kemonodownloader.domain_config import (
     clean_file_url,
+    file_host_headers,
     get_domain_config,
     get_domains,
+    warm_file_host,
 )
 from kemonodownloader.hash_db import HashDB
 
@@ -194,9 +196,23 @@ class PreviewThread(QThread):
                 return
 
         try:
-            response = get_session(self.settings_tab).get(
-                self.url, headers=get_headers(), stream=True
+            session = get_session(self.settings_tab)
+            headers, file_base_url = file_host_headers(
+                self.url, get_headers(), self.domain_config
             )
+            response = session.get(self.url, headers=headers, stream=True)
+            if response.status_code == 403:
+                # DDoS-Guard challenges the first request of a fresh session;
+                # warming the file host sets its clearance cookie, so retry once
+                # instead of failing the preview outright.
+                response.close()
+                warm_file_host(
+                    session,
+                    file_base_url,
+                    headers.get("User-Agent", ""),
+                    self.domain_config.get("referer"),
+                )
+                response = session.get(self.url, headers=headers, stream=True)
             response.raise_for_status()
             header = response.headers.get("content-length")
             try:
