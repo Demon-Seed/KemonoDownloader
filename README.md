@@ -13,6 +13,7 @@
 * Last-downloaded tracking: each post shows its publish date and the date its files were last downloaded, with the creator's most recent date next to the post count.<br>
 * Filtering (can be used in any combination, number skipped displays in log):<br>
   * Filter out posts by keyword (Title, Filenames, Description, Tags, or any combination.)<br>
+    * Description matching also re-joins inline formatting (e.g. `Alien <b>Comic</b>` is still seen as "Alien Comic"), while author-typed spacing is left exactly as written.<br>
   * Filter out files by keyword.<br>
   * Filter out posts by date range.<br>
 * Adjustable folder names via templates w/ same functionality as Filenames.<br> 

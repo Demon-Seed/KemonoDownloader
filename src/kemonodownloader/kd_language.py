@@ -958,6 +958,12 @@ class KDLanguage:
                 "korean": "태그",
                 "chinese-simplified": "标签",
             },
+            "skip_keyword_matched_after_rejoin": {
+                "english": "[SKIP-KEYWORD] '{0}' matched the description after re-joining inline tags",
+                "japanese": "[SKIP-KEYWORD] インラインタグを結合した説明文で '{0}' に一致しました",
+                "korean": "[SKIP-KEYWORD] 인라인 태그를 결합한 설명에서 '{0}' 항목이 일치했습니다",
+                "chinese-simplified": "[SKIP-KEYWORD] 重新连接内联标签后的描述中匹配到 '{0}'",
+            },
             "date_range_filter": {
                 "english": "Date Range",
                 "japanese": "日付範囲",

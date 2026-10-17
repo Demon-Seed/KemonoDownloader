@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 import qtawesome as qta
 import requests
 from bs4 import BeautifulSoup
+from bs4.element import NavigableString
 from fake_useragent import UserAgent
 from PyQt6.QtCore import QByteArray, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QPixmap
@@ -483,6 +484,78 @@ class ImageModal(QDialog):
         QMessageBox.critical(self, translate("image_load_error"), error_message)
 
 
+# Block-level HTML elements render as separate lines/blocks, so they stay
+# hard word boundaries when the description is re-joined for keyword
+# matching. Text from two paragraphs (or table cells) must never be fused
+# into a single word.
+_BLOCK_HTML_TAGS = frozenset(
+    {
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "br",
+        "dd",
+        "div",
+        "dl",
+        "dt",
+        "figcaption",
+        "figure",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "tr",
+        "ul",
+    }
+)
+
+
+def _tag_glued_text(soup):
+    """Return the soup's text with the separators *between inline tags*
+    removed, keeping block-level elements as boundaries.
+
+    ``BeautifulSoup.get_text(" ")`` inserts a space between every pair of
+    adjacent text nodes, even where the HTML has none. That turns
+    ``<b>Alien</b>Comic`` (one word on the page) into two words, and turns
+    ``Alien <b>Comic</b>`` (one space on the page) into a double space, so
+    keywords that are plainly visible in the post could not match.
+
+    This rendering keeps every character the author actually typed and only
+    drops the injected separators: block-level tags become a newline, inline
+    tags contribute nothing. Nothing is collapsed or trimmed, so author-typed
+    whitespace (including multiple spaces and ``&nbsp;``) is preserved
+    exactly as in the space-joined rendering.
+    """
+    parts = []
+    for node in soup.descendants:
+        if isinstance(node, NavigableString):
+            if getattr(node.parent, "name", None) in ("script", "style"):
+                continue
+            parts.append(str(node))
+        elif getattr(node, "name", None) in _BLOCK_HTML_TAGS:
+            parts.append("\n")
+    return "".join(parts)
+
+
 def _keyword_matches_text(keywords, text):
     """Case-insensitive whole-word match of any keyword in *text*,
     treating non-alphanumeric characters (including _, -, ., /, spaces,
@@ -516,6 +589,18 @@ def _keyword_matches_text(keywords, text):
             if keyword_lower in text_lower:
                 return True
     return False
+
+
+def _first_matching_keyword(keywords, text):
+    """Return the first keyword that occurs as a whole word in *text*.
+
+    Thin wrapper around :func:`_keyword_matches_text`, used purely so the
+    log line can name the keyword that matched.
+    """
+    for keyword in keywords or []:
+        if keyword and _keyword_matches_text([keyword], text):
+            return keyword
+    return ""
 
 
 class PostDetectionThread(QThread):
@@ -612,16 +697,33 @@ class PostDetectionThread(QThread):
             pass
         return filenames
 
-    def _gather_post_description(self, post):
-        """Return the post's description/content as plain text (HTML
-        stripped), or an empty string if it has none."""
+    def _gather_post_description_texts(self, post):
+        """Return the post's description as candidate plain-text renderings.
+
+        The first candidate is the space-joined string that keyword matching
+        has always used, so every match that exists today is preserved. The
+        second re-joins inline tags (see :func:`_tag_glued_text`) and is only
+        consulted when the first one misses, which recovers keywords that are
+        visible in the rendered post but were split by markup boundaries.
+        """
         try:
             raw_html = post.get("content")
             if not raw_html:
-                return ""
-            return BeautifulSoup(raw_html, "html.parser").get_text(" ")
+                return ()
+            soup = BeautifulSoup(raw_html, "html.parser")
+            space_joined = soup.get_text(" ")
+            tag_glued = _tag_glued_text(soup)
         except Exception:
-            return ""
+            return ()
+        if tag_glued and tag_glued != space_joined:
+            return (space_joined, tag_glued)
+        return (space_joined,)
+
+    def _gather_post_description(self, post):
+        """Return the post's description/content as plain text (HTML
+        stripped), or an empty string if it has none."""
+        texts = self._gather_post_description_texts(post)
+        return texts[0] if texts else ""
 
     def _gather_post_tags(self, post):
         """Collect the post's tags as a list of strings, tolerating:
@@ -754,8 +856,34 @@ class PostDetectionThread(QThread):
                     return True
 
         if "description" in scopes:
-            description = self._gather_post_description(post)
-            if description and _keyword_matches_text(self.skip_keywords, description):
+            # The space-joined rendering is checked first, so every post that
+            # matches today still matches. Only when it misses do we retry with
+            # the tag-glued rendering, which recovers keywords that are visible
+            # in the post but were split by inline markup. A hit on that second
+            # rendering is logged so the extra matches stay auditable.
+            for index, description in enumerate(
+                self._gather_post_description_texts(post)
+            ):
+                if not description or not _keyword_matches_text(
+                    self.skip_keywords, description
+                ):
+                    continue
+                if index:
+                    matched_keyword = _first_matching_keyword(
+                        self.skip_keywords, description
+                    )
+                    self.log.emit(
+                        translate(
+                            "log_debug",
+                            _t(
+                                "skip_keyword_matched_after_rejoin",
+                                "[SKIP-KEYWORD] '{0}' matched the description "
+                                "after re-joining inline tags",
+                                matched_keyword,
+                            ),
+                        ),
+                        "DEBUG",
+                    )
                 return True
 
         if "tags" in scopes:
