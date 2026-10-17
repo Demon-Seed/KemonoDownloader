@@ -51,6 +51,11 @@ from kemonodownloader.domain_config import (
     warm_file_host,
 )
 from kemonodownloader.hash_db import HashDB
+from kemonodownloader.retry_policy import (
+    api_retry_delay,
+    countdown_seconds,
+    is_terminal_status,
+)
 
 # Resolve translations dynamically at call time so tests can monkeypatch
 # the runtime translation function in `kemonodownloader.kd_language`.
@@ -804,13 +809,15 @@ class PostDetectionThread(QThread):
         if max_retries is None:
             max_retries = self.settings.api_request_max_retries
         for attempt in range(max_retries):
+            response = None
+            error = None
             try:
                 response = get_session(self.settings.settings_tab).get(
                     url, headers=get_headers(), timeout=10
                 )
                 if response.status_code == 200:
                     return response
-                elif response.status_code == 403:
+                if response.status_code == 403:
                     # Try with alternative headers
                     alt_headers = get_headers().copy()
                     alt_headers["Accept"] = "text/css"
@@ -819,17 +826,25 @@ class PostDetectionThread(QThread):
                     )
                     if response.status_code == 200:
                         return response
+                elif is_terminal_status(response.status_code):
+                    # A 404/410 never succeeds on retry, so fail fast
+                    # instead of burning the remaining attempts.
+                    return None
             except Exception as e:
-                if attempt == max_retries - 1:
+                error = e
+            if attempt == max_retries - 1:
+                if error is not None:
                     self.log.emit(
                         translate(
                             "log_error",
-                            f"Request failed after {max_retries} attempts: {str(e)}",
+                            f"Request failed after {max_retries} attempts: {str(error)}",
                         ),
                         "ERROR",
                     )
-                    return None
-                time.sleep(2**attempt)  # Exponential backoff
+                return None
+            # 403/429/5xx responses back off too now: previously only
+            # exceptions slept, so a rate limit was retried in a tight loop.
+            time.sleep(api_retry_delay(attempt, response))
         return None
 
     def parse_response_content(self, response):
@@ -1056,7 +1071,7 @@ class FilePreparationThread(QThread):
         )
         return list(dict.fromkeys(files_to_download))
 
-    def fetch_post_data(self, post_id, max_retries=None, retry_delay_seconds=5):
+    def fetch_post_data(self, post_id, max_retries=None, retry_delay_seconds=2):
         if max_retries is None:
             max_retries = self.settings.post_data_max_retries
         self.url = self.url.rstrip("/")
@@ -1066,7 +1081,9 @@ class FilePreparationThread(QThread):
 
         for attempt in range(1, max_retries + 1):
             try:
-                response = self.make_robust_request(api_url)
+                # The helper retries on its own; without this the outer
+                # loop multiplied it (7 x 3 = 21 requests per post).
+                response = self.make_robust_request(api_url, max_retries=1)
                 if not self.is_running:
                     self.log.emit(
                         translate(
@@ -1089,7 +1106,8 @@ class FilePreparationThread(QThread):
                             ),
                             "WARNING",
                         )
-                        for i in range(retry_delay_seconds, 0, -1):
+                        delay = countdown_seconds(attempt, retry_delay_seconds)
+                        for i in range(delay, 0, -1):
                             self.log.emit(
                                 translate("log_info", f"Trying again in {i}"), "INFO"
                             )
@@ -1155,7 +1173,8 @@ class FilePreparationThread(QThread):
                     ),
                     "WARNING",
                 )
-                for i in range(retry_delay_seconds, 0, -1):
+                delay = countdown_seconds(attempt, retry_delay_seconds)
+                for i in range(delay, 0, -1):
                     self.log.emit(translate("log_info", f"Trying again in {i}"), "INFO")
                     time.sleep(1)
 
@@ -1163,13 +1182,14 @@ class FilePreparationThread(QThread):
         if max_retries is None:
             max_retries = self.settings.api_request_max_retries
         for attempt in range(max_retries):
+            response = None
             try:
                 response = get_session(self.settings.settings_tab).get(
                     url, headers=get_headers(), timeout=10
                 )
                 if response.status_code == 200:
                     return response
-                elif response.status_code == 403:
+                if response.status_code == 403:
                     alt_headers = get_headers().copy()
                     alt_headers["Accept"] = "text/css"
                     response = get_session(self.settings.settings_tab).get(
@@ -1177,10 +1197,15 @@ class FilePreparationThread(QThread):
                     )
                     if response.status_code == 200:
                         return response
-            except Exception:
-                if attempt == max_retries - 1:
+                elif is_terminal_status(response.status_code):
                     return None
-                time.sleep(2**attempt)
+            except Exception:
+                # Transport errors are retried like failed statuses; the
+                # wait below applies to both.
+                pass
+            if attempt == max_retries - 1:
+                return None
+            time.sleep(api_retry_delay(attempt, response))
         return None
 
     def parse_response_content(self, response):
@@ -1427,13 +1452,14 @@ class DownloadThread(QThread):
         if max_retries is None:
             max_retries = self.settings.api_request_max_retries
         for attempt in range(max_retries):
+            response = None
             try:
                 response = get_session(self.settings.settings_tab).get(
                     url, headers=get_headers(), timeout=10
                 )
                 if response.status_code == 200:
                     return response
-                elif response.status_code == 403:
+                if response.status_code == 403:
                     alt_headers = get_headers().copy()
                     alt_headers["Accept"] = "text/css"
                     response = get_session(self.settings.settings_tab).get(
@@ -1441,10 +1467,15 @@ class DownloadThread(QThread):
                     )
                     if response.status_code == 200:
                         return response
-            except Exception:
-                if attempt == max_retries - 1:
+                elif is_terminal_status(response.status_code):
                     return None
-                time.sleep(2**attempt)
+            except Exception:
+                # Transport errors are retried like failed statuses; the
+                # wait below applies to both.
+                pass
+            if attempt == max_retries - 1:
+                return None
+            time.sleep(api_retry_delay(attempt, response))
         return None
 
     def parse_response_content(self, response):
@@ -2831,13 +2862,14 @@ class PostDownloaderTab(QWidget):
             settings = self._create_thread_settings()
             max_retries = settings.api_request_max_retries
         for attempt in range(max_retries):
+            response = None
             try:
                 response = get_session(self.parent.settings_tab).get(
                     url, headers=get_headers(), timeout=10
                 )
                 if response.status_code == 200:
                     return response
-                elif response.status_code == 403:
+                if response.status_code == 403:
                     alt_headers = get_headers().copy()
                     alt_headers["Accept"] = "text/css"
                     response = get_session(self.parent.settings_tab).get(
@@ -2845,10 +2877,13 @@ class PostDownloaderTab(QWidget):
                     )
                     if response.status_code == 200:
                         return response
-            except Exception:
-                if attempt == max_retries - 1:
+                elif is_terminal_status(response.status_code):
                     return None
-                time.sleep(2**attempt)
+            except Exception:
+                pass
+            if attempt == max_retries - 1:
+                return None
+            time.sleep(api_retry_delay(attempt, response))
         return None
 
     def parse_response_content(self, response):

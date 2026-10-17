@@ -54,6 +54,7 @@ from kemonodownloader.download_history import (
 )
 from kemonodownloader.hash_db import HashDB
 from kemonodownloader.kd_language import language_manager, translate
+from kemonodownloader.retry_policy import countdown_seconds
 
 
 def _t(key, fallback, *args):
@@ -1567,7 +1568,7 @@ class FilePreparationThread(QThread):
             f"{domain_config['api_base']}/{service}/user/{creator_id}/post/{post_id}"
         )
         max_retries = self.settings.post_data_max_retries
-        retry_delay_seconds = 5
+        retry_delay_seconds = 2
         for attempt in range(1, max_retries + 1):
             try:
                 headers = get_headers().copy()
@@ -1586,7 +1587,8 @@ class FilePreparationThread(QThread):
                             ),
                             "WARNING",
                         )
-                        for i in range(retry_delay_seconds, 0, -1):
+                        delay = countdown_seconds(attempt, retry_delay_seconds)
+                        for i in range(delay, 0, -1):
                             self.log.emit(
                                 translate("log_info", translate("trying_again_in", i)),
                                 "INFO",
@@ -1654,7 +1656,8 @@ class FilePreparationThread(QThread):
                     ),
                     "WARNING",
                 )
-                for i in range(retry_delay_seconds, 0, -1):
+                delay = countdown_seconds(attempt, retry_delay_seconds)
+                for i in range(delay, 0, -1):
                     self.log.emit(
                         translate("log_info", translate("trying_again_in", i)), "INFO"
                     )

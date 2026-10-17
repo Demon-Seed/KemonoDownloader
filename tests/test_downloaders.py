@@ -4918,7 +4918,9 @@ class TestFilePreparationThread:
     def test_fetch_post_data_success(self, thread, monkeypatch):
         mock_response = MagicMock()
         mock_response.json.return_value = {"id": "post1"}
-        monkeypatch.setattr(thread, "make_robust_request", lambda u: mock_response)
+        monkeypatch.setattr(
+            thread, "make_robust_request", lambda u, **kw: mock_response
+        )
         monkeypatch.setattr(thread, "parse_response_content", lambda r: {"id": "post1"})
         data = thread.fetch_post_data("post1", max_retries=1)
         assert data[0] == "post1"
@@ -4926,7 +4928,7 @@ class TestFilePreparationThread:
     def test_fetch_post_data_not_running(self, thread, monkeypatch):
         mock_response = MagicMock()
 
-        def mock_req(u):
+        def mock_req(u, **kwargs):
             thread.is_running = False
             return mock_response
 
@@ -4937,7 +4939,7 @@ class TestFilePreparationThread:
     def test_fetch_post_data_none_returned(self, thread, monkeypatch):
         import time
 
-        monkeypatch.setattr(thread, "make_robust_request", lambda u: None)
+        monkeypatch.setattr(thread, "make_robust_request", lambda u, **kw: None)
         monkeypatch.setattr(time, "sleep", MagicMock())
         data = thread.fetch_post_data("post1", max_retries=2, retry_delay_seconds=0)
         assert data is None
@@ -4948,7 +4950,7 @@ class TestFilePreparationThread:
 
         import requests
 
-        def raise_error(u):
+        def raise_error(u, **kwargs):
             raise requests.RequestException("conn error")
 
         monkeypatch.setattr(thread, "make_robust_request", raise_error)
