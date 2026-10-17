@@ -3,7 +3,7 @@ import os
 import subprocess
 from types import SimpleNamespace
 
-from PyQt6.QtCore import QByteArray, QProcess, QSettings
+from PyQt6.QtCore import QByteArray, QProcess
 from PyQt6.QtWidgets import QMessageBox
 
 
@@ -27,7 +27,6 @@ def make_parent():
 def test_confirm_and_apply_no_response(qapp, monkeypatch):
     from kemonodownloader.kd_settings import SettingsTab
 
-    QSettings("VoxDroid", "KemonoDownloader").clear()
     parent = make_parent()
 
     # Simulate user clicking 'No' on confirmation
@@ -46,7 +45,6 @@ def test_confirm_and_apply_no_response(qapp, monkeypatch):
 def test_confirm_and_apply_empty_folder_name_shows_warning(qapp, monkeypatch):
     from kemonodownloader.kd_settings import SettingsTab
 
-    QSettings("VoxDroid", "KemonoDownloader").clear()
     parent = make_parent()
 
     # Accept the confirmation
@@ -71,7 +69,6 @@ def test_confirm_and_apply_empty_folder_name_shows_warning(qapp, monkeypatch):
 def test_confirm_and_apply_directory_creation_failure(qapp, monkeypatch):
     from kemonodownloader.kd_settings import SettingsTab
 
-    QSettings("VoxDroid", "KemonoDownloader").clear()
     parent = make_parent()
 
     monkeypatch.setattr(
@@ -103,7 +100,6 @@ def test_confirm_and_apply_directory_creation_failure(qapp, monkeypatch):
 def test_auto_detect_tor_finds_executable(qapp, monkeypatch):
     from kemonodownloader.kd_settings import SettingsTab
 
-    QSettings("VoxDroid", "KemonoDownloader").clear()
     parent = make_parent()
 
     st = SettingsTab(parent)
@@ -124,7 +120,6 @@ def test_auto_detect_tor_finds_executable(qapp, monkeypatch):
 def test_get_proxy_settings_custom_and_tor(qapp, monkeypatch):
     from kemonodownloader.kd_settings import SettingsTab
 
-    QSettings("VoxDroid", "KemonoDownloader").clear()
     parent = make_parent()
     st = SettingsTab(parent)
 
@@ -158,7 +153,6 @@ def test_get_proxy_settings_custom_and_tor(qapp, monkeypatch):
 def test_handle_tor_output_and_error(qapp, monkeypatch):
     from kemonodownloader.kd_settings import SettingsTab
 
-    QSettings("VoxDroid", "KemonoDownloader").clear()
     parent = make_parent()
     st = SettingsTab(parent)
 
@@ -194,7 +188,6 @@ def test_handle_tor_output_and_error(qapp, monkeypatch):
 def test_on_tor_download_handlers(qapp, monkeypatch):
     from kemonodownloader.kd_settings import SettingsTab
 
-    QSettings("VoxDroid", "KemonoDownloader").clear()
     parent = make_parent()
     st = SettingsTab(parent)
 

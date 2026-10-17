@@ -75,6 +75,7 @@ Before starting work, check the [Issues page](https://github.com/VoxDroid/Kemono
 - Test your changes thoroughly on your local machine across supported platforms (Windows, macOS, Linux) if possible, using Briefcase commands (e.g., `briefcase run windows`).
 - Ensure the app works as expected (e.g., downloading posts, archiving creators, UI functionality).
 - Verify that your changes don’t break existing features or introduce new bugs.
+- **Tests must never touch real app settings.** `SettingsTab` opens `QSettings("VoxDroid", "KemonoDownloader")`, which on Windows is the live registry key (`HKCU\Software\VoxDroid\KemonoDownloader`). The autouse `isolate_qsettings` fixture in `tests/conftest.py` redirects every such instance to a temporary INI, so keep it autouse and never construct `QSettings("VoxDroid", "KemonoDownloader")` in a test. If you suspect a leak, snapshot the key before and after the suite with `reg query "HKCU\Software\VoxDroid\KemonoDownloader"` and compare.
 
 ### Push and Submit a Pull Request
 1. Push your branch to your fork:

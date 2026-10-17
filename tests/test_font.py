@@ -500,9 +500,9 @@ class TestFontTranslations:
 class TestFontQSettingsPersistence:
     """Tests for font setting persistence via QSettings."""
 
-    def test_font_saved_to_qsettings(self, qapp):
+    def test_font_saved_to_qsettings(self, qapp, tmp_path):
         """Test that font value is saved to QSettings."""
-        qs = QSettings("VoxDroid_FontTest", "KemonoDownloader_FontTest")
+        qs = QSettings(str(tmp_path / "font_test.ini"), QSettings.Format.IniFormat)
         try:
             qs.setValue("font", "Poppins")
             assert qs.value("font", type=str) == "Poppins"
@@ -512,9 +512,11 @@ class TestFontQSettingsPersistence:
         finally:
             qs.clear()
 
-    def test_font_default_from_qsettings(self, qapp):
+    def test_font_default_from_qsettings(self, qapp, tmp_path):
         """Test that QSettings returns default when font key is absent."""
-        qs = QSettings("VoxDroid_FontTest2", "KemonoDownloader_FontTest2")
+        qs = QSettings(
+            str(tmp_path / "font_default.ini"), QSettings.Format.IniFormat
+        )
         try:
             value = qs.value("font", "JetBrains Mono", type=str)
             assert value == "JetBrains Mono"

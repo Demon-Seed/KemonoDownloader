@@ -30,9 +30,6 @@ class TestDefaultSettings:
             def ensure_folders_exist(self):
                 pass
 
-        # Use a unique QSettings name to avoid conflicts
-        QSettings("VoxDroid_Test", "KemonoDownloader_Test").clear()
-
         # Access default settings directly
         default_settings = {
             "base_folder_name": "Kemono Downloader",
@@ -258,29 +255,17 @@ class TestSettingsMigration:
             def log(self, m):
                 pass
 
-        # Clean settings
-        qs = QSettings("VoxDroid_Test", "KemonoDownloader_Test")
-        qs.clear()
-        qs.setValue("proxy_type", "none")
-        qs.sync()
-
-        # Injecting QSettings into SettingsTab is hard because it's hardcoded in __init__
-        # But we can patch QSettings
-
-        # This is a bit risky but let's try patching the class for SettingsTab import or instantiation
-        # Better: use monkeypatch on the instance or class
-        # st = SettingsTab(MockParent())
-        # st.qsettings = qs
-        # st.load_settings()
-        # Let's try to just call load_settings on an instance and check if it handles the dict correctly
+        # Seed the legacy value in the isolated store (see isolate_qsettings
+        # in tests/conftest.py) and verify load_settings migrates it. Never
+        # point this at the real "VoxDroid"/"KemonoDownloader" settings.
         st = SettingsTab(MockParent())
         try:
-            st.qsettings = qs
+            st.qsettings.setValue("proxy_type", "none")
+            st.qsettings.sync()
             settings_dict = st.load_settings()
             assert settings_dict["proxy_type"] == "tor"
         finally:
             st.deleteLater()
-            qs.clear()
 
 
 class TestSettingsUIInteractions:
@@ -1154,9 +1139,11 @@ def test_auto_detect_tor_in_base_directory(tmp_path, monkeypatch, qapp):
 class TestQSettingsIntegration:
     """Tests for QSettings integration."""
 
-    def test_qsettings_value_types(self):
+    def test_qsettings_value_types(self, tmp_path):
         """Test QSettings value type handling."""
-        settings = QSettings("VoxDroid_UnitTest", "KemonoDownloader_UnitTest")
+        settings = QSettings(
+            str(tmp_path / "value_types.ini"), QSettings.Format.IniFormat
+        )
 
         try:
             # Test setting and getting different types
@@ -1172,9 +1159,11 @@ class TestQSettingsIntegration:
             # Cleanup
             settings.clear()
 
-    def test_qsettings_default_values(self):
+    def test_qsettings_default_values(self, tmp_path):
         """Test QSettings default value handling."""
-        settings = QSettings("VoxDroid_UnitTest2", "KemonoDownloader_UnitTest2")
+        settings = QSettings(
+            str(tmp_path / "default_values.ini"), QSettings.Format.IniFormat
+        )
 
         try:
             # Non-existent key should return default

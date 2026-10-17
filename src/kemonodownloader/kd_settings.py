@@ -54,6 +54,9 @@ class SettingsTab(QWidget):
     def __init__(self, parent):
         super().__init__()
         self.parent = parent
+        # Real user storage. Tests must never write here: the autouse
+        # isolate_qsettings fixture in tests/conftest.py redirects this
+        # class to a temporary INI for the whole suite.
         self.qsettings = QSettings("VoxDroid", "KemonoDownloader")
         self.default_settings = {
             "base_folder_name": "Kemono Downloader",

@@ -46,6 +46,32 @@ def pytest_configure(config):
 # the early QApplication created above was garbage-collected.
 
 
+@pytest.fixture(autouse=True)
+def isolate_qsettings(tmp_path, monkeypatch):
+    """Redirect every QSettings created by kd_settings to a temp INI.
+
+    ``SettingsTab.__init__`` opens ``QSettings("VoxDroid", "KemonoDownloader")``,
+    which on Windows is the user's real registry key. Tests exercise
+    ``confirm_and_apply_settings()`` / ``save_settings()``, so without this
+    redirection every suite run overwrites the real application settings.
+    Monkeypatching the class keeps the whole suite hermetic.
+
+    The instance-level ``isolated_settings`` fixture below is superseded by
+    this one; new tests should simply rely on the autouse isolation.
+    """
+    from PyQt6.QtCore import QSettings as RealQSettings
+
+    from kemonodownloader import kd_settings as kd_settings_mod
+
+    ini_path = str(tmp_path / "kd_settings.ini")
+
+    def factory(*args, **kwargs):
+        return RealQSettings(ini_path, RealQSettings.Format.IniFormat)
+
+    monkeypatch.setattr(kd_settings_mod, "QSettings", factory)
+    yield ini_path
+
+
 @pytest.fixture()
 def isolated_settings(tmp_path):
     """Provide a QSettings instance backed by an isolated temp INI file.
