@@ -117,6 +117,194 @@ def parse_filter_date(text):
         return None
 
 
+# Extensions treated as compressed archives: a post holding one of these is
+# never dropped by the file-count filter when "Keep Archives" is on, and its
+# images are skipped by the "Skip Images if Compressed" download option.
+COMPRESSED_EXTENSIONS = (".zip", ".7z", ".rar")
+# Extensions treated as images by the "Skip Images if Compressed" option.
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".jpe", ".png", ".gif", ".webp")
+
+
+def file_extension(name_or_path):
+    """Return the lower-case extension of a filename or URL path ("" if none)."""
+    if not name_or_path:
+        return ""
+    # A query string (".../file.zip?f=file.zip") must not be part of the ext.
+    path = str(name_or_path).split("?")[0]
+    return os.path.splitext(path.strip())[1].lower()
+
+
+def parse_filter_count(text):
+    """Parse a user-entered file-count bound ("3", " 12 ").
+
+    Returns a non-negative int, or None when *text* is blank, not a whole
+    number, or negative — in which case the bound counts as disabled.
+    """
+    if text is None:
+        return None
+    try:
+        value = int(str(text).strip())
+    except Exception:
+        return None
+    return value if value >= 0 else None
+
+
+def parse_post_tags(tags):
+    """Parse a post's ``tags`` field into a plain list of strings.
+
+    Tolerates every shape the APIs are known to return:
+    - A PostgreSQL array string: "{tag1,tag2,tag3}" (Kemono/Coomer style)
+    - A comma-separated string: "tag1, tag2, tag3"
+    - A semicolon-separated string: "tag1; tag2; tag3"
+    - A list of plain strings, or of dicts with a 'name', 'tag', 'label',
+      or 'value' key
+    - A dict mapping tag names to truthy/falsy values.
+    """
+    result = []
+    try:
+        if not tags:
+            return result
+        if isinstance(tags, str):
+            text = tags
+            if text.startswith("{") and text.endswith("}"):
+                text = text[1:-1]
+            candidates = text.split(",")
+            if len(candidates) <= 1:
+                candidates = text.split(";")
+            for candidate in candidates:
+                cleaned = candidate.strip().strip("{}'\"")
+                if cleaned:
+                    result.append(cleaned)
+            return result
+        if isinstance(tags, list):
+            for tag in tags:
+                if isinstance(tag, dict):
+                    name = (
+                        tag.get("name")
+                        or tag.get("tag")
+                        or tag.get("label")
+                        or tag.get("value")
+                    )
+                    cleaned = str(name).strip().strip("{}'\"") if name else ""
+                else:
+                    cleaned = str(tag).strip().strip("{}'\"")
+                if cleaned:
+                    result.append(cleaned)
+            return result
+        if isinstance(tags, dict):
+            for key in tags:
+                cleaned = str(key).strip().strip("{}'\"")
+                if cleaned:
+                    result.append(cleaned)
+    except Exception:
+        return result
+    return result
+
+
+def analyze_post(post):
+    """Return the searchable/measurable facts about a post.
+
+    Keys:
+    - ``filenames``: lower-case main-file + attachment names, space joined
+    - ``description``: lower-case post body text
+    - ``tags``: lower-case tag names, space joined
+    - ``file_count``: main file + attachments + unique content images
+    - ``has_compressed``: True when any of those files is a ZIP/7Z/RAR
+
+    The HTML body is parsed once, so callers needing several of these values
+    should cache the returned dict instead of calling this again.
+    """
+    analysis = {
+        "filenames": "",
+        "description": "",
+        "tags": "",
+        "file_count": 0,
+        "has_compressed": False,
+    }
+    if not isinstance(post, dict):
+        return analysis
+
+    names = []
+    file_info = post.get("file")
+    if isinstance(file_info, dict):
+        name = file_info.get("name") or os.path.basename(file_info.get("path") or "")
+        if name:
+            names.append(
+                (str(name), file_extension(name) or file_extension(file_info.get("path")))
+            )
+    attachments = post.get("attachments")
+    if isinstance(attachments, list):
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                continue
+            name = attachment.get("name") or os.path.basename(
+                attachment.get("path") or ""
+            )
+            if name:
+                names.append(
+                    (
+                        str(name),
+                        file_extension(name)
+                        or file_extension(attachment.get("path")),
+                    )
+                )
+
+    file_count = len(names)
+    has_compressed = any(ext in COMPRESSED_EXTENSIONS for _, ext in names)
+
+    content = post.get("content")
+    if isinstance(content, str) and content:
+        try:
+            soup = BeautifulSoup(content, "html.parser")
+        except Exception:
+            soup = None
+        if soup is not None:
+            analysis["description"] = soup.get_text(" ").lower()
+            seen_images = set()
+            for img in soup.select("img[src]"):
+                src = str(img.get("src") or "").strip()
+                if not src or src in seen_images:
+                    continue
+                seen_images.add(src)
+                file_count += 1
+                if file_extension(src) in COMPRESSED_EXTENSIONS:
+                    has_compressed = True
+
+    analysis["file_count"] = file_count
+    analysis["has_compressed"] = has_compressed
+    analysis["filenames"] = " ".join(name for name, _ in names).lower()
+    analysis["tags"] = " ".join(parse_post_tags(post.get("tags"))).lower()
+    return analysis
+
+
+def post_matches_search(
+    post_title, post_id, search_text, search_scopes, post_search_index=None
+):
+    """Return True when a post matches the Creator tab's search bar text.
+
+    Matching is a case-insensitive substring test against every enabled scope
+    (title, filenames, description, tags). Scopes other than the title are
+    served by the per-post index built while detecting posts, so a post with
+    no index entry still matches on its title alone. An empty scope set falls
+    back to the title, which is the historical behaviour.
+    """
+    if not search_text:
+        return True
+    needle = str(search_text).lower()
+    scopes = set(search_scopes) if search_scopes else {"title"}
+    if "title" in scopes and needle in str(post_title or "").lower():
+        return True
+    if not post_search_index:
+        return False
+    entry = post_search_index.get(post_id)
+    if not isinstance(entry, dict):
+        return False
+    for scope in ("filenames", "description", "tags"):
+        if scope in scopes and needle in str(entry.get(scope) or ""):
+            return True
+    return False
+
+
 def resolve_creator_url(raw_url):
     """Normalize a pasted URL for the Creator Downloader queue.
 
@@ -619,6 +807,10 @@ class PostDetectionThread(QThread):
         post_dates_map=None,
         date_after=None,
         date_before=None,
+        file_count_min=None,
+        file_count_max=None,
+        file_count_keep_compressed=False,
+        post_search_index=None,
     ):
         super().__init__()
         self.url = url
@@ -643,10 +835,54 @@ class PostDetectionThread(QThread):
         # Only the post's own publish date is considered, never the import date.
         self.date_after = date_after
         self.date_before = date_before
+        # Optional post file-count range filter (both bounds inclusive, both
+        # optional). "Keep Archives" makes posts holding a ZIP/7Z/RAR bypass
+        # the range check entirely so archive posts are never lost.
+        self.file_count_min = file_count_min
+        self.file_count_max = file_count_max
+        self.file_count_keep_compressed = file_count_keep_compressed
+        # Optional shared dict (post_id -> lower-case searchable text) that
+        # feeds the Creator tab's "Search by" scopes. Only filled when the
+        # caller passes a dict, so plain detection runs stay cost-free.
+        self.post_search_index = post_search_index
         self._skipped_count = 0
         self._keyword_skipped_count = 0
         self._date_skipped_count = 0
+        self._file_count_skipped_count = 0
         self._parsed_dates = {}  # post_id -> parsed datetime.date (cache, avoids re-parsing)
+        # post_id -> analyze_post() result, so a post's HTML body is parsed at
+        # most once per detection run even when several filters need it.
+        self._analysis_cache = {}
+
+    def _analyze(self, post):
+        """Return the cached :func:`analyze_post` result for *post*."""
+        post_id = post.get("id")
+        analysis = self._analysis_cache.get(post_id)
+        if analysis is None:
+            analysis = analyze_post(post)
+            self._analysis_cache[post_id] = analysis
+        return analysis
+
+    def _post_file_count_out_of_range(self, post):
+        """Return True if *post* should be skipped because its file count falls
+        outside the configured [file_count_min, file_count_max] range.
+
+        Counts the post's main file, attachments and content images. Posts
+        whose count comes from data we cannot read are kept, and with "Keep
+        Archives" enabled any post holding a compressed archive is kept
+        regardless of its count.
+        """
+        if not self.file_count_min and not self.file_count_max:
+            return False
+        analysis = self._analyze(post)
+        if self.file_count_keep_compressed and analysis.get("has_compressed"):
+            return False
+        count = analysis.get("file_count", 0)
+        if self.file_count_min and count < self.file_count_min:
+            return True
+        if self.file_count_max and count > self.file_count_max:
+            return True
+        return False
 
     def _post_date_out_of_range(self, post):
         """Return True if *post* should be skipped because its publish date
@@ -776,57 +1012,9 @@ class PostDetectionThread(QThread):
                 "DEBUG",
             )
 
-            if isinstance(tags, str):
-                # Handle PostgreSQL array string format used by
-                # Kemono/Coomer APIs: "{tag1,tag2,tag3}"
-                # Strip leading/trailing curly braces, then split by comma.
-                if tags.startswith("{") and tags.endswith("}"):
-                    tags = tags[1:-1]
-                # Split by comma first (the standard delimiter for both
-                # PostgreSQL array strings and plain comma-separated strings).
-                candidates = tags.split(",")
-                # If comma gave only one result, try semicolon as fallback.
-                if len(candidates) <= 1:
-                    candidates = tags.split(";")
-                # Strip any remaining braces, quotes, and whitespace from each tag
-                result = []
-                for t in candidates:
-                    cleaned = t.strip().strip("{}\"'")
-                    if cleaned:
-                        result.append(cleaned)
-                return result
-            if isinstance(tags, list):
-                result = []
-                for t in tags:
-                    if isinstance(t, dict):
-                        # Extract the tag name from common key names used
-                        # by various API responses.
-                        name = (
-                            t.get("name")
-                            or t.get("tag")
-                            or t.get("label")
-                            or t.get("value")
-                        )
-                        if name:
-                            result.append(str(name).strip().strip("{}\"'"))
-                    elif isinstance(t, str):
-                        cleaned = t.strip().strip("{}\"'")
-                        if cleaned:
-                            result.append(cleaned)
-                    else:
-                        s = str(t).strip().strip("{}\"'")
-                        if s:
-                            result.append(s)
-                return result
-            if isinstance(tags, dict):
-                # Handle dict format: keys are tag names, values may
-                # be booleans, counts, or other metadata.
-                result = []
-                for key in tags:
-                    cleaned = str(key).strip().strip("{}\"'")
-                    if cleaned:
-                        result.append(cleaned)
-                return result
+            # Parsing (and every tolerated format) lives in parse_post_tags so
+            # the search index and this keyword matcher can never disagree.
+            return parse_post_tags(tags)
         except Exception:
             pass
         return []
@@ -1286,6 +1474,16 @@ class PostDetectionThread(QThread):
                 self.post_dates_map[post_id] = (
                     parsed_date.strftime("%Y-%m-%d") if parsed_date else "Unknown date"
                 )
+                # Feed the Creator tab's "Search by" scopes. The index holds
+                # lower-case text only, so filtering a keystroke stays a cheap
+                # substring test instead of re-parsing HTML every time.
+                if self.post_search_index is not None:
+                    analysis = self._analyze(post)
+                    self.post_search_index[post_id] = {
+                        "filenames": analysis["filenames"],
+                        "description": analysis["description"],
+                        "tags": analysis["tags"],
+                    }
 
             if not posts_data:
                 self.log.emit(
@@ -1305,12 +1503,15 @@ class PostDetectionThread(QThread):
                 title = post.get("title", f"Post {post_id}")
                 keyword_match = self._title_matches_skip_keyword(title, post)
                 date_out = self._post_date_out_of_range(post)
+                file_count_out = self._post_file_count_out_of_range(post)
 
                 if keyword_match:
                     self._keyword_skipped_count += 1
                 if date_out:
                     self._date_skipped_count += 1
-                if keyword_match or date_out:
+                if file_count_out:
+                    self._file_count_skipped_count += 1
+                if keyword_match or date_out or file_count_out:
                     self._skipped_count += 1
                     continue
                 thumbnail_url = None
@@ -1388,6 +1589,7 @@ class PostDetectionThread(QThread):
             self.filtered_count = self._skipped_count
             self.date_skipped_count = self._date_skipped_count
             self.keyword_skipped_count = self._keyword_skipped_count
+            self.file_count_skipped_count = self._file_count_skipped_count
             self.total_detected = len(all_posts)
             self.finished.emit(all_processed_posts)
 
@@ -1441,11 +1643,25 @@ class PostPopulationThread(QThread):
 class FilterThread(QThread):
     finished = pyqtSignal(list)
 
-    def __init__(self, all_detected_posts, checked_urls, search_text):
+    def __init__(
+        self,
+        all_detected_posts,
+        checked_urls,
+        search_text,
+        search_scopes=None,
+        post_search_index=None,
+    ):
         super().__init__()
         self.all_detected_posts = all_detected_posts
         self.checked_urls = checked_urls.copy()
-        self.search_text = search_text.lower()
+        self.search_text = (search_text or "").lower()
+        # Scopes the search bar looks in: any of "title", "filenames",
+        # "description", "tags". An empty set falls back to the title.
+        self.search_scopes = set(search_scopes) if search_scopes else {"title"}
+        # post_id -> lower-case searchable text, built while detecting posts.
+        self.post_search_index = (
+            post_search_index if post_search_index is not None else {}
+        )
         self.is_running = True
 
     def stop(self):
@@ -1456,7 +1672,13 @@ class FilterThread(QThread):
             return
         filtered_items = []
         for post_title, (post_id, thumbnail_url) in self.all_detected_posts:
-            if not self.search_text or self.search_text in post_title.lower():
+            if self.is_running and post_matches_search(
+                post_title,
+                post_id,
+                self.search_text,
+                self.search_scopes,
+                self.post_search_index,
+            ):
                 is_checked = self.checked_urls.get(post_id, False)
                 filtered_items.append((post_title, post_id, thumbnail_url, is_checked))
         self.finished.emit(filtered_items)
@@ -1478,6 +1700,7 @@ class FilePreparationThread(QThread):
         settings,
         max_concurrent=20,
         file_skip_keywords=None,
+        skip_images_if_compressed=False,
     ):
         super().__init__()
         self.post_ids = post_ids
@@ -1492,11 +1715,54 @@ class FilePreparationThread(QThread):
         # Independent, always-on, filename-only skip list.
         # It can be combined freely with whole-post skipping.
         self.file_skip_keywords = file_skip_keywords if file_skip_keywords is not None else []
+        # Optional download option: when a post also offers a compressed
+        # archive, its image files are dropped instead of downloaded.
+        self.skip_images_if_compressed = skip_images_if_compressed
         self._files_skipped_count = 0
         self._files_skipped_lock = threading.Lock()
 
     def stop(self):
         self.is_running = False
+
+    def _drop_images_when_archive_present(self, files_to_download):
+        """Return *files_to_download* without its image files when the post
+        also offers a compressed archive.
+
+        The archive has to be one of the files actually being downloaded, so
+        a post whose ZIP was not selected never loses its images. When no
+        archive is present the list is returned untouched.
+        """
+        if not self.skip_images_if_compressed:
+            return files_to_download
+
+        def ext_of(name, url):
+            return file_extension(name) or file_extension(urlparse(url).path)
+
+        extensions = {ext_of(name, url) for name, url in files_to_download}
+        if not any(ext in COMPRESSED_EXTENSIONS for ext in extensions):
+            return files_to_download
+
+        kept = []
+        skipped = []
+        for name, url in files_to_download:
+            if ext_of(name, url) in IMAGE_EXTENSIONS:
+                skipped.append(name)
+            else:
+                kept.append((name, url))
+        if skipped:
+            self.log.emit(
+                translate(
+                    "log_debug",
+                    _t(
+                        "images_skipped_archive_present",
+                        "[SKIP-IMAGE] Skipped {0} image file(s); a compressed "
+                        "archive is present",
+                        len(skipped),
+                    ),
+                ),
+                "INFO",
+            )
+        return kept
 
     def _file_matches_skip_keyword(self, file_name):
         """Return True if *file_name* should be excluded individually.
@@ -1675,6 +1941,7 @@ class FilePreparationThread(QThread):
             ),
             "INFO",
         )
+        files_to_download = self._drop_images_when_archive_present(files_to_download)
         return list(dict.fromkeys(files_to_download))
 
     def fetch_and_detect_files(self, post_id, creator_url):
@@ -3263,6 +3530,13 @@ class CreatorDownloaderTab(QWidget):
         self._cancellation_thread = None
         self.post_titles_map = {}
         self.post_dates_map = {}  # post_id -> display string of the post's own publish date
+        # post_id -> lower-case searchable text ("filenames"/"description"/
+        # "tags"), filled while detecting posts so the "Search by" scopes can
+        # filter the list without touching the network or re-parsing HTML.
+        self.post_search_index = {}
+        # Set when a filter request arrives while FilterThread is still
+        # running, so the change is applied once that pass finishes.
+        self._filter_refresh_pending = False
         # post_id -> "YYYY-MM-DD" of the last actual download, for the creator
         # being viewed only.  Rendered in square brackets after the publish
         # date in each row.
@@ -3467,6 +3741,30 @@ class CreatorDownloaderTab(QWidget):
         skip_single_image_layout.addStretch()
         creator_options_layout.addLayout(skip_single_image_layout)
 
+        # Skip a post's images when it also offers a compressed archive (the
+        # archive is downloaded instead). Sits above the extension tickboxes
+        # so the option that prunes files comes first.
+        skip_images_layout = QHBoxLayout()
+        skip_images_layout.setContentsMargins(0, 0, 0, 0)
+        self.creator_skip_images_check = QCheckBox(
+            _t("skip_images_if_compressed", "Skip Images if Compressed")
+        )
+        self.creator_skip_images_check.setChecked(False)
+        self.creator_skip_images_check.setStyleSheet("color: white;")
+        skip_images_layout.addWidget(self.creator_skip_images_check)
+
+        self.creator_skip_images_info_btn = QPushButton(
+            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+        )
+        self.creator_skip_images_info_btn.setFixedSize(26, 26)
+        self.creator_skip_images_info_btn.setStyleSheet(
+            "background: #4A5B7A; border-radius: 5px;"
+        )
+        self.creator_skip_images_info_btn.clicked.connect(self.show_skip_images_info)
+        skip_images_layout.addWidget(self.creator_skip_images_info_btn)
+        skip_images_layout.addStretch()
+        creator_options_layout.addLayout(skip_images_layout)
+
         self.creator_ext_group = QGroupBox()
         self.creator_ext_group.setStyleSheet("QGroupBox { color: white; }")
         creator_ext_layout = QGridLayout()
@@ -3497,6 +3795,7 @@ class CreatorDownloaderTab(QWidget):
             creator_ext_layout.addWidget(check, i // 5, i % 5)
         self.creator_ext_group.setLayout(creator_ext_layout)
         creator_options_layout.addWidget(self.creator_ext_group)
+
         self.creator_options_group.setLayout(creator_options_layout)
         left_layout.addWidget(self.creator_options_group)
 
@@ -3596,7 +3895,7 @@ class CreatorDownloaderTab(QWidget):
 
         self.skip_keywords_edit = QLineEdit()
         self.skip_keywords_edit.setPlaceholderText(
-            _t("skip_posts_keywords_placeholder", "e.g. JP, ZH (comma-separated, optional)")
+            _t("skip_posts_keywords_placeholder", "e.g. JP, ZH (comma-separated)")
         )
         self.skip_keywords_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
         skip_filter_layout.addWidget(self.skip_keywords_edit, stretch=1)
@@ -3652,7 +3951,7 @@ class CreatorDownloaderTab(QWidget):
         self.file_skip_keywords_edit.setPlaceholderText(
             _t(
                 "skip_files_keywords_placeholder",
-                "e.g. JP, ZH (comma-separated, optional)",
+                "e.g. JP, ZH (comma-separated)",
             )
         )
         self.file_skip_keywords_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
@@ -3688,7 +3987,7 @@ class CreatorDownloaderTab(QWidget):
 
         self.date_from_edit = QLineEdit()
         self.date_from_edit.setPlaceholderText(
-            _t("date_range_from_placeholder", "YYYY-MM-DD (optional)")
+            _t("date_range_from_placeholder", "YYYY-MM-DD")
         )
         self.date_from_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
         date_range_layout.addWidget(self.date_from_edit, stretch=1)
@@ -3699,7 +3998,7 @@ class CreatorDownloaderTab(QWidget):
 
         self.date_to_edit = QLineEdit()
         self.date_to_edit.setPlaceholderText(
-            _t("date_range_to_placeholder", "YYYY-MM-DD (optional)")
+            _t("date_range_to_placeholder", "YYYY-MM-DD")
         )
         self.date_to_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
         date_range_layout.addWidget(self.date_to_edit, stretch=1)
@@ -3715,6 +4014,82 @@ class CreatorDownloaderTab(QWidget):
         date_range_layout.addWidget(self.date_filter_help_btn)
 
         post_list_layout.addLayout(date_range_layout)
+
+        # Post file-count range filter — "From"/"To" bounds on how many files
+        # a post holds (main file + attachments + content images). Both bounds
+        # are optional and inclusive. "Keep Archives" always keeps posts that
+        # contain a ZIP/7Z/RAR, whatever their count.
+        file_count_layout = QHBoxLayout()
+        file_count_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.file_count_label = QLabel(_t("file_count_filter", "File Count From"))
+        self.file_count_label.setStyleSheet("color: white;")
+        file_count_layout.addWidget(self.file_count_label)
+
+        self.file_count_from_edit = QLineEdit()
+        self.file_count_from_edit.setPlaceholderText(
+            _t("file_count_from_placeholder", "Min")
+        )
+        self.file_count_from_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
+        file_count_layout.addWidget(self.file_count_from_edit, stretch=1)
+
+        self.file_count_to_label = QLabel(_t("file_count_to", "To"))
+        self.file_count_to_label.setStyleSheet("color: white;")
+        file_count_layout.addWidget(self.file_count_to_label)
+
+        self.file_count_to_edit = QLineEdit()
+        self.file_count_to_edit.setPlaceholderText(
+            _t("file_count_to_placeholder", "Max")
+        )
+        self.file_count_to_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
+        file_count_layout.addWidget(self.file_count_to_edit, stretch=1)
+
+        self.file_count_keep_compressed_check = QCheckBox(
+            _t("file_count_keep_compressed", "Keep Archives")
+        )
+        self.file_count_keep_compressed_check.setChecked(False)
+        self.file_count_keep_compressed_check.setStyleSheet("color: white;")
+        file_count_layout.addWidget(self.file_count_keep_compressed_check)
+
+        self.file_count_help_btn = QPushButton(
+            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+        )
+        self.file_count_help_btn.setFixedSize(26, 26)
+        self.file_count_help_btn.setStyleSheet(
+            "background: #4A5B7A; border-radius: 5px;"
+        )
+        self.file_count_help_btn.clicked.connect(self.show_file_count_help)
+        file_count_layout.addWidget(self.file_count_help_btn)
+
+        post_list_layout.addLayout(file_count_layout)
+
+        # "Search by" row — same layout as the skip-keyword "Filter By" row,
+        # but it points the search bar at the ticked fields. Toggling a box
+        # re-filters the already-loaded list immediately.
+        search_scope_layout = QHBoxLayout()
+        search_scope_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.search_scope_label = QLabel(_t("search_scope", "Search by"))
+        self.search_scope_label.setStyleSheet("color: white;")
+        search_scope_layout.addWidget(self.search_scope_label)
+
+        self._search_scope_options = [
+            ("search_scope_title_toggle", "title", "Title"),
+            ("search_scope_filenames_toggle", "filenames", "Filenames"),
+            ("search_scope_description_toggle", "description", "Description"),
+            ("search_scope_tags_toggle", "tags", "Tags"),
+        ]
+        self.search_scope_checkboxes = {}
+        for label_key, value, fallback_label in self._search_scope_options:
+            checkbox = QCheckBox(_t(label_key, fallback_label))
+            checkbox.setStyleSheet("color: white;")
+            checkbox.setChecked(value == "title")  # Title enabled by default
+            checkbox.stateChanged.connect(self.filter_items)
+            search_scope_layout.addWidget(checkbox)
+            self.search_scope_checkboxes[value] = checkbox
+        search_scope_layout.addStretch()
+
+        post_list_layout.addLayout(search_scope_layout)
 
         self.creator_search_input = QLineEdit()
         self.creator_search_input.setStyleSheet("padding: 5px; border-radius: 5px;")
@@ -3909,6 +4284,38 @@ class CreatorDownloaderTab(QWidget):
                     "Always Post Folder for Compressed Files",
                 )
             )
+        if hasattr(self, "creator_skip_images_check"):
+            self.creator_skip_images_check.setText(
+                _t("skip_images_if_compressed", "Skip Images if Compressed")
+            )
+        if hasattr(self, "creator_skip_images_info_btn"):
+            self.creator_skip_images_info_btn.setToolTip(
+                _t("skip_images_info_title", "Skip Images Help")
+            )
+        if hasattr(self, "file_count_help_btn"):
+            self.file_count_help_btn.setToolTip(
+                _t("file_count_help_title", "File Count Filter Help")
+            )
+        if hasattr(self, "file_count_label"):
+            self.file_count_label.setText(
+                _t("file_count_filter", "File Count From")
+            )
+        if hasattr(self, "file_count_from_edit"):
+            self.file_count_from_edit.setPlaceholderText(
+                _t("file_count_from_placeholder", "Min")
+            )
+        if hasattr(self, "file_count_to_label"):
+            self.file_count_to_label.setText(_t("file_count_to", "To"))
+        if hasattr(self, "file_count_to_edit"):
+            self.file_count_to_edit.setPlaceholderText(
+                _t("file_count_to_placeholder", "Max")
+            )
+        if hasattr(self, "file_count_keep_compressed_check"):
+            self.file_count_keep_compressed_check.setText(
+                _t("file_count_keep_compressed", "Keep Archives")
+            )
+        if hasattr(self, "search_scope_label"):
+            self.search_scope_label.setText(_t("search_scope", "Search by"))
         self.creator_multi_url_input.setPlaceholderText(
             translate("multi_url_placeholder_creator")
         )
@@ -3937,7 +4344,7 @@ class CreatorDownloaderTab(QWidget):
             self.skip_keywords_edit.setPlaceholderText(
                 _t(
                     "skip_posts_keywords_placeholder",
-                    "e.g. JP, ZH (comma-separated, optional)",
+                    "e.g. JP, ZH (comma-separated)",
                 )
             )
         if hasattr(self, "skip_scope_label"):
@@ -3950,12 +4357,17 @@ class CreatorDownloaderTab(QWidget):
             self.file_skip_keywords_edit.setPlaceholderText(
                 _t(
                     "skip_files_keywords_placeholder",
-                    "e.g. JP, ZH (comma-separated, optional)",
+                    "e.g. JP, ZH (comma-separated)",
                 )
             )
         if hasattr(self, "skip_scope_checkboxes"):
             for label_key, value, fallback_label in self._skip_scope_options:
                 checkbox = self.skip_scope_checkboxes.get(value)
+                if checkbox is not None:
+                    checkbox.setText(_t(label_key, fallback_label))
+        if hasattr(self, "search_scope_checkboxes"):
+            for label_key, value, fallback_label in self._search_scope_options:
+                checkbox = self.search_scope_checkboxes.get(value)
                 if checkbox is not None:
                     checkbox.setText(_t(label_key, fallback_label))
 
@@ -4110,6 +4522,22 @@ class CreatorDownloaderTab(QWidget):
             _t(
                 "skip_folder_info_text",
                 "When enabled, posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.\n\nFor example, if set to 1, single-image posts will not get their own folder — the image will be placed directly in the creator's folder.\n\nThis only applies when Folder Structure is set to 'Per-post folders'.\n\nThe archive icon toggle next to this button ignores compressed files (ZIP, 7z, RAR) when deciding whether to skip the post folder — those files will always be saved in their own post folder, even if Skip Post Folder would otherwise apply to that post.",
+            ),
+        )
+
+    def show_skip_images_info(self):
+        """Show a dialog explaining what Skip Images if Compressed does."""
+        QMessageBox.information(
+            self,
+            _t("skip_images_info_title", "Skip Images Help"),
+            _t(
+                "skip_images_info_text",
+                "When enabled, a post's image files (JPG, JPEG, JPE, PNG, "
+                "GIF, WEBP) are not downloaded if the same post also offers "
+                "a compressed archive (ZIP, 7Z, RAR).\n\n"
+                "The archive has to be one of the files being downloaded — "
+                "if ZIP/7Z/RAR is unticked above, the images are kept.\n\n"
+                "Applies to the main file, attachments and content images.",
             ),
         )
 
@@ -4293,6 +4721,7 @@ class CreatorDownloaderTab(QWidget):
         self.all_detected_posts = []  # Clear previous creator's posts
         self.post_url_map = {}  # Clear previous creator's post URL mapping
         self.post_dates_map = {}  # Clear previous creator's post dates
+        self.post_search_index = {}  # Clear previous creator's search index
         self.current_page = 1  # Reset pagination
         self.total_pages = 1
 
@@ -4368,6 +4797,37 @@ class CreatorDownloaderTab(QWidget):
         if date_after and date_before and date_after > date_before:
             date_after, date_before = date_before, date_after
 
+        file_count_min = parse_filter_count(self.file_count_from_edit.text())
+        file_count_max = parse_filter_count(self.file_count_to_edit.text())
+        if self.file_count_from_edit.text().strip() and file_count_min is None:
+            self.append_log_to_console(
+                translate(
+                    "log_warning",
+                    _t(
+                        "invalid_file_count_ignored",
+                        "Invalid 'File Count' value ignored (use a whole number)",
+                    ),
+                ),
+                "WARNING",
+            )
+        if self.file_count_to_edit.text().strip() and file_count_max is None:
+            self.append_log_to_console(
+                translate(
+                    "log_warning",
+                    _t(
+                        "invalid_file_count_ignored",
+                        "Invalid 'File Count' value ignored (use a whole number)",
+                    ),
+                ),
+                "WARNING",
+            )
+        if (
+            file_count_min is not None
+            and file_count_max is not None
+            and file_count_min > file_count_max
+        ):
+            file_count_min, file_count_max = file_count_max, file_count_min
+
         self.post_detection_thread = PostDetectionThread(
             url,
             self.post_titles_map,
@@ -4377,6 +4837,12 @@ class CreatorDownloaderTab(QWidget):
             post_dates_map=self.post_dates_map,
             date_after=date_after,
             date_before=date_before,
+            file_count_min=file_count_min,
+            file_count_max=file_count_max,
+            file_count_keep_compressed=(
+                self.file_count_keep_compressed_check.isChecked()
+            ),
+            post_search_index=self.post_search_index,
         )
         self.post_detection_thread.finished.connect(self.on_post_detection_finished)
         self.post_detection_thread.posts_batch.connect(self.on_posts_batch_received)
@@ -4421,13 +4887,33 @@ class CreatorDownloaderTab(QWidget):
         # Trigger incremental filtering to add new posts to UI
         self.filter_items_incremental(batch_posts)
 
+    def _selected_search_scopes(self):
+        """Return the scopes ticked in the "Search by" row.
+
+        An empty selection falls back to the title, which is what the search
+        bar has always matched against.
+        """
+        scopes = {
+            scope
+            for scope, checkbox in self.search_scope_checkboxes.items()
+            if checkbox.isChecked()
+        }
+        return scopes or {"title"}
+
     def filter_items_incremental(self, batch_posts):
         """Filter and add a batch of posts to the filtered cache incrementally"""
         search_text = self.creator_search_input.text().lower()
+        search_scopes = self._selected_search_scopes()
         filtered_batch = []
 
         for post_title, (post_id, thumbnail_url) in batch_posts:
-            if not search_text or search_text in post_title.lower():
+            if post_matches_search(
+                post_title,
+                post_id,
+                search_text,
+                search_scopes,
+                self.post_search_index,
+            ):
                 is_checked = self.checked_urls.get(post_id, False)
                 filtered_batch.append((post_title, post_id, thumbnail_url, is_checked))
 
@@ -4501,6 +4987,14 @@ class CreatorDownloaderTab(QWidget):
         self.date_from_edit.setEnabled(not is_fetching)
         self.date_to_edit.setEnabled(not is_fetching)
         self.date_filter_help_btn.setEnabled(not is_fetching)
+        # Inline file-count filter
+        self.file_count_from_edit.setEnabled(not is_fetching)
+        self.file_count_to_edit.setEnabled(not is_fetching)
+        self.file_count_keep_compressed_check.setEnabled(not is_fetching)
+        self.file_count_help_btn.setEnabled(not is_fetching)
+        # Search scopes
+        for checkbox in self.search_scope_checkboxes.values():
+            checkbox.setEnabled(not is_fetching)
 
         # Pagination controls
         self.prev_page_btn.setEnabled(not is_fetching and self.current_page > 1)
@@ -4554,6 +5048,10 @@ class CreatorDownloaderTab(QWidget):
             self.creator_skip_folder_info_btn.setEnabled(enabled)
         if hasattr(self, "creator_force_compressed_folder_check"):
             self.creator_force_compressed_folder_check.setEnabled(enabled)
+        if hasattr(self, "creator_skip_images_check"):
+            self.creator_skip_images_check.setEnabled(enabled)
+        if hasattr(self, "creator_skip_images_info_btn"):
+            self.creator_skip_images_info_btn.setEnabled(enabled)
 
         # Post selection
         self.creator_search_input.setEnabled(enabled)
@@ -4573,6 +5071,12 @@ class CreatorDownloaderTab(QWidget):
         self.date_filter_help_btn.setEnabled(enabled)
         self.date_from_edit.setEnabled(enabled)
         self.date_to_edit.setEnabled(enabled)
+        self.file_count_from_edit.setEnabled(enabled)
+        self.file_count_to_edit.setEnabled(enabled)
+        self.file_count_keep_compressed_check.setEnabled(enabled)
+        self.file_count_help_btn.setEnabled(enabled)
+        for checkbox in self.search_scope_checkboxes.values():
+            checkbox.setEnabled(enabled)
 
         # Pagination
         self.prev_page_btn.setEnabled(enabled and self.current_page > 1)
@@ -4923,6 +5427,9 @@ class CreatorDownloaderTab(QWidget):
             self._create_thread_settings(),
             max_concurrent=5,
             file_skip_keywords=file_skip_keywords,
+            skip_images_if_compressed=(
+                self.creator_skip_images_check.isChecked()
+            ),
         )
         self.file_preparation_thread.progress.connect(self.update_background_progress)
         self.file_preparation_thread.finished.connect(
@@ -5514,6 +6021,27 @@ class CreatorDownloaderTab(QWidget):
             ),
         )
 
+    def show_file_count_help(self):
+        """Show help text explaining the post file-count range filter."""
+        QMessageBox.information(
+            self,
+            _t("file_count_help_title", "File Count Filter Help"),
+            _t(
+                "file_count_help_text",
+                "Filter posts by how many files they hold: the main file, "
+                "attachments and content images all count. Enter a minimum in "
+                "'File Count From' and/or a maximum in 'To' — both bounds are "
+                "inclusive and both are optional; leave either blank to "
+                "disable that bound. This count is independent of the file "
+                "type tickboxes.\n\n"
+                "Keep Archives: posts that contain a compressed file (ZIP, "
+                "7Z, RAR) always stay in the list, whatever their file count, "
+                "so archive posts are never filtered out.\n\n"
+                "Applied while posts are fetched — click a creator's eye icon "
+                "to re-apply after changing it.",
+            ),
+        )
+
     def expand_logs(self):
         """Open the full logs window"""
         if not hasattr(self, "logs_window") or not self.logs_window.isVisible():
@@ -5688,15 +6216,25 @@ class CreatorDownloaderTab(QWidget):
             and self.filter_thread is not None
             and self.filter_thread.isRunning()
         ):
+            # A scope/search change landed while a pass is still running.
+            # Remember it so the change is not lost, then re-run below.
+            self._filter_refresh_pending = True
             self.append_log_to_console(
                 translate("log_warning", translate("filtering_already_in_progress")),
                 "WARNING",
             )
             return
+        # This pass will pick up the current search text and scopes, so any
+        # deferral recorded before it started is satisfied.
+        self._filter_refresh_pending = False
         self.background_task_label.setText(translate("filtering_posts"))
         self.background_task_progress.setRange(0, 0)
         self.filter_thread = FilterThread(
-            self.all_detected_posts, self.checked_urls, self.creator_search_input.text()
+            self.all_detected_posts,
+            self.checked_urls,
+            self.creator_search_input.text(),
+            search_scopes=self._selected_search_scopes(),
+            post_search_index=self.post_search_index,
         )
         self.filter_thread.finished.connect(self.on_filter_finished)
         self.filter_thread.finished.connect(self.cleanup_filter_thread)
@@ -5791,6 +6329,25 @@ class CreatorDownloaderTab(QWidget):
                         ),
                         "INFO",
                     )
+                file_count_skipped_count = getattr(
+                    detection_thread, "file_count_skipped_count", 0
+                )
+                if file_count_skipped_count:
+                    self.append_log_to_console(
+                        translate(
+                            "log_info",
+                            _t(
+                                "posts_skipped_by_file_count_filter",
+                                f"Skipped {file_count_skipped_count} post(s) outside "
+                                f"the selected file count range.",
+                                file_count_skipped_count,
+                            ),
+                        ),
+                        "INFO",
+                    )
+
+        # A search-scope toggle (or fast typing) that arrived while the filter
+        # pass was running was deferred; cleanup_filter_thread() applies it.
 
     def cleanup_filter_thread(self):
         """Clean up the filter thread after it finishes."""
@@ -5799,6 +6356,11 @@ class CreatorDownloaderTab(QWidget):
                 self.active_threads.remove(self.filter_thread)
             self.filter_thread.deleteLater()
             self.filter_thread = None
+        # Apply any search/scope change that arrived while that pass was
+        # running, so the list never shows a stale result.
+        if getattr(self, "_filter_refresh_pending", False):
+            self._filter_refresh_pending = False
+            self.filter_items()
 
     def add_list_item(self, text, url, is_checked):
         item = QListWidgetItem()

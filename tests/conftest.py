@@ -72,6 +72,18 @@ def isolate_qsettings(tmp_path, monkeypatch):
     yield ini_path
 
 
+@pytest.fixture(autouse=True)
+def block_file_manager_launches(monkeypatch):
+    """Keep the suite from opening a real Explorer/Finder window.
+
+    ``SettingsTab.open_app_directory()`` calls ``os.startfile`` on Windows,
+    which launches the real file manager whenever a test forgets to stub that
+    branch. Neutralise it for every test; tests that assert the call still
+    work because they install their own replacement on top of this one.
+    """
+    monkeypatch.setattr(os, "startfile", lambda path: None, raising=False)
+
+
 @pytest.fixture()
 def isolated_settings(tmp_path):
     """Provide a QSettings instance backed by an isolated temp INI file.

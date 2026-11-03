@@ -434,9 +434,11 @@ def test_creator_info_buttons_share_the_small_icon_style(qtbot, tmp_path):
         tab.skip_keywords_help_btn,
         tab.file_skip_keywords_help_btn,
         tab.date_filter_help_btn,
+        tab.file_count_help_btn,
         tab.creator_box_info_btn,
         tab.creator_auto_rename_info_btn,
         tab.creator_skip_folder_info_btn,
+        tab.creator_skip_images_info_btn,
     ]
     for button in buttons:
         assert button.text() == "", "info buttons carry an icon, not text"

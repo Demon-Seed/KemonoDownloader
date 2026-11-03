@@ -49,10 +49,19 @@ class FinishedSignal:
 
 
 class FakeFilterThread:
-    def __init__(self, all_detected_posts, checked_urls, search_text):
+    def __init__(
+        self,
+        all_detected_posts,
+        checked_urls,
+        search_text,
+        search_scopes=None,
+        post_search_index=None,
+    ):
         self.all_detected_posts = all_detected_posts
         self.checked_urls = checked_urls
         self.search_text = search_text
+        self.search_scopes = search_scopes
+        self.post_search_index = post_search_index
         self.finished = FinishedSignal()
         self.log = FinishedSignal()
 

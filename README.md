@@ -16,6 +16,8 @@
     * Description matching also re-joins inline formatting (e.g. `Alien <b>Comic</b>` is still seen as "Alien Comic"), while author-typed spacing is left exactly as written.<br>
   * Filter out files by keyword.<br>
   * Filter out posts by date range.<br>
+  * Filter out posts by file count.<br>
+* 'Search by' row for the post search bar (Title, Filenames, Description, Tags).<br>
 * Adjustable folder names via templates w/ same functionality as Filenames.<br> 
 * Customizable skip post folder option for low-image-count posts.<br>
   * Posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.<br>

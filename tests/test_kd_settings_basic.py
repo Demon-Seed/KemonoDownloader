@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -125,11 +126,15 @@ def test_browse_and_open_directory(tmp_path, monkeypatch):
     tab.browse_directory()
     assert tab.directory_input.text() == str(tmp_path)
 
-    # open_app_directory should call subprocess; monkeypatch to avoid side-effects
+    # open_app_directory must not reach the real file manager: stub both the
+    # Windows (os.startfile) and the macOS/Linux (subprocess.call) branches.
     tab.temp_settings["base_directory"] = str(tmp_path)
     tab.temp_settings["base_folder_name"] = "MyApp"
-    monkeypatch.setattr(subprocess, "call", lambda *a, **k: 0)
+    launched = []
+    monkeypatch.setattr(os, "startfile", launched.append, raising=False)
+    monkeypatch.setattr(subprocess, "call", lambda cmd, *a, **k: launched.append(cmd))
     tab.open_app_directory()
+    assert launched, "open_app_directory never called the stubbed launcher"
 
 
 def test_reset_to_defaults_and_template_help(tmp_path, monkeypatch):
