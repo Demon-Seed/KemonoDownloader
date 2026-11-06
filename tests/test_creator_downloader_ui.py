@@ -53,6 +53,9 @@ def test_append_log_and_multi_url_input(tmp_path):
     tab = cd.CreatorDownloaderTab(parent)
 
     tab.append_log_to_console("Test message", "INFO")
+    # The log panel is minimised by default; opening it replays the buffer.
+    assert tab.creator_console.toPlainText() == ""
+    tab.set_log_panel_visible(True)
     assert "Test message" in tab.creator_console.toHtml()
 
     # Fast Mode is gone; the multi-URL input is the only entry point.

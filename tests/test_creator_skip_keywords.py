@@ -308,3 +308,41 @@ def test_rejoin_log_translated_in_all_languages():
             assert "AlienComic" in text
     finally:
         language_manager.set_language(original)
+
+
+# ---------------------------------------------------------------------------
+# Per-keyword skip counts (used by the summary tooltip)
+# ---------------------------------------------------------------------------
+
+
+def test_run_counts_skips_per_keyword(monkeypatch):
+    posts = [
+        {"id": "1", "title": "Alien Comic"},
+        {"id": "2", "title": "Alien Art"},
+        {"id": "3", "title": "Sketch Dump"},
+        {"id": "4", "title": "Unrelated"},
+    ]
+    text = json.dumps(posts)
+    resp = Resp(text.encode("utf-8"), text=text)
+
+    class Session:
+        def get(self, *args, **kwargs):
+            return resp
+
+    monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: Session())
+
+    thread = _make_thread(["Alien", "Sketch"], {"title"})
+    thread.posts_batch = _signal()
+    thread.finished = _signal()
+    thread.run()
+
+    assert thread.keyword_skip_counts == {"Alien": 2, "Sketch": 1}
+    assert thread.keyword_skipped_count == 3
+
+
+def test_matcher_returns_the_keyword_that_matched():
+    thread = _make_thread(["Alien", "Sketch"], {"title"})
+
+    assert thread._title_matches_skip_keyword("Alien Comic") == "Alien"
+    assert thread._title_matches_skip_keyword("Sketch Dump") == "Sketch"
+    assert thread._title_matches_skip_keyword("Unrelated") == ""

@@ -56,7 +56,8 @@ def test_add_multiple_creators_to_queue_and_duplicates_and_invalid(tmp_path):
     assert len(tab.creator_queue) == 1
     # Input should be cleared after successful add
     assert tab.creator_multi_url_input.toPlainText() == ""
-    # Summary message should be logged
+    # Summary message should be logged (open the minimised log panel first)
+    tab.set_log_panel_visible(True)
     assert "Added 1 link(s) to queue" in tab.creator_console.toPlainText()
 
 

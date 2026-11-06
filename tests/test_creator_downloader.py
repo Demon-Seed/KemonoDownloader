@@ -239,6 +239,12 @@ class TestSanitizeFilenameEdgeCases:
         assert "file" in result
         assert "ext" in result
 
+    def test_title_with_trailing_newline(self):
+        """Patreon titles can end with a newline; Windows rejects it."""
+        result = sanitize_filename("Akeno Belly Progression (3/3) \n")
+        assert result == "Akeno_Belly_Progression_(3_3)"
+        assert all(ord(ch) >= 32 for ch in result)
+
 
 class TestHeadersConfiguration:
     """Tests for HTTP headers configuration."""

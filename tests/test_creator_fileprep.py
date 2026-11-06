@@ -40,6 +40,40 @@ def test_detect_files_main_attachment_content(qapp):
     assert ("3.jpg", "https://kemono.cr/content/3.jpg") in files
 
 
+def test_detect_files_counts_skips_per_keyword(qapp):
+    thread = cd.FilePreparationThread(
+        post_ids=[],
+        all_files_map={},
+        creator_ext_checks={},
+        creator_main_check=True,
+        creator_attachments_check=True,
+        creator_content_check=True,
+        settings=SimpleNamespace(post_data_max_retries=1, settings_tab=None),
+        file_skip_keywords=["JP", "ZH"],
+    )
+    post = {
+        "id": "p1",
+        "file": {"path": "/m/1_JP.png", "name": "1_JP.png"},
+        "attachments": [
+            {"path": "/a/2_JP.jpg", "name": "2_JP.jpg"},
+            {"path": "/a/3_ZH.jpg", "name": "3_ZH.jpg"},
+        ],
+        "content": "<p><img src='/c/4_JP.gif'/></p>",
+    }
+    domain_config = {
+        "base_url": "https://kemono.cr",
+        "referer": "https://kemono.cr/",
+        "api_base": "https://kemono.cr/api/v1",
+        "domain": "kemono.cr",
+    }
+
+    files = thread.detect_files(post, [".png", ".jpg", ".gif"], domain_config)
+
+    assert files == []
+    assert thread._files_skipped_count == 4
+    assert thread._file_skip_counts == {"JP": 3, "ZH": 1}
+
+
 def test_fetch_and_detect_files_success(monkeypatch, qapp):
     # Create a FilePreparationThread with a single extension enabled
     creator_ext_checks = {".png": _mk_checkbox(True)}

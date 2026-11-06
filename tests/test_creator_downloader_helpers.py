@@ -205,3 +205,32 @@ def test_fetch_creator_and_post_info_success(monkeypatch, tmp_path):
     # Post title should be stored in post_titles_map
     key = (t.service, t.creator_id, "1")
     assert key in t.post_titles_map
+
+
+def test_sanitize_filename_strips_control_characters():
+    """Post titles can carry newlines, which Windows rejects in a path."""
+    out = sanitize_filename("Akeno Belly Progression (3/3) \n")
+    assert out == "Akeno_Belly_Progression_(3_3)"
+    assert sanitize_filename("a\tb\r\nc") == "a_b_c"
+    assert sanitize_filename("\n\n") == "unnamed"
+    junk = sanitize_filename("x\x00y\x1fz\x7fw")
+    assert all(ord(ch) >= 32 for ch in junk)
+    assert junk == "x_y_z_w"
+
+
+def test_sanitized_name_is_actually_writable(tmp_path):
+    """This open() call is what used to raise Errno 22 on Windows."""
+    name = sanitize_filename("Akeno Belly Progression (3/3) \n")
+    target = tmp_path / f"{name}.jpg"
+    with open(target, "wb") as handle:
+        handle.write(b"x")
+    assert target.read_bytes() == b"x"
+
+
+def test_generate_filename_strips_control_characters_from_the_title(tmp_path):
+    t = _make_thread(tmp_path, template="{post_id}_{post_title}")
+    t.post_titles_map = {("kemono", "123", "1"): "Akeno Belly Progression (3/3) \n"}
+    _folder, fname = t.generate_filename_and_folder(
+        t.files_to_download[0], str(tmp_path), 0, 1, "1", "T", page_number=1
+    )
+    assert fname == "1_Akeno_Belly_Progression_(3_3).png"

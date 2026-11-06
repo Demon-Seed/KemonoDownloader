@@ -74,5 +74,6 @@ def test_cancel_creator_download_no_active_threads(qapp, tmp_path):
 
     # Cancel downloads when none active should append a warning to console
     tab.cancel_creator_download()
+    tab.set_log_panel_visible(True)
     text = tab.creator_console.toPlainText()
     assert text.strip() != ""

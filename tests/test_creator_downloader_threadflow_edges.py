@@ -222,6 +222,8 @@ def test_cleanup_thread_finishes_when_all_files_attempted(tmp_path):
             return None
 
     thread = FakeThread()
+    # Only the thread of the run in flight may finalise it.
+    tab._download_thread = thread
     tab.active_threads = [thread]
     tab.total_files_to_download = 2
     tab.completed_files = {"one", "two"}

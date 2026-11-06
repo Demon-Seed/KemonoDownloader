@@ -17,7 +17,7 @@ import requests
 from bs4 import BeautifulSoup
 from bs4.element import NavigableString
 from fake_useragent import UserAgent
-from PyQt6.QtCore import QByteArray, Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QByteArray, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -75,6 +75,16 @@ def _t(key, fallback, *args):
                 return fallback
         return fallback
     return value
+
+
+def _log_line_html(message, color):
+    """Render one log line as coloured rich text."""
+    return f"<span style='color:{color}'>{message}</span>"
+
+
+# Cap for the in-memory log store and for every log view, in lines, so the
+# store and both widgets always agree on how much history is kept.
+LOG_LINE_LIMIT = 5000
 
 
 def get_post_published_date(post):
@@ -849,6 +859,8 @@ class PostDetectionThread(QThread):
         self._keyword_skipped_count = 0
         self._date_skipped_count = 0
         self._file_count_skipped_count = 0
+        # keyword -> number of posts it dropped, for the skip tooltip.
+        self.keyword_skip_counts = {}
         self._parsed_dates = {}  # post_id -> parsed datetime.date (cache, avoids re-parsing)
         # post_id -> analyze_post() result, so a post's HTML body is parsed at
         # most once per detection run even when several filters need it.
@@ -1020,28 +1032,32 @@ class PostDetectionThread(QThread):
         return []
 
     def _title_matches_skip_keyword(self, title, post=None):
-        """Return True if this post should be skipped, based on the
-        configured skip-keywords and the enabled scopes (any combination
-        of title, filenames, description, tags). *post* is the raw post
-        dict, needed to inspect filenames/description/tags; scopes that
-        need it are skipped if *post* is omitted.
+        """Return the skip-keyword that excludes this post, or "" for none.
+
+        Scopes are the enabled combination of title, filenames, description
+        and tags. *post* is the raw post dict, needed to inspect
+        filenames/description/tags; scopes that need it are skipped if *post*
+        is omitted. Returning the keyword (instead of a bool) lets the caller
+        count how many skips each keyword caused.
         """
         if not self.skip_keywords:
-            return False
+            return ""
 
         scopes = self.skip_keywords_scopes
 
         if "title" in scopes and title:
-            if _keyword_matches_text(self.skip_keywords, title):
-                return True
+            matched = _first_matching_keyword(self.skip_keywords, title)
+            if matched:
+                return matched
 
         if post is None:
-            return False
+            return ""
 
         if "filenames" in scopes:
             for fname in self._gather_post_filenames(post):
-                if _keyword_matches_text(self.skip_keywords, fname):
-                    return True
+                matched = _first_matching_keyword(self.skip_keywords, fname)
+                if matched:
+                    return matched
 
         if "description" in scopes:
             # The space-joined rendering is checked first, so every post that
@@ -1052,14 +1068,12 @@ class PostDetectionThread(QThread):
             for index, description in enumerate(
                 self._gather_post_description_texts(post)
             ):
-                if not description or not _keyword_matches_text(
-                    self.skip_keywords, description
-                ):
+                if not description:
+                    continue
+                matched = _first_matching_keyword(self.skip_keywords, description)
+                if not matched:
                     continue
                 if index:
-                    matched_keyword = _first_matching_keyword(
-                        self.skip_keywords, description
-                    )
                     self.log.emit(
                         translate(
                             "log_debug",
@@ -1067,12 +1081,12 @@ class PostDetectionThread(QThread):
                                 "skip_keyword_matched_after_rejoin",
                                 "[SKIP-KEYWORD] '{0}' matched the description "
                                 "after re-joining inline tags",
-                                matched_keyword,
+                                matched,
                             ),
                         ),
                         "DEBUG",
                     )
-                return True
+                return matched
 
         if "tags" in scopes:
             gathered_tags = self._gather_post_tags(post)
@@ -1086,7 +1100,8 @@ class PostDetectionThread(QThread):
                     "DEBUG",
                 )
             for tag in gathered_tags:
-                if _keyword_matches_text(self.skip_keywords, tag):
+                matched = _first_matching_keyword(self.skip_keywords, tag)
+                if matched:
                     self.log.emit(
                         translate(
                             "log_debug",
@@ -1094,9 +1109,9 @@ class PostDetectionThread(QThread):
                         ),
                         "DEBUG",
                     )
-                    return True
+                    return matched
 
-        return False
+        return ""
 
     def stop(self):
         self.is_running = False
@@ -1501,12 +1516,16 @@ class PostDetectionThread(QThread):
                 if not post_id:
                     continue
                 title = post.get("title", f"Post {post_id}")
-                keyword_match = self._title_matches_skip_keyword(title, post)
+                matched_keyword = self._title_matches_skip_keyword(title, post)
+                keyword_match = bool(matched_keyword)
                 date_out = self._post_date_out_of_range(post)
                 file_count_out = self._post_file_count_out_of_range(post)
 
                 if keyword_match:
                     self._keyword_skipped_count += 1
+                    self.keyword_skip_counts[matched_keyword] = (
+                        self.keyword_skip_counts.get(matched_keyword, 0) + 1
+                    )
                 if date_out:
                     self._date_skipped_count += 1
                 if file_count_out:
@@ -1718,7 +1737,10 @@ class FilePreparationThread(QThread):
         # Optional download option: when a post also offers a compressed
         # archive, its image files are dropped instead of downloaded.
         self.skip_images_if_compressed = skip_images_if_compressed
+        self._images_skipped_count = 0
         self._files_skipped_count = 0
+        # keyword -> number of files it dropped, for the skip tooltip.
+        self._file_skip_counts = {}
         self._files_skipped_lock = threading.Lock()
 
     def stop(self):
@@ -1750,6 +1772,8 @@ class FilePreparationThread(QThread):
             else:
                 kept.append((name, url))
         if skipped:
+            with self._files_skipped_lock:
+                self._images_skipped_count += len(skipped)
             self.log.emit(
                 translate(
                     "log_debug",
@@ -1765,18 +1789,30 @@ class FilePreparationThread(QThread):
         return kept
 
     def _file_matches_skip_keyword(self, file_name):
-        """Return True if *file_name* should be excluded individually.
+        """Return the file-keyword that excludes *file_name*, or "" for none.
 
         Only file_skip_keywords are checked here -- these are always
         matched against the filename, regardless of any other setting.
         Whole-post skip keywords are handled upstream in
         PostDetectionThread.
         """
-        if self.file_skip_keywords and _keyword_matches_text(
-            self.file_skip_keywords, file_name
-        ):
-            return True
-        return False
+        return _first_matching_keyword(self.file_skip_keywords, file_name)
+
+    def _record_file_skip(self, file_name):
+        """Count a file dropped by the file-keyword filter.
+
+        Returns the matched keyword ("" when the file is kept) so callers can
+        log it and the summary can show a per-keyword breakdown.
+        """
+        matched = self._file_matches_skip_keyword(file_name)
+        if not matched:
+            return ""
+        with self._files_skipped_lock:
+            self._files_skipped_count += 1
+            self._file_skip_counts[matched] = (
+                self._file_skip_counts.get(matched, 0) + 1
+            )
+        return matched
 
     def detect_files(self, post, allowed_extensions, domain_config):
         files_to_download = []
@@ -1811,9 +1847,7 @@ class FilePreparationThread(QThread):
                 ),
                 "INFO",
             )
-            if self._file_matches_skip_keyword(file_name):
-                with self._files_skipped_lock:
-                    self._files_skipped_count += 1
+            if self._record_file_skip(file_name):
                 self.log.emit(
                     translate(
                         "log_debug", _t("skipped_individual_file", f"Skipped main file (keyword match): {file_name}", file_name)
@@ -1854,9 +1888,7 @@ class FilePreparationThread(QThread):
                         ),
                         "INFO",
                     )
-                    if self._file_matches_skip_keyword(attachment_name):
-                        with self._files_skipped_lock:
-                            self._files_skipped_count += 1
+                    if self._record_file_skip(attachment_name):
                         self.log.emit(
                             translate(
                                 "log_debug",
@@ -1904,9 +1936,7 @@ class FilePreparationThread(QThread):
                     ),
                     "INFO",
                 )
-                if self._file_matches_skip_keyword(img_name):
-                    with self._files_skipped_lock:
-                        self._files_skipped_count += 1
+                if self._record_file_skip(img_name):
                     self.log.emit(
                         translate(
                             "log_debug",
@@ -2190,10 +2220,15 @@ def sanitize_filename(name, max_length=100):
     """Sanitize a filename by removing invalid characters, trailing dots, and limiting length."""
     if not name:
         return "unnamed"
+    # Strip control characters (0x00-0x1F, DEL) and zero-width/BOM characters:
+    # Windows rejects any path containing them, and post titles routinely end
+    # with a newline (e.g. "Akeno Belly Progression (3/3) \n"), which used to
+    # fail the write with "OSError: [Errno 22] Invalid argument".
+    sanitized = re.sub(r"[\x00-\x1f\x7f\u200b-\u200f\ufeff]", "_", name)
     # Remove invalid characters
-    sanitized = re.sub(r'[<>:"/\\|?*]', "_", name)
-    # Replace spaces with underscores
-    sanitized = sanitized.replace(" ", "_")
+    sanitized = re.sub(r'[<>:"/\\|?*]', "_", sanitized)
+    # Collapse whitespace (spaces, tabs, NBSP) into single underscores
+    sanitized = re.sub(r"\s+", "_", sanitized)
     # Remove multiple consecutive underscores
     sanitized = re.sub(r"_+", "_", sanitized)
     # Remove trailing dots (Windows compatibility)
@@ -2224,7 +2259,7 @@ class CreatorDownloadThread(QThread):
         selected_posts,
         files_to_download,
         files_to_posts_map,
-        console,
+        console,  # accepted for compatibility; logging goes through `log`
         other_files_dir,
         post_titles_map,
         auto_rename_enabled,
@@ -2242,7 +2277,6 @@ class CreatorDownloadThread(QThread):
         self.selected_posts = selected_posts
         self.files_to_download = files_to_download
         self.files_to_posts_map = files_to_posts_map
-        self.console = console
         self.settings = settings
         self.is_running = True
         self.download_text = download_text
@@ -2526,7 +2560,10 @@ class CreatorDownloadThread(QThread):
             if "f=" in file_url
             else file_url.split("/")[-1].split("?")[0]
         )
-        file_ext = os.path.splitext(raw_filename)[1]
+        # The extension is appended to the already-sanitized name, so scrub it
+        # on its own: a URL can carry anything after "?f=", including the
+        # control characters Windows rejects in a path.
+        file_ext = re.sub(r"[^0-9A-Za-z.]", "", os.path.splitext(raw_filename)[1])
         original_name = os.path.splitext(raw_filename)[0]
 
         # Prepare context for template formatting
@@ -3395,6 +3432,7 @@ class LogsWindow(QDialog):
         self.logs_display.setStyleSheet(
             "background: #2A3B5A; border-radius: 5px; padding: 5px;"
         )
+        self.logs_display.document().setMaximumBlockCount(LOG_LINE_LIMIT)
         layout.addWidget(self.logs_display)
 
         # Buttons layout
@@ -3424,6 +3462,9 @@ class LogsWindow(QDialog):
         self.update_timer.timeout.connect(self._do_update)
         self.update_timer.setInterval(500)  # Update every 500ms instead of every log
         self.needs_update = False
+        # Index into the parent's log store: only lines past this point still
+        # have to be drawn, so updates never rebuild the whole document.
+        self._shown = 0
 
         # Update logs content
         self.update_logs_content()
@@ -3435,14 +3476,41 @@ class LogsWindow(QDialog):
             self.update_timer.start()
 
     def _do_update(self):
-        """Actually perform the update (called by timer)"""
-        if (
-            self.needs_update
-            and self._parent
-            and hasattr(self._parent, "creator_console")
-        ):
-            self.logs_display.setHtml(self._parent.creator_console.toHtml())
+        """Draw whatever is new since the last tick.
+
+        ``setHtml`` used to rebuild the whole document every 500 ms, which
+        snapped the window back to the top on every update. Appending only the
+        new lines keeps the scroll position, and follows the bottom when the
+        user was already there.
+        """
+        if not self.needs_update or not self._parent:
             self.needs_update = False
+            return
+
+        bar = self.logs_display.verticalScrollBar()
+        old_value = bar.value()
+        at_bottom = old_value >= bar.maximum() - 4
+
+        if hasattr(self._parent, "log_lines_from"):
+            pending = self._parent.log_lines_from(self._shown)
+            if pending:
+                batched = len(pending) > 1
+                if batched:
+                    self.logs_display.setUpdatesEnabled(False)
+                try:
+                    for message, color in pending:
+                        self.logs_display.append(_log_line_html(message, color))
+                finally:
+                    if batched:
+                        self.logs_display.setUpdatesEnabled(True)
+            # Absolute index, so trimming the parent's store never stalls us.
+            self._shown = self._parent.log_next_index()
+        elif hasattr(self._parent, "creator_console"):
+            # Legacy parent (no shared store): full rebuild, scroll restored.
+            self.logs_display.setHtml(self._parent.creator_console.toHtml())
+
+        bar.setValue(bar.maximum() if at_bottom else old_value)
+        self.needs_update = False
 
     def closeEvent(self, a0):
         """Stop timer when window closes"""
@@ -3452,9 +3520,12 @@ class LogsWindow(QDialog):
             a0.accept()
 
     def clear_logs(self):
-        """Clear both the logs window and parent console"""
+        """Clear the log window and the parent's shared log store"""
         self.logs_display.clear()
-        if self._parent and hasattr(self._parent, "creator_console"):
+        self._shown = 0
+        if self._parent and hasattr(self._parent, "clear_log"):
+            self._parent.clear_log()
+        elif self._parent and hasattr(self._parent, "creator_console"):
             self._parent.creator_console.clear()
 
     def download_logs(self):
@@ -3505,6 +3576,9 @@ class CreatorDownloaderTab(QWidget):
         self.all_detected_posts = []
         self.creator_queue = []
         self.downloading = False
+        # Guards the end-of-run bookkeeping so a late cleanup_thread pass
+        # cannot re-finalise a run that already finalised itself.
+        self._run_finished = False
         self.cache_dir = self._parent.cache_folder if self._parent else ""
         self.other_files_dir = self._parent.other_files_folder if self._parent else ""
         self.current_creator_url = None
@@ -3528,6 +3602,10 @@ class CreatorDownloaderTab(QWidget):
         self.file_preparation_thread = None
         self.checkbox_toggle_thread = None
         self._cancellation_thread = None
+        # The CreatorDownloadThread of the run in flight. A finished thread can
+        # linger in active_threads until its cleanup slot runs, so "is a
+        # download running?" consults this reference instead of the list.
+        self._download_thread = None
         self.post_titles_map = {}
         self.post_dates_map = {}  # post_id -> display string of the post's own publish date
         # post_id -> lower-case searchable text ("filenames"/"description"/
@@ -3566,6 +3644,36 @@ class CreatorDownloaderTab(QWidget):
         self._last_detection_thread = None
         self._file_skip_count = 0
         self._file_skip_keywords = []
+        self._images_skipped_count = 0
+        # Latest per-filter skip counters, surfaced in the run summary block
+        # under the progress bars instead of being buried in the log.
+        self._post_skip_stats = {"keywords": 0, "date": 0, "file_count": 0}
+        # Per-keyword skip counts (post level and file level) for the tooltip.
+        self._post_keyword_skip_counts = {}
+        self._file_keyword_skip_counts = {}
+        # Canonical log store: (message, colour) pairs. The inline console and
+        # the full LogsWindow are views over this list, so logging never
+        # touches a widget (and therefore never invalidates the layout).
+        self._log_lines = []
+        self._log_line_limit = LOG_LINE_LIMIT
+        # Count of lines dropped from the front of the store, so view indices
+        # stay absolute even after the cap starts trimming.
+        self._log_dropped = 0
+        self._log_visible = False
+        self._log_console_shown = 0
+        self._log_counter_timer = QTimer(self)
+        self._log_counter_timer.setSingleShot(True)
+        self._log_counter_timer.setInterval(500)
+        self._log_counter_timer.timeout.connect(self._update_log_toggle_text)
+        # Cached skip breakdown: those counters cannot change during a
+        # download, so rebuilding them per completed file is wasted work.
+        self._skip_summary_cache = None
+        # Failures from the last finished/cancelled run, kept so they can be
+        # retried without re-fetching or re-preparing anything.
+        self._last_run_failed_files = {}
+        self._last_run_files_to_posts_map = {}
+        self._last_run_creator_url = None
+        self.files_to_posts_map = {}
         os.makedirs(self.cache_dir, exist_ok=True)
         os.makedirs(self.other_files_dir, exist_ok=True)
         self.setup_ui()
@@ -3819,13 +3927,18 @@ class CreatorDownloaderTab(QWidget):
         creator_progress_layout.addWidget(self.creator_overall_progress)
         left_layout.addLayout(creator_progress_layout)
 
-        # Console
-        self.creator_console = QTextEdit()
-        self.creator_console.setReadOnly(True)
-        self.creator_console.setStyleSheet(
-            "background: #2A3B5A; border-radius: 5px; padding: 5px;"
-        )
-        left_layout.addWidget(self.creator_console)
+        # Run summary: what the last run did, kept out of the log so it stays
+        # visible while the log panel is minimised.
+        self.creator_download_summary_label = QLabel()
+        self.creator_download_summary_label.setTextFormat(Qt.TextFormat.RichText)
+        self.creator_download_summary_label.setStyleSheet("color: white;")
+        left_layout.addWidget(self.creator_download_summary_label)
+
+        self.creator_skip_summary_label = QLabel()
+        self.creator_skip_summary_label.setTextFormat(Qt.TextFormat.RichText)
+        self.creator_skip_summary_label.setStyleSheet("color: #E5C07B;")
+        self.creator_skip_summary_label.setWordWrap(True)
+        left_layout.addWidget(self.creator_skip_summary_label)
 
         # Buttons layout
         creator_btn_layout = QHBoxLayout()
@@ -3845,15 +3958,17 @@ class CreatorDownloaderTab(QWidget):
         self.creator_cancel_btn.setEnabled(False)
         creator_btn_layout.addWidget(self.creator_cancel_btn)
 
-        self.creator_expand_logs_btn = QPushButton(
-            qta.icon("fa5s.expand", color="white"), ""
+        # Retry sits with the other run controls. It stays visible and is only
+        # greyed out when there is nothing to retry (or a run is in progress).
+        self.creator_retry_failed_btn = QPushButton(
+            qta.icon("fa5s.redo", color="white"), ""
         )
-        self.creator_expand_logs_btn.clicked.connect(self.expand_logs)
-        self.creator_expand_logs_btn.setStyleSheet(
+        self.creator_retry_failed_btn.clicked.connect(self.retry_failed_downloads)
+        self.creator_retry_failed_btn.setStyleSheet(
             "background: #4A5B7A; padding: 8px; border-radius: 5px;"
         )
-        self.creator_expand_logs_btn.setToolTip("Expand Logs")
-        creator_btn_layout.addWidget(self.creator_expand_logs_btn)
+        self.creator_retry_failed_btn.setEnabled(False)
+        creator_btn_layout.addWidget(self.creator_retry_failed_btn)
 
         left_layout.addLayout(creator_btn_layout)
 
@@ -4185,7 +4300,7 @@ class CreatorDownloaderTab(QWidget):
 
         post_list_layout.addLayout(controls_layout)
         self.post_list_group.setLayout(post_list_layout)
-        right_layout.addWidget(self.post_list_group)
+        right_layout.addWidget(self.post_list_group, stretch=1)
 
         # Background task indicators
         self.background_task_label = QLabel()
@@ -4200,7 +4315,43 @@ class CreatorDownloaderTab(QWidget):
         self.background_task_progress.setValue(0)
         right_layout.addWidget(self.background_task_progress)
 
-        right_layout.addStretch()
+        # Minimised log panel: it fills the space under the progress bar and
+        # only touches its widget while open, so logging stays cheap.
+        log_header_layout = QHBoxLayout()
+        log_header_layout.setContentsMargins(0, 0, 0, 0)
+        self.creator_log_toggle_btn = QPushButton(
+            qta.icon("fa5s.chevron-right", color="white"), ""
+        )
+        self.creator_log_toggle_btn.setCheckable(True)
+        self.creator_log_toggle_btn.setChecked(False)
+        self.creator_log_toggle_btn.clicked.connect(self.toggle_log_panel)
+        self.creator_log_toggle_btn.setStyleSheet(
+            "background: #4A5B7A; padding: 6px; border-radius: 5px;"
+        )
+        log_header_layout.addWidget(self.creator_log_toggle_btn)
+
+        # Full-log window button lives beside the toggle, matching its height.
+        self.creator_expand_logs_btn = QPushButton(
+            qta.icon("fa5s.expand", color="white"), ""
+        )
+        self.creator_expand_logs_btn.clicked.connect(self.expand_logs)
+        self.creator_expand_logs_btn.setStyleSheet(
+            "background: #4A5B7A; padding: 6px; border-radius: 5px;"
+        )
+        log_header_layout.addWidget(self.creator_expand_logs_btn)
+        log_header_layout.addStretch()
+        right_layout.addLayout(log_header_layout)
+
+        self.creator_console = QTextEdit()
+        self.creator_console.setReadOnly(True)
+        self.creator_console.setStyleSheet(
+            "background: #2A3B5A; border-radius: 5px; padding: 5px;"
+        )
+        self.creator_console.document().setMaximumBlockCount(LOG_LINE_LIMIT)
+        self.creator_console.setFixedHeight(180)
+        self.creator_console.setVisible(False)
+        right_layout.addWidget(self.creator_console)
+
         layout.addWidget(right_widget, stretch=1)
 
         # Button hover animations
@@ -4332,6 +4483,10 @@ class CreatorDownloaderTab(QWidget):
         self.creator_download_btn.setText(translate("download"))
         self.creator_cancel_btn.setText(translate("cancel"))
         self.creator_expand_logs_btn.setText(translate("expand_logs"))
+        self.creator_expand_logs_btn.setToolTip(translate("expand_logs"))
+        self._refresh_retry_button()
+        self._update_download_summary()
+        self._update_log_toggle_text()
 
         self.creator_search_input.setPlaceholderText(translate("search_posts"))
 
@@ -4392,6 +4547,7 @@ class CreatorDownloaderTab(QWidget):
             self.completed_posts.clear()
             self.completed_files.clear()
             self.total_files_to_download = 0
+            self._reset_download_summary()
             self.background_task_progress.setRange(0, 100)
             self.background_task_progress.setValue(0)
             self.background_task_label.setText(translate("idle"))
@@ -5015,14 +5171,15 @@ class CreatorDownloaderTab(QWidget):
     def set_downloading_ui_state(self, is_downloading):
         """Lock/unlock ALL UI controls during an active download.
 
-        Only the Cancel button and Expand Logs remain enabled while
-        downloading.
+        Only the Cancel button, the log controls and the (greyed) retry button
+        remain clickable while downloading.
         """
         enabled = not is_downloading
 
         # Action buttons
         self.creator_download_btn.setEnabled(enabled)
         self.creator_cancel_btn.setEnabled(is_downloading)
+        self._refresh_retry_button()
 
         # Queue input area
         self.creator_multi_url_input.setEnabled(enabled)
@@ -5161,9 +5318,29 @@ class CreatorDownloaderTab(QWidget):
             detected_posts, post_dates_map=self.post_dates_map
         )
         self.post_population_thread.finished.connect(self.on_post_population_finished)
+        self.post_population_thread.finished.connect(
+            self.cleanup_post_population_thread
+        )
         self.post_population_thread.log.connect(self.append_log_to_console)
         self.active_threads.append(self.post_population_thread)
         self.post_population_thread.start()
+
+    def cleanup_post_population_thread(self):
+        """Drop the finished population thread from active_threads.
+
+        Leaving it behind kept the tab permanently "busy", which made the retry
+        action refuse to start with "A download is already running".
+        """
+        thread = self.post_population_thread
+        if thread is None:
+            return
+        if thread in self.active_threads:
+            self.active_threads.remove(thread)
+        self.post_population_thread = None
+        try:
+            thread.deleteLater()
+        except (AttributeError, RuntimeError):
+            pass  # not a QThread any more, or already deleted
 
     def on_post_population_finished(self, post_url_map, all_detected_posts):
         self.post_url_map = post_url_map
@@ -5259,6 +5436,7 @@ class CreatorDownloaderTab(QWidget):
             return
 
         self.downloading = True
+        self._run_finished = False
         self.set_downloading_ui_state(True)
         if self._parent and hasattr(self._parent, "status_label"):
             self._parent.status_label.setText(translate("preparing_files"))
@@ -5269,6 +5447,9 @@ class CreatorDownloaderTab(QWidget):
         self.completed_posts.clear()
         self.completed_files.clear()
         self.failed_files.clear()
+        # Fresh run: forget the previous run's failures (hiding the retry
+        # button) but keep the post-filter skip counts in the summary.
+        self._reset_download_summary(keep_post_stats=True)
         self.total_files_to_download = 0
         self.creator_overall_progress_label.setText(
             translate("overall_progress", 0, 0, 0, self.total_posts_to_download)
@@ -5438,6 +5619,13 @@ class CreatorDownloaderTab(QWidget):
             )
         )
         self.file_preparation_thread.log.connect(self.append_log_to_console)
+        # Drop the thread from active_threads as soon as it finishes: a stale
+        # entry left the tab permanently "busy" and made the retry action
+        # refuse to start ("A download is already running"). The lambda above
+        # runs first and still reads the thread's skip counters.
+        self.file_preparation_thread.finished.connect(
+            self.cleanup_file_preparation_thread
+        )
         self.active_threads.append(self.file_preparation_thread)
         self.file_preparation_thread.start()
 
@@ -5464,6 +5652,13 @@ class CreatorDownloaderTab(QWidget):
         self._file_skip_keywords = getattr(
             self.file_preparation_thread, "file_skip_keywords", []
         )
+        self._images_skipped_count = getattr(
+            self.file_preparation_thread, "_images_skipped_count", 0
+        )
+        self._file_keyword_skip_counts = dict(
+            getattr(self.file_preparation_thread, "_file_skip_counts", {}) or {}
+        )
+        self._update_download_summary(refresh_skips=True)
         self.append_log_to_console(
             translate(
                 "log_debug",
@@ -5482,8 +5677,25 @@ class CreatorDownloaderTab(QWidget):
             self.creator_download_finished()
             return
 
-        url = urls[0]
-        url = url.rstrip("/")
+        self._start_download_thread(
+            files_to_download, files_to_posts_map, urls[0]
+        )
+        return
+
+    def _start_download_thread(
+        self, files_to_download, files_to_posts_map, creator_url=None
+    ):
+        """Create and start a CreatorDownloadThread for the current creator.
+
+        Shared by the normal download path and by ``retry_failed_downloads()``
+        so both wire the thread up identically.
+        """
+        creator_url = creator_url or self.current_creator_url
+        self._last_run_creator_url = creator_url
+        self.files_to_posts_map = dict(files_to_posts_map)
+        selected_posts = list(dict.fromkeys(files_to_posts_map.values()))
+
+        url = (creator_url or "").rstrip("/")
         parts = url.split("/")
         if len(parts) >= 3:
             service = parts[-3]
@@ -5516,10 +5728,12 @@ class CreatorDownloaderTab(QWidget):
                 if self._parent and hasattr(self._parent, "download_folder")
                 else ""
             ),
-            self.posts_to_download,
+            selected_posts,
             files_to_download,
             files_to_posts_map,
-            self.creator_console,
+            # The thread logs through its `log` signal; it never needs the
+            # console widget (the argument is kept for compatibility).
+            None,
             self.other_files_dir,
             self.post_titles_map,
             self.creator_auto_rename_check.isChecked(),
@@ -5527,8 +5741,10 @@ class CreatorDownloaderTab(QWidget):
             settings.simultaneous_downloads,
             download_text=self.creator_download_text_check.isChecked(),
             skip_folder_enabled=self.creator_skip_folder_check.isChecked(),
-            skip_folder_threshold=self.creator_skip_folder_combo.currentData() if hasattr(self, "creator_skip_folder_combo") else 1,
-            force_folder_for_compressed=self.creator_force_compressed_folder_check.isChecked() if hasattr(self, "creator_force_compressed_folder_check") else False,
+            skip_folder_threshold=self.creator_skip_folder_combo.currentData(),
+            force_folder_for_compressed=(
+                self.creator_force_compressed_folder_check.isChecked()
+            ),
         )
         thread.file_progress.connect(self.update_creator_file_progress)
         thread.file_completed.connect(self.update_file_completion)
@@ -5536,6 +5752,7 @@ class CreatorDownloaderTab(QWidget):
         thread.log.connect(self.append_log_to_console)
         thread.finished.connect(lambda: self.cleanup_thread(thread))
         self.active_threads.append(thread)
+        self._download_thread = thread
         thread.start()
 
     def cleanup_thread(self, thread):
@@ -5584,6 +5801,12 @@ class CreatorDownloaderTab(QWidget):
             thread.deleteLater()
         except RuntimeError:
             pass  # C++ object already deleted
+
+        # Only the run in flight may finalise itself: a superseded thread that
+        # unwinds late must not touch the state of the run that replaced it.
+        if thread is not getattr(self, "_download_thread", None):
+            return
+        self._download_thread = None
 
         # Check if all files for the current creator have been attempted
         if (
@@ -5641,6 +5864,10 @@ class CreatorDownloaderTab(QWidget):
                 ),
                 "INFO",
             )
+
+        # The run's thread is really gone now, so the retry button may unlock
+        # even when creator_download_finished() already ran and bailed out.
+        self._refresh_retry_button()
 
     def cancel_creator_download(self):
         if not self.active_threads:
@@ -5713,6 +5940,9 @@ class CreatorDownloaderTab(QWidget):
             self._cancellation_thread.start()
 
     def on_cancellation_finished(self):
+        # The cancelled run is final from here on: a later
+        # creator_download_finished() must not recompute its stats.
+        self._run_finished = True
         threads_to_delete = self.active_threads[:]
         self.active_threads = []
         for thread in threads_to_delete:
@@ -5754,6 +5984,13 @@ class CreatorDownloaderTab(QWidget):
         self.creator_file_progress_label.setText(translate("downloads_terminated"))
         self.creator_overall_progress_label.setText(translate("downloads_terminated"))
         self.downloading = False
+        self._download_thread = None
+        # Keep the failures and stats of the cancelled run: a cancel usually
+        # leaves plenty to retry.
+        self._remember_run_failures()
+        self._update_download_summary(
+            len(self.completed_files), len(self.failed_files)
+        )
         self.set_downloading_ui_state(False)
         self.total_files_to_download = 0
         self.completed_files.clear()
@@ -5836,17 +6073,8 @@ class CreatorDownloaderTab(QWidget):
             attempted_count = completed_count + len(self.failed_files)
             percentage = int((attempted_count / self.total_files_to_download) * 100)
             self.creator_overall_progress.setValue(percentage)
-            self.append_log_to_console(
-                translate(
-                    "log_debug",
-                    translate(
-                        "overall_progress_updated",
-                        completed_count,
-                        self.total_files_to_download,
-                        percentage,
-                    ),
-                ),
-                "INFO",
+            self._update_download_summary(
+                completed_count, len(self.failed_files)
             )
 
             self.creator_overall_progress_label.setText(
@@ -5891,7 +6119,19 @@ class CreatorDownloaderTab(QWidget):
 
     def creator_download_finished(self):
         """Reset UI state after download completes or is cancelled."""
+        if self._run_finished:
+            # cleanup_thread runs after the run may already have finalised
+            # itself; a second pass would re-render the stats from the cleared
+            # counters (Downloaded/Failed back to 0) and hide the failures.
+            return
+        self._run_finished = True
         self.downloading = False
+        # Snapshot the failures and surface the run stats before the counters
+        # are cleared below: they feed the summary block and the retry button.
+        self._remember_run_failures()
+        self._update_download_summary(
+            len(self.completed_files), len(self.failed_files)
+        )
 
         # Log summary of failed files
         if self.failed_files:
@@ -6277,6 +6517,11 @@ class CreatorDownloaderTab(QWidget):
             ),
             "INFO",
         )
+        # Surface which post filters dropped how many posts, next to the
+        # progress bars instead of only in the log.
+        self._refresh_skip_summary_from_filter(
+            getattr(self, "_last_detection_thread", None)
+        )
 
         # Emit skip-keywords summary INFO lines LAST — after all detection,
         # population, and filtering logs are done — so they appear at the
@@ -6566,14 +6811,373 @@ class CreatorDownloaderTab(QWidget):
                 widget.setStyleSheet("background-color: #4A5B7A; border-radius: 5px;")
                 self.previous_selected_widgets.append(widget)
 
+    # ------------------------------------------------------------------
+    # Logging
+    #
+    # Lines go into ``self._log_lines`` (a plain list) and the inline console
+    # plus the full LogsWindow are views over it. While the inline panel is
+    # minimised nothing touches a widget at all, which is what used to make
+    # every resize crawl once the console had grown large.
+    # ------------------------------------------------------------------
+
+    def log_line_count(self):
+        """Number of lines currently held in the log store."""
+        return len(self._log_lines)
+
+    def log_first_index(self):
+        """Absolute index of the oldest line still retained."""
+        return self._log_dropped
+
+    def log_next_index(self):
+        """Absolute index just past the newest line."""
+        return self._log_dropped + self.log_line_count()
+
+    def log_lines_from(self, index):
+        """Return ``(message, colour)`` pairs from absolute *index* onwards.
+
+        Indices stay absolute across the store's line cap, so a slow view keeps
+        working instead of silently freezing once old lines are trimmed.
+        """
+        start = max(0, index - self._log_dropped)
+        return list(self._log_lines[start:])
+
+    def _flush_log_to_console(self):
+        """Append every line the inline console has not shown yet."""
+        if not hasattr(self, "creator_console"):
+            return
+        pending = self.log_lines_from(self._log_console_shown)
+        if not pending:
+            return
+        # One repaint for the whole batch, but one paragraph per line so the
+        # block cap applies and toPlainText() stays line-based.
+        batched = len(pending) > 1
+        if batched:
+            self.creator_console.setUpdatesEnabled(False)
+        try:
+            for message, color in pending:
+                self.creator_console.append(_log_line_html(message, color))
+        finally:
+            if batched:
+                self.creator_console.setUpdatesEnabled(True)
+        self._log_console_shown = self.log_next_index()
+
+    def clear_log(self):
+        """Drop the stored log and empty the inline console."""
+        self._log_lines.clear()
+        self._log_dropped = 0
+        self._log_console_shown = 0
+        if hasattr(self, "creator_console"):
+            self.creator_console.clear()
+        self._update_log_toggle_text()
+
+    def _update_log_toggle_text(self):
+        button = getattr(self, "creator_log_toggle_btn", None)
+        if button is None:
+            return
+        count = len(self._log_lines)
+        button.setText(
+            translate("log_panel_toggle_count", count)
+            if count
+            else translate("log_panel_toggle")
+        )
+        button.setIcon(
+            qta.icon(
+                "fa5s.chevron-down" if self._log_visible else "fa5s.chevron-right",
+                color="white",
+            )
+        )
+        button.setToolTip(
+            translate(
+                "log_panel_tooltip_hide"
+                if self._log_visible
+                else "log_panel_tooltip_show"
+            )
+        )
+
+    def set_log_panel_visible(self, visible):
+        """Open/close the inline log; opening replays the buffered lines."""
+        self._log_visible = bool(visible)
+        if hasattr(self, "creator_log_toggle_btn"):
+            self.creator_log_toggle_btn.setChecked(self._log_visible)
+        if hasattr(self, "creator_console"):
+            self.creator_console.setVisible(self._log_visible)
+        if self._log_visible:
+            self._flush_log_to_console()
+            # Opening should land on the newest output, not the oldest.
+            bar = self.creator_console.verticalScrollBar()
+            bar.setValue(bar.maximum())
+        self._update_log_toggle_text()
+
+    def toggle_log_panel(self, *args):
+        """Toggle button handler."""
+        self.set_log_panel_visible(not self._log_visible)
+
     def append_log_to_console(self, message, level="INFO"):
         color = {"INFO": "green", "WARNING": "yellow", "ERROR": "red"}.get(
             level, "white"
         )
-        self.creator_console.append(f"<span style='color:{color}'>{message}</span>")
+        self._log_lines.append((message, color))
+        if len(self._log_lines) > self._log_line_limit:
+            dropped = len(self._log_lines) - self._log_line_limit
+            del self._log_lines[:dropped]
+            self._log_dropped += dropped
+            self._log_console_shown = max(self._log_dropped, self._log_console_shown)
+
+        if self._log_visible:
+            self._flush_log_to_console()
+        elif (
+            hasattr(self, "_log_counter_timer")
+            and not self._log_counter_timer.isActive()
+        ):
+            self._log_counter_timer.start()
 
         if hasattr(self, "logs_window") and self.logs_window.isVisible():
             self.logs_window.update_logs_content()
+
+    # ------------------------------------------------------------------
+    # Run summary + retry
+    # ------------------------------------------------------------------
+
+    def _skip_breakdown(self):
+        """Return ``[(label, count), ...]`` for every skip counter we track."""
+        stats = getattr(self, "_post_skip_stats", {})
+        return [
+            (
+                translate("summary_skip_post_keywords", stats.get("keywords", 0)),
+                stats.get("keywords", 0),
+            ),
+            (
+                translate("summary_skip_post_date", stats.get("date", 0)),
+                stats.get("date", 0),
+            ),
+            (
+                translate("summary_skip_post_file_count", stats.get("file_count", 0)),
+                stats.get("file_count", 0),
+            ),
+            (
+                translate("summary_skip_files", getattr(self, "_file_skip_count", 0)),
+                getattr(self, "_file_skip_count", 0),
+            ),
+            (
+                translate(
+                    "summary_skip_images", getattr(self, "_images_skipped_count", 0)
+                ),
+                getattr(self, "_images_skipped_count", 0),
+            ),
+        ]
+
+    @staticmethod
+    def _keyword_skip_lines(counts):
+        """Return ``"  keyword: count"`` lines, most frequent first."""
+        ordered = sorted(
+            counts.items(), key=lambda item: (-item[1], item[0].lower())
+        )
+        return [f"  {keyword}: {count}" for keyword, count in ordered]
+
+    def _skip_tooltip(self):
+        """Tooltip text listing how many skips each keyword caused."""
+        lines = []
+        if self._post_keyword_skip_counts:
+            lines.append(translate("skip_tooltip_post_keywords"))
+            lines.extend(self._keyword_skip_lines(self._post_keyword_skip_counts))
+        if self._file_keyword_skip_counts:
+            lines.append(translate("skip_tooltip_file_keywords"))
+            lines.extend(self._keyword_skip_lines(self._file_keyword_skip_counts))
+        return "\n".join(lines) if lines else translate("skip_tooltip_no_keywords")
+
+    def _failed_post_count(self):
+        """How many distinct posts the run's failed files belong to."""
+        failed = getattr(self, "failed_files", None) or {}
+        if not failed:
+            return 0
+        for mapping in (
+            getattr(self, "files_to_posts_map", None) or {},
+            getattr(self, "_last_run_files_to_posts_map", None) or {},
+        ):
+            posts = {mapping[url] for url in failed if url in mapping}
+            if posts:
+                return len(posts)
+        return 0
+
+    def _update_download_summary(self, completed=None, failed=None, refresh_skips=False):
+        """Refresh the stat block under the progress bars.
+
+        The skip breakdown only changes when a filter or the file preparation
+        runs, so it is cached and reused for the per-file progress updates.
+        """
+        if not hasattr(self, "creator_download_summary_label"):
+            return
+        if completed is None:
+            completed = len(self.completed_files)
+        if failed is None:
+            failed = len(self.failed_files)
+
+        failed_text = translate("summary_failed", failed)
+        if failed:
+            # One post with several failed files used to read like the same file
+            # counted again and again: name the post count as well.
+            failed_posts = self._failed_post_count()
+            if failed_posts:
+                failed_text = translate(
+                    "summary_failed_files_one_post"
+                    if failed_posts == 1
+                    else "summary_failed_files_posts",
+                    failed,
+                    failed_posts,
+                )
+
+        self.creator_download_summary_label.setText(
+            " &nbsp; ".join(
+                [
+                    "<span style='color:#7BD88F'>{}</span>".format(
+                        translate("summary_downloaded", completed)
+                    ),
+                    "<span style='color:{}'>{}</span>".format(
+                        "#E06C75" if failed else "#7BD88F", failed_text
+                    ),
+                ]
+            )
+        )
+
+        if refresh_skips or self._skip_summary_cache is None:
+            breakdown = self._skip_breakdown()
+            total_skipped = sum(count for _, count in breakdown)
+            parts = [
+                "<span style='color:#E5C07B'>{}</span>".format(
+                    translate("summary_skipped_total", total_skipped)
+                )
+            ]
+            # Always list every filter, zeros included, so the breakdown is
+            # present and readable even before anything has been skipped.
+            parts.append(" · ".join(label for label, _ in breakdown))
+            self._skip_summary_cache = (
+                " &nbsp; ".join(parts),
+                self._skip_tooltip(),
+            )
+
+        text, tooltip = self._skip_summary_cache
+        self.creator_skip_summary_label.setText(text)
+        self.creator_skip_summary_label.setToolTip(tooltip)
+
+    def _reset_download_summary(self, keep_post_stats=False):
+        """Reset the run stats and forget the last run's failures."""
+        self._skip_summary_cache = None
+        self._file_skip_count = 0
+        self._images_skipped_count = 0
+        self._last_run_failed_files = {}
+        self._last_run_files_to_posts_map = {}
+        self._refresh_retry_button()
+
+        if not keep_post_stats:
+            # A new download keeps the post-filter skip counts: they describe
+            # the post list, not the run.
+            self._post_skip_stats = {"keywords": 0, "date": 0, "file_count": 0}
+            self._post_keyword_skip_counts = {}
+        self._file_keyword_skip_counts = {}
+
+        # Re-render rather than blank the block: the skip breakdown stays
+        # visible at all times, showing zeros when nothing has been skipped.
+        self._update_download_summary(refresh_skips=True)
+
+    def _download_in_progress(self):
+        """True while a download run is genuinely in flight.
+
+        The ``downloading`` flag alone is not enough: it is cleared as soon as
+        the last file reports back, which can be a beat before the
+        CreatorDownloadThread itself finishes.
+        """
+        thread = getattr(self, "_download_thread", None)
+        if thread is not None:
+            try:
+                if thread.isRunning():
+                    return True
+            except RuntimeError:  # C++ object already deleted
+                pass
+        return bool(getattr(self, "downloading", False))
+
+    def _refresh_retry_button(self):
+        """Grey the retry button out unless the last run left retryable work."""
+        button = getattr(self, "creator_retry_failed_btn", None)
+        if button is None:
+            return
+        retryable = len(getattr(self, "_last_run_files_to_posts_map", {}))
+        button.setText(translate("retry_failed_downloads"))
+        button.setEnabled(retryable > 0 and not self._download_in_progress())
+        button.setToolTip(
+            translate("retry_failed_downloads_tooltip")
+            if retryable
+            else translate("retry_unavailable")
+        )
+
+    def _remember_run_failures(self):
+        """Snapshot the failures of the run about to be reset, for retrying."""
+        self._last_run_failed_files = dict(self.failed_files)
+        known_map = getattr(self, "files_to_posts_map", {})
+        self._last_run_files_to_posts_map = {
+            url: known_map[url]
+            for url in self._last_run_failed_files
+            if url in known_map
+        }
+        self._refresh_retry_button()
+
+    def _refresh_skip_summary_from_filter(self, detection_thread):
+        """Copy the post-filter skip counters into the summary block."""
+        self._post_skip_stats = {
+            "keywords": getattr(detection_thread, "keyword_skipped_count", 0),
+            "date": getattr(detection_thread, "date_skipped_count", 0),
+            "file_count": getattr(detection_thread, "file_count_skipped_count", 0),
+        }
+        self._post_keyword_skip_counts = dict(
+            getattr(detection_thread, "keyword_skip_counts", {}) or {}
+        )
+        self._update_download_summary(refresh_skips=True)
+
+    def retry_failed_downloads(self):
+        """Re-download only the files that failed in the last run."""
+        if self._download_in_progress():
+            self.append_log_to_console(
+                translate(
+                    "log_warning", translate("retry_already_downloading")
+                ),
+                "WARNING",
+            )
+            return
+
+        failed = dict(getattr(self, "_last_run_failed_files", {}))
+        known_map = getattr(self, "_last_run_files_to_posts_map", {})
+        files_map = {url: known_map[url] for url in failed if url in known_map}
+        if not failed or not files_map:
+            self.append_log_to_console(
+                translate("log_warning", translate("retry_unavailable")), "WARNING"
+            )
+            self._refresh_retry_button()
+            return
+
+        files_to_retry = list(files_map)
+        self.downloading = True
+        self._run_finished = False
+        self.set_downloading_ui_state(True)
+        self._refresh_retry_button()
+        self.total_files_to_download = len(files_to_retry)
+        self.total_posts_to_download = len(set(files_map.values()))
+        self.completed_files.clear()
+        self.failed_files.clear()
+        self.completed_posts.clear()
+        self.current_file_index = -1
+        self.creator_file_progress.setValue(0)
+        self.creator_file_progress_label.setText(translate("file_progress", 0))
+        self.creator_overall_progress.setValue(0)
+        self.update_progress_bar_style()
+        self._update_download_summary(0, 0)
+        self.append_log_to_console(
+            translate(
+                "log_warning", translate("retrying_failed_files", len(files_to_retry))
+            ),
+            "WARNING",
+        )
+        self._start_download_thread(
+            files_to_retry, files_map, getattr(self, "_last_run_creator_url", None)
+        )
 
     def add_creators_from_file(self):
         """Open a text file and add all links line by line to the queue"""
