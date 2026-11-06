@@ -1,6 +1,6 @@
-"""Tests for left panel scroll area in PostDownloaderTab and CreatorDownloaderTab.
+"""Tests for the left panel scroll area in CreatorDownloaderTab.
 
-Verifies that the left-side panel of both tabs is wrapped in a QScrollArea so
+Verifies that the left-side panel of the tab is wrapped in a QScrollArea so
 content remains accessible on lower screen resolutions without overlapping.
 """
 
@@ -58,84 +58,6 @@ def _find_left_scroll_area(tab: QWidget) -> Optional[QScrollArea]:
         if isinstance(child, QScrollArea):
             return child
     return None
-
-
-# ---------------------------------------------------------------------------
-# PostDownloaderTab tests
-# ---------------------------------------------------------------------------
-
-
-class TestPostLeftPanelScroll:
-    def test_left_panel_has_scroll_area(self, qapp, tmp_path):
-        """The post tab should contain a QScrollArea wrapping the left panel."""
-        from kemonodownloader.post_downloader import PostDownloaderTab
-
-        parent = _MockParent(tmp_path)
-        tab = PostDownloaderTab(parent)
-        try:
-            scroll = _find_left_scroll_area(tab)
-            assert scroll is not None, "PostDownloaderTab must have a QScrollArea"
-        finally:
-            tab.deleteLater()
-
-    def test_scroll_area_is_widget_resizable(self, qapp, tmp_path):
-        """widgetResizable must be True so content fills the available width."""
-        from kemonodownloader.post_downloader import PostDownloaderTab
-
-        parent = _MockParent(tmp_path)
-        tab = PostDownloaderTab(parent)
-        try:
-            scroll = _find_left_scroll_area(tab)
-            assert scroll is not None
-            assert scroll.widgetResizable() is True
-        finally:
-            tab.deleteLater()
-
-    def test_scroll_area_no_frame(self, qapp, tmp_path):
-        """Frame should be hidden to keep a seamless look."""
-        from kemonodownloader.post_downloader import PostDownloaderTab
-
-        parent = _MockParent(tmp_path)
-        tab = PostDownloaderTab(parent)
-        try:
-            scroll = _find_left_scroll_area(tab)
-            assert scroll is not None
-            assert scroll.frameShape() == QScrollArea.Shape.NoFrame
-        finally:
-            tab.deleteLater()
-
-    def test_scroll_area_no_horizontal_scrollbar(self, qapp, tmp_path):
-        """Horizontal scroll bar should be disabled — only vertical scrolling."""
-        from kemonodownloader.post_downloader import PostDownloaderTab
-
-        parent = _MockParent(tmp_path)
-        tab = PostDownloaderTab(parent)
-        try:
-            scroll = _find_left_scroll_area(tab)
-            assert scroll is not None
-            assert (
-                scroll.horizontalScrollBarPolicy()
-                == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-            )
-        finally:
-            tab.deleteLater()
-
-    def test_scroll_area_wraps_left_widget(self, qapp, tmp_path):
-        """The QScrollArea widget should contain the left panel contents."""
-        from kemonodownloader.post_downloader import PostDownloaderTab
-
-        parent = _MockParent(tmp_path)
-        tab = PostDownloaderTab(parent)
-        try:
-            scroll = _find_left_scroll_area(tab)
-            assert scroll is not None
-            inner = scroll.widget()
-            assert inner is not None
-            # The inner widget should contain the URL input
-            assert hasattr(tab, "post_url_input")
-            assert tab.post_url_input is not None
-        finally:
-            tab.deleteLater()
 
 
 # ---------------------------------------------------------------------------

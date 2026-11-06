@@ -19,11 +19,8 @@ from PyQt6.QtWidgets import (
 )
 
 from kemonodownloader.creator_downloader import CreatorDownloaderTab
-from kemonodownloader.kd_extension import ExtensionTab
-from kemonodownloader.kd_help import HelpTab
 from kemonodownloader.kd_language import translate
 from kemonodownloader.kd_settings import GITHUB_REPO_URL, SettingsTab
-from kemonodownloader.post_downloader import PostDownloaderTab
 
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
@@ -111,11 +108,6 @@ class KemonoDownloader(QMainWindow):
             app.setFont(font)
         # Update all existing widgets that have explicit fonts set
         self._apply_font_recursive(self, font_family)
-        # Refresh help and extension tabs if they exist
-        if hasattr(self, "help_tab"):
-            self.help_tab.update_ui_text()
-        if hasattr(self, "extension_tab"):
-            self.extension_tab.update_ui_text()
 
     def _apply_font_recursive(self, widget, font_family: str):
         """Recursively update the font family on all child widgets."""
@@ -208,31 +200,10 @@ class KemonoDownloader(QMainWindow):
             translate("creator_downloader_tab"),
         )
 
-        self.post_tab = PostDownloaderTab(self)
-        self.tabs.addTab(
-            self.post_tab,
-            qta.icon("fa5s.download", color="white"),
-            translate("post_downloader_tab"),
-        )
-
         self.tabs.addTab(
             self.settings_tab,
             qta.icon("fa5s.cog", color="white"),
             translate("settings_tab"),
-        )
-
-        self.help_tab = HelpTab(self)
-        self.tabs.addTab(
-            self.help_tab,
-            qta.icon("fa5s.question-circle", color="white"),
-            translate("help_tab"),
-        )
-
-        self.extension_tab = ExtensionTab(self)
-        self.tabs.addTab(
-            self.extension_tab,
-            qta.icon("fa5s.puzzle-piece", color="white"),
-            translate("extension_tab"),
         )
 
         # Creator Downloader is the tab selected on launch.
@@ -263,29 +234,17 @@ class KemonoDownloader(QMainWindow):
             # Resolve tab labels by widget so the tab order can change freely.
             for widget, key in (
                 (self.creator_tab, "creator_downloader_tab"),
-                (self.post_tab, "post_downloader_tab"),
                 (self.settings_tab, "settings_tab"),
-                (self.help_tab, "help_tab"),
-                (self.extension_tab, "extension_tab"),
             ):
                 index = self.tabs.indexOf(widget)
                 if index != -1:
                     self.tabs.setTabText(index, translate(key))
 
-            if (
-                self.status_label.text() == "Idle"
-                or self.status_label.text() == "アイドル"
-                or self.status_label.text() == "대기 중"
-            ):
-                self.status_label.setText(translate("idle"))
-
+            self.status_label.setText(translate("idle"))
             self.dev_label.setText(self._footer_text())
 
-            self.post_tab.refresh_ui()
             self.creator_tab.refresh_ui()
             self.settings_tab.update_ui_text()
-            self.help_tab.update_ui_text()
-            self.extension_tab.update_ui_text()
 
     def animate_button(self, button, enter):
         anim = QPropertyAnimation(button, b"geometry")

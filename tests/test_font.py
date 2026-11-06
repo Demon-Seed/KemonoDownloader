@@ -8,7 +8,6 @@ import os
 from PyQt6.QtCore import QSettings
 from PyQt6.QtWidgets import QMessageBox
 
-from kemonodownloader.kd_language import KDLanguage, language_manager, translate
 from kemonodownloader.kd_settings import SettingsTab
 
 
@@ -416,80 +415,6 @@ class TestLoadBundledFonts:
 # ---------------------------------------------------------------------------
 # Font translation keys
 # ---------------------------------------------------------------------------
-
-
-class TestFontTranslations:
-    """Tests for font-related translation keys."""
-
-    def setup_method(self):
-        """Store original language before each test."""
-        self.original = language_manager.current_language
-
-    def teardown_method(self):
-        """Restore original language after each test."""
-        language_manager.set_language(self.original)
-
-    def test_font_settings_key_english(self):
-        """Test font_settings translation in English."""
-        language_manager.set_language("english")
-        assert translate("font_settings") == "Font Settings"
-
-    def test_font_key_english(self):
-        """Test font translation in English."""
-        language_manager.set_language("english")
-        assert translate("font") == "Font:"
-
-    def test_font_settings_key_japanese(self):
-        """Test font_settings translation in Japanese."""
-        language_manager.set_language("japanese")
-        text = translate("font_settings")
-        assert text != "font_settings"  # Should not return the key itself
-        assert len(text) > 0
-
-    def test_font_key_japanese(self):
-        """Test font translation in Japanese."""
-        language_manager.set_language("japanese")
-        text = translate("font")
-        assert text != "font"
-        assert len(text) > 0
-
-    def test_font_settings_key_korean(self):
-        """Test font_settings translation in Korean."""
-        language_manager.set_language("korean")
-        text = translate("font_settings")
-        assert text != "font_settings"
-        assert len(text) > 0
-
-    def test_font_key_korean(self):
-        """Test font translation in Korean."""
-        language_manager.set_language("korean")
-        text = translate("font")
-        assert text != "font"
-        assert len(text) > 0
-
-    def test_font_settings_key_chinese(self):
-        """Test font_settings translation in Chinese-Simplified."""
-        language_manager.set_language("chinese-simplified")
-        text = translate("font_settings")
-        assert text != "font_settings"
-        assert len(text) > 0
-
-    def test_font_key_chinese(self):
-        """Test font translation in Chinese-Simplified."""
-        language_manager.set_language("chinese-simplified")
-        text = translate("font")
-        assert text != "font"
-        assert len(text) > 0
-
-    def test_font_translation_keys_in_all_languages(self):
-        """Test that font_settings and font keys exist in every language."""
-        manager = KDLanguage()
-        for key in ("font_settings", "font"):
-            assert key in manager.translations
-            for lang in ("english", "japanese", "korean", "chinese-simplified"):
-                assert (
-                    lang in manager.translations[key]
-                ), f"Missing {lang} translation for {key}"
 
 
 # ---------------------------------------------------------------------------

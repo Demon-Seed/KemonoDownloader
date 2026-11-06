@@ -178,32 +178,6 @@ class TestLanguageManager:
         finally:
             language_manager.set_language(original)
 
-    def test_set_language_japanese(self):
-        """Test setting language to Japanese."""
-        original = language_manager.current_language
-        try:
-            language_manager.set_language("japanese")
-            assert language_manager.current_language == "japanese"
-        finally:
-            language_manager.set_language(original)
-
-    def test_set_language_korean(self):
-        """Test setting language to Korean."""
-        original = language_manager.current_language
-        try:
-            language_manager.set_language("korean")
-            assert language_manager.current_language == "korean"
-        finally:
-            language_manager.set_language(original)
-
-    def test_set_language_chinese_simplified(self):
-        """Test setting language to Simplified Chinese."""
-        original = language_manager.current_language
-        try:
-            language_manager.set_language("chinese-simplified")
-            assert language_manager.current_language == "chinese-simplified"
-        finally:
-            language_manager.set_language(original)
 
     def test_translate_english(self):
         """Test translation returns English text."""
@@ -215,15 +189,6 @@ class TestLanguageManager:
         finally:
             language_manager.set_language(original)
 
-    def test_translate_japanese(self):
-        """Test translation returns Japanese text."""
-        original = language_manager.current_language
-        try:
-            language_manager.set_language("japanese")
-            result = translate("added_to_queue")
-            assert result == "キューに追加されました"
-        finally:
-            language_manager.set_language(original)
 
     def test_translate_with_formatting(self):
         """Test translation with format arguments."""
@@ -242,24 +207,6 @@ class TestLanguageManager:
             language_manager.set_language("english")
             result = translate("this_key_does_not_exist_xyz123")
             assert result == "this_key_does_not_exist_xyz123"
-        finally:
-            language_manager.set_language(original)
-
-    def test_get_available_languages(self):
-        """Test getting list of available languages."""
-        languages = language_manager.get_available_languages()
-        assert "english" in languages
-        assert "japanese" in languages
-        assert "korean" in languages
-        assert "chinese-simplified" in languages
-        assert len(languages) == 4
-
-    def test_get_language(self):
-        """Test getting current language."""
-        original = language_manager.current_language
-        try:
-            language_manager.set_language("japanese")
-            assert language_manager.get_language() == "japanese"
         finally:
             language_manager.set_language(original)
 
@@ -284,7 +231,6 @@ class TestTranslationKeys:
             "browse",
             "download_settings",
             "folder_settings",
-            "language",
             "apply_changes",
         ]
         for key in keys_to_test:
@@ -301,8 +247,8 @@ class TestTranslationKeys:
         for key in keys_to_test:
             result = translate(key, 0)  # Pass 0 as a placeholder argument
             assert key not in result or "{" in language_manager.translations.get(
-                key, {}
-            ).get("english", ""), f"Translation key '{key}' not found"
+                key, ""
+            ), f"Translation key '{key}' not found"
 
 
 class TestCleanFileUrl:

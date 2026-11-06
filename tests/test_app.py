@@ -44,10 +44,7 @@ def mock_app_dependencies(monkeypatch):
             pass
 
     monkeypatch.setattr("kemonodownloader.app.SettingsTab", MockTab)
-    monkeypatch.setattr("kemonodownloader.app.PostDownloaderTab", MockTab)
     monkeypatch.setattr("kemonodownloader.app.CreatorDownloaderTab", MockTab)
-    monkeypatch.setattr("kemonodownloader.app.HelpTab", MockTab)
-    monkeypatch.setattr("kemonodownloader.app.ExtensionTab", MockTab)
 
     # QPixmap(path) returns a null pixmap if file doesn't exist, which is fine
 
@@ -95,14 +92,14 @@ class TestKemonoDownloader:
         window = KemonoDownloader()
         try:
             assert hasattr(window, "tabs")
-            assert window.tabs.count() == 5
+            assert window.tabs.count() == 2
 
             # Creator Downloader is the leftmost tab and the launch default.
             assert window.tabs.widget(0) is window.creator_tab
             assert window.tabs.currentIndex() == 0
             assert window.tabs.tabText(0) == "creator_downloader_tab"
-            assert window.tabs.indexOf(window.post_tab) == 1
-            assert window.tabs.tabText(1) == "post_downloader_tab"
+            assert window.tabs.indexOf(window.settings_tab) == 1
+            assert window.tabs.tabText(1) == "settings_tab"
 
             # Test disable/enable
             window.disable_other_tabs()
@@ -167,7 +164,7 @@ class TestKemonoDownloader:
         window = KemonoDownloader()
         try:
             assert window.main_widget is not None
-            assert window.tabs.count() == 5
+            assert window.tabs.count() == 2
         finally:
             window.deleteLater()
 

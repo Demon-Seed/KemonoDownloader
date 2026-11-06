@@ -183,31 +183,24 @@ class TestBaseDirectoryLogic:
 
 
 class TestLanguageSettings:
-    """Tests for language settings."""
+    """Tests for the single supported language."""
 
     def test_available_languages(self):
-        """Test that expected languages are available."""
+        """Only English ships, so that is all that is offered."""
         from kemonodownloader.kd_language import language_manager
 
-        languages = language_manager.get_available_languages()
-
-        assert "english" in languages
-        assert "japanese" in languages
-        assert "korean" in languages
-        assert "chinese-simplified" in languages
+        assert language_manager.get_available_languages() == ["english"]
 
     def test_language_persistence(self):
-        """Test that language setting can be changed and retrieved."""
+        """A non-English value is rejected instead of switching the app."""
         from kemonodownloader.kd_language import language_manager
 
         original = language_manager.get_language()
 
         try:
-            language_manager.set_language("japanese")
-            assert language_manager.get_language() == "japanese"
-
-            language_manager.set_language("korean")
-            assert language_manager.get_language() == "korean"
+            assert language_manager.set_language("japanese") is False
+            assert language_manager.set_language("korean") is False
+            assert language_manager.get_language() == "english"
         finally:
             language_manager.set_language(original)
 
@@ -364,11 +357,6 @@ class TestSettingsUIInteractions:
 
         st = SettingsTab(MockParent())
         try:
-            # Update language
-            idx = st.language_combo.findData("japanese")
-            st.language_combo.setCurrentIndex(idx)
-            assert st.temp_settings["language"] == "japanese"
-
             # Update font
             idx = st.font_combo.findData("Poppins")
             st.font_combo.setCurrentIndex(idx)
@@ -1002,7 +990,6 @@ class TestDetailedUI:
         st = SettingsTab(parent)
         try:
             # Pass integer index
-            st.update_language(0)
             st.update_font(0)
         finally:
             st.deleteLater()

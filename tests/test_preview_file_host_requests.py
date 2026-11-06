@@ -15,7 +15,6 @@ from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QWidget
 
 from kemonodownloader import creator_downloader as cd
-from kemonodownloader import post_downloader as pd
 from kemonodownloader.domain_config import file_host_headers, warm_file_host
 
 PAWCHIVE_IMAGE = (
@@ -214,31 +213,6 @@ def test_kemono_preview_still_makes_a_single_request(qtbot, tmp_path, monkeypatc
 
     assert session.urls == [url]
     assert session.requests[0][1]["Referer"] == "https://kemono.cr/"
-
-
-def test_post_preview_retries_after_ddos_guard_challenge(qtbot, tmp_path, monkeypatch):
-    session = ScriptedSession(
-        FakeResponse(403),
-        FakeResponse(404),
-        FakeResponse(200, [png_bytes()]),
-    )
-    monkeypatch.setattr(pd, "get_session", lambda settings_tab=None: session)
-    monkeypatch.setattr(pd, "get_domain_config", lambda url: dict(PAWCHIVE_CONFIG))
-
-    previews = []
-    thread = pd.PreviewThread(
-        PAWCHIVE_IMAGE, os.path.join(str(tmp_path), "cache"), settings_tab=None
-    )
-    thread.preview_ready.connect(lambda url, pixmap: previews.append(pixmap))
-
-    thread.run()
-
-    assert session.urls == [
-        PAWCHIVE_IMAGE,
-        "https://file.pawchive.pw/",
-        PAWCHIVE_IMAGE,
-    ]
-    assert previews
 
 
 def test_image_modal_uses_the_tabs_settings_tab(qtbot, tmp_path, monkeypatch):

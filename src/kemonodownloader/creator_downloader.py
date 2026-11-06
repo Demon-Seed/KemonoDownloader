@@ -54,27 +54,8 @@ from kemonodownloader.download_history import (
     iso_to_local_date,
 )
 from kemonodownloader.hash_db import HashDB
-from kemonodownloader.kd_language import language_manager, translate
+from kemonodownloader.kd_language import translate
 from kemonodownloader.retry_policy import countdown_seconds
-
-
-def _t(key, fallback, *args):
-    """Translate *key*, falling back to *fallback* text if the key hasn't
-    been added to kd_language.py yet. Any extra positional *args* are
-    used to format the translation (or the fallback) with str.format().
-    """
-    try:
-        value = translate(key, *args)
-    except Exception:
-        value = None
-    if not value or value == key:
-        if args:
-            try:
-                return fallback.format(*args)
-            except Exception:
-                return fallback
-        return fallback
-    return value
 
 
 def _log_line_html(message, color):
@@ -1077,12 +1058,7 @@ class PostDetectionThread(QThread):
                     self.log.emit(
                         translate(
                             "log_debug",
-                            _t(
-                                "skip_keyword_matched_after_rejoin",
-                                "[SKIP-KEYWORD] '{0}' matched the description "
-                                "after re-joining inline tags",
-                                matched,
-                            ),
+                            translate("skip_keyword_matched_after_rejoin", matched),
                         ),
                         "DEBUG",
                     )
@@ -1777,12 +1753,7 @@ class FilePreparationThread(QThread):
             self.log.emit(
                 translate(
                     "log_debug",
-                    _t(
-                        "images_skipped_archive_present",
-                        "[SKIP-IMAGE] Skipped {0} image file(s); a compressed "
-                        "archive is present",
-                        len(skipped),
-                    ),
+                    translate("images_skipped_archive_present", len(skipped)),
                 ),
                 "INFO",
             )
@@ -1850,7 +1821,7 @@ class FilePreparationThread(QThread):
             if self._record_file_skip(file_name):
                 self.log.emit(
                     translate(
-                        "log_debug", _t("skipped_individual_file", f"Skipped main file (keyword match): {file_name}", file_name)
+                        "log_debug", translate("skipped_individual_file", file_name)
                     ),
                     "INFO",
                 )
@@ -1892,10 +1863,8 @@ class FilePreparationThread(QThread):
                         self.log.emit(
                             translate(
                                 "log_debug",
-                                _t(
-                                    "skipped_individual_file",
-                                    f"Skipped attachment (keyword match): {attachment_name}",
-                                    attachment_name,
+                                translate(
+                                    "skipped_individual_file", attachment_name
                                 ),
                             ),
                             "INFO",
@@ -1940,10 +1909,8 @@ class FilePreparationThread(QThread):
                     self.log.emit(
                         translate(
                             "log_debug",
-                            _t(
-                                "skipped_individual_file",
-                                f"Skipped content image (keyword match): {img_name}",
-                                img_name,
+                            translate(
+                                "skipped_individual_file", img_name
                             ),
                         ),
                         "INFO",
@@ -3806,7 +3773,7 @@ class CreatorDownloaderTab(QWidget):
         skip_single_image_layout = QHBoxLayout()
         skip_single_image_layout.setContentsMargins(0, 0, 0, 0)
         self.creator_skip_folder_check = QCheckBox(
-            _t("skip_folder_for_few_images", "Skip Post Folder")
+            translate("skip_folder_for_few_images")
         )
         self.creator_skip_folder_check.setChecked(False)
         self.creator_skip_folder_check.setStyleSheet("color: white;")
@@ -3821,10 +3788,7 @@ class CreatorDownloaderTab(QWidget):
         self.creator_force_compressed_folder_check.setChecked(False)
         self.creator_force_compressed_folder_check.setStyleSheet("color: white;")
         self.creator_force_compressed_folder_check.setToolTip(
-            _t(
-                "force_folder_for_compressed",
-                "Always Post Folder for Compressed Files",
-            )
+            translate("force_folder_for_compressed")
         )
         skip_single_image_layout.addWidget(self.creator_force_compressed_folder_check)
 
@@ -3855,7 +3819,7 @@ class CreatorDownloaderTab(QWidget):
         skip_images_layout = QHBoxLayout()
         skip_images_layout.setContentsMargins(0, 0, 0, 0)
         self.creator_skip_images_check = QCheckBox(
-            _t("skip_images_if_compressed", "Skip Images if Compressed")
+            translate("skip_images_if_compressed")
         )
         self.creator_skip_images_check.setChecked(False)
         self.creator_skip_images_check.setStyleSheet("color: white;")
@@ -4003,14 +3967,14 @@ class CreatorDownloaderTab(QWidget):
         skip_filter_layout.setContentsMargins(0, 0, 0, 0)
 
         self.skip_keywords_label = QLabel(
-            _t("skip_posts_keywords", "Skip Posts Containing")
+            translate("skip_posts_keywords")
         )
         self.skip_keywords_label.setStyleSheet("color: white;")
         skip_filter_layout.addWidget(self.skip_keywords_label)
 
         self.skip_keywords_edit = QLineEdit()
         self.skip_keywords_edit.setPlaceholderText(
-            _t("skip_posts_keywords_placeholder", "e.g. JP, ZH (comma-separated)")
+            translate("skip_posts_keywords_placeholder")
         )
         self.skip_keywords_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
         skip_filter_layout.addWidget(self.skip_keywords_edit, stretch=1)
@@ -4032,19 +3996,19 @@ class CreatorDownloaderTab(QWidget):
         skip_scope_layout = QHBoxLayout()
         skip_scope_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.skip_scope_label = QLabel(_t("skip_keywords_scope", "Filter By"))
+        self.skip_scope_label = QLabel(translate("skip_keywords_scope"))
         self.skip_scope_label.setStyleSheet("color: white;")
         skip_scope_layout.addWidget(self.skip_scope_label)
 
         self._skip_scope_options = [
-            ("skip_scope_title_toggle", "title", "Title"),
-            ("skip_scope_filenames_toggle", "filenames", "Filenames"),
-            ("skip_scope_description_toggle", "description", "Description"),
-            ("skip_scope_tags_toggle", "tags", "Tags"),
+            ("skip_scope_title_toggle", "title"),
+            ("skip_scope_filenames_toggle", "filenames"),
+            ("skip_scope_description_toggle", "description"),
+            ("skip_scope_tags_toggle", "tags"),
         ]
         self.skip_scope_checkboxes = {}
-        for label_key, value, fallback_label in self._skip_scope_options:
-            checkbox = QCheckBox(_t(label_key, fallback_label))
+        for label_key, value in self._skip_scope_options:
+            checkbox = QCheckBox(translate(label_key))
             checkbox.setStyleSheet("color: white;")
             checkbox.setChecked(value == "title")  # Title enabled by default
             skip_scope_layout.addWidget(checkbox)
@@ -4057,17 +4021,14 @@ class CreatorDownloaderTab(QWidget):
         file_skip_filter_layout.setContentsMargins(0, 0, 0, 0)
 
         self.file_skip_keywords_label = QLabel(
-            _t("skip_files_keywords", "Skip Files Containing")
+            translate("skip_files_keywords")
         )
         self.file_skip_keywords_label.setStyleSheet("color: white;")
         file_skip_filter_layout.addWidget(self.file_skip_keywords_label)
 
         self.file_skip_keywords_edit = QLineEdit()
         self.file_skip_keywords_edit.setPlaceholderText(
-            _t(
-                "skip_files_keywords_placeholder",
-                "e.g. JP, ZH (comma-separated)",
-            )
+            translate("skip_files_keywords_placeholder")
         )
         self.file_skip_keywords_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
         file_skip_filter_layout.addWidget(self.file_skip_keywords_edit, stretch=1)
@@ -4092,28 +4053,28 @@ class CreatorDownloaderTab(QWidget):
         date_range_layout = QHBoxLayout()
         date_range_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.date_range_label = QLabel(_t("date_range_filter", "Date Range"))
+        self.date_range_label = QLabel(translate("date_range_filter"))
         self.date_range_label.setStyleSheet("color: white;")
         date_range_layout.addWidget(self.date_range_label)
 
-        self.date_from_label = QLabel(_t("date_range_from", "From"))
+        self.date_from_label = QLabel(translate("date_range_from"))
         self.date_from_label.setStyleSheet("color: white;")
         date_range_layout.addWidget(self.date_from_label)
 
         self.date_from_edit = QLineEdit()
         self.date_from_edit.setPlaceholderText(
-            _t("date_range_from_placeholder", "YYYY-MM-DD")
+            translate("date_range_from_placeholder")
         )
         self.date_from_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
         date_range_layout.addWidget(self.date_from_edit, stretch=1)
 
-        self.date_to_label = QLabel(_t("date_range_to", "To"))
+        self.date_to_label = QLabel(translate("date_range_to"))
         self.date_to_label.setStyleSheet("color: white;")
         date_range_layout.addWidget(self.date_to_label)
 
         self.date_to_edit = QLineEdit()
         self.date_to_edit.setPlaceholderText(
-            _t("date_range_to_placeholder", "YYYY-MM-DD")
+            translate("date_range_to_placeholder")
         )
         self.date_to_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
         date_range_layout.addWidget(self.date_to_edit, stretch=1)
@@ -4137,30 +4098,30 @@ class CreatorDownloaderTab(QWidget):
         file_count_layout = QHBoxLayout()
         file_count_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.file_count_label = QLabel(_t("file_count_filter", "File Count From"))
+        self.file_count_label = QLabel(translate("file_count_filter"))
         self.file_count_label.setStyleSheet("color: white;")
         file_count_layout.addWidget(self.file_count_label)
 
         self.file_count_from_edit = QLineEdit()
         self.file_count_from_edit.setPlaceholderText(
-            _t("file_count_from_placeholder", "Min")
+            translate("file_count_from_placeholder")
         )
         self.file_count_from_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
         file_count_layout.addWidget(self.file_count_from_edit, stretch=1)
 
-        self.file_count_to_label = QLabel(_t("file_count_to", "To"))
+        self.file_count_to_label = QLabel(translate("file_count_to"))
         self.file_count_to_label.setStyleSheet("color: white;")
         file_count_layout.addWidget(self.file_count_to_label)
 
         self.file_count_to_edit = QLineEdit()
         self.file_count_to_edit.setPlaceholderText(
-            _t("file_count_to_placeholder", "Max")
+            translate("file_count_to_placeholder")
         )
         self.file_count_to_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
         file_count_layout.addWidget(self.file_count_to_edit, stretch=1)
 
         self.file_count_keep_compressed_check = QCheckBox(
-            _t("file_count_keep_compressed", "Keep Archives")
+            translate("file_count_keep_compressed")
         )
         self.file_count_keep_compressed_check.setChecked(False)
         self.file_count_keep_compressed_check.setStyleSheet("color: white;")
@@ -4184,19 +4145,19 @@ class CreatorDownloaderTab(QWidget):
         search_scope_layout = QHBoxLayout()
         search_scope_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.search_scope_label = QLabel(_t("search_scope", "Search by"))
+        self.search_scope_label = QLabel(translate("search_scope"))
         self.search_scope_label.setStyleSheet("color: white;")
         search_scope_layout.addWidget(self.search_scope_label)
 
         self._search_scope_options = [
-            ("search_scope_title_toggle", "title", "Title"),
-            ("search_scope_filenames_toggle", "filenames", "Filenames"),
-            ("search_scope_description_toggle", "description", "Description"),
-            ("search_scope_tags_toggle", "tags", "Tags"),
+            ("search_scope_title_toggle", "title"),
+            ("search_scope_filenames_toggle", "filenames"),
+            ("search_scope_description_toggle", "description"),
+            ("search_scope_tags_toggle", "tags"),
         ]
         self.search_scope_checkboxes = {}
-        for label_key, value, fallback_label in self._search_scope_options:
-            checkbox = QCheckBox(_t(label_key, fallback_label))
+        for label_key, value in self._search_scope_options:
+            checkbox = QCheckBox(translate(label_key))
             checkbox.setStyleSheet("color: white;")
             checkbox.setChecked(value == "title")  # Title enabled by default
             checkbox.stateChanged.connect(self.filter_items)
@@ -4406,67 +4367,64 @@ class CreatorDownloaderTab(QWidget):
         )
         if hasattr(self, "creator_auto_rename_info_btn"):
             self.creator_auto_rename_info_btn.setToolTip(
-                _t("auto_rename_info_title", "Rename & Sort Help")
+                translate("auto_rename_info_title")
             )
         if hasattr(self, "creator_skip_folder_info_btn"):
             self.creator_skip_folder_info_btn.setToolTip(
-                _t("skip_folder_info_title", "Skip Post Folder Help")
+                translate("skip_folder_info_title")
             )
         if hasattr(self, "skip_keywords_help_btn"):
             self.skip_keywords_help_btn.setToolTip(
-                _t("skip_posts_keywords_help_title", "Skip Posts Help")
+                translate("skip_posts_keywords_help_title")
             )
         if hasattr(self, "file_skip_keywords_help_btn"):
             self.file_skip_keywords_help_btn.setToolTip(
-                _t("skip_files_keywords_help_title", "Skip Files Help")
+                translate("skip_files_keywords_help_title")
             )
         if hasattr(self, "date_filter_help_btn"):
             self.date_filter_help_btn.setToolTip(
-                _t("date_filter_help_title", "Post Date Filter Help")
+                translate("date_filter_help_title")
             )
         if hasattr(self, "creator_box_info_btn"):
             self.creator_box_info_btn.setToolTip(
-                _t("downloader_box_info_title", "Downloader Box Help")
+                translate("downloader_box_info_title")
             )
         if hasattr(self, "creator_force_compressed_folder_check"):
             self.creator_force_compressed_folder_check.setToolTip(
-                _t(
-                    "force_folder_for_compressed",
-                    "Always Post Folder for Compressed Files",
-                )
+                translate("force_folder_for_compressed")
             )
         if hasattr(self, "creator_skip_images_check"):
             self.creator_skip_images_check.setText(
-                _t("skip_images_if_compressed", "Skip Images if Compressed")
+                translate("skip_images_if_compressed")
             )
         if hasattr(self, "creator_skip_images_info_btn"):
             self.creator_skip_images_info_btn.setToolTip(
-                _t("skip_images_info_title", "Skip Images Help")
+                translate("skip_images_info_title")
             )
         if hasattr(self, "file_count_help_btn"):
             self.file_count_help_btn.setToolTip(
-                _t("file_count_help_title", "File Count Filter Help")
+                translate("file_count_help_title")
             )
         if hasattr(self, "file_count_label"):
             self.file_count_label.setText(
-                _t("file_count_filter", "File Count From")
+                translate("file_count_filter")
             )
         if hasattr(self, "file_count_from_edit"):
             self.file_count_from_edit.setPlaceholderText(
-                _t("file_count_from_placeholder", "Min")
+                translate("file_count_from_placeholder")
             )
         if hasattr(self, "file_count_to_label"):
-            self.file_count_to_label.setText(_t("file_count_to", "To"))
+            self.file_count_to_label.setText(translate("file_count_to"))
         if hasattr(self, "file_count_to_edit"):
             self.file_count_to_edit.setPlaceholderText(
-                _t("file_count_to_placeholder", "Max")
+                translate("file_count_to_placeholder")
             )
         if hasattr(self, "file_count_keep_compressed_check"):
             self.file_count_keep_compressed_check.setText(
-                _t("file_count_keep_compressed", "Keep Archives")
+                translate("file_count_keep_compressed")
             )
         if hasattr(self, "search_scope_label"):
-            self.search_scope_label.setText(_t("search_scope", "Search by"))
+            self.search_scope_label.setText(translate("search_scope"))
         self.creator_multi_url_input.setPlaceholderText(
             translate("multi_url_placeholder_creator")
         )
@@ -4493,38 +4451,32 @@ class CreatorDownloaderTab(QWidget):
         # Update inline skip-keywords filter labels
         if hasattr(self, "skip_keywords_label"):
             self.skip_keywords_label.setText(
-                _t("skip_posts_keywords", "Skip Posts Containing")
+                translate("skip_posts_keywords")
             )
         if hasattr(self, "skip_keywords_edit"):
             self.skip_keywords_edit.setPlaceholderText(
-                _t(
-                    "skip_posts_keywords_placeholder",
-                    "e.g. JP, ZH (comma-separated)",
-                )
+                translate("skip_posts_keywords_placeholder")
             )
         if hasattr(self, "skip_scope_label"):
-            self.skip_scope_label.setText(_t("skip_keywords_scope", "Filter By"))
+            self.skip_scope_label.setText(translate("skip_keywords_scope"))
         if hasattr(self, "file_skip_keywords_label"):
             self.file_skip_keywords_label.setText(
-                _t("skip_files_keywords", "Skip Files Containing")
+                translate("skip_files_keywords")
             )
         if hasattr(self, "file_skip_keywords_edit"):
             self.file_skip_keywords_edit.setPlaceholderText(
-                _t(
-                    "skip_files_keywords_placeholder",
-                    "e.g. JP, ZH (comma-separated)",
-                )
+                translate("skip_files_keywords_placeholder")
             )
         if hasattr(self, "skip_scope_checkboxes"):
-            for label_key, value, fallback_label in self._skip_scope_options:
+            for label_key, value in self._skip_scope_options:
                 checkbox = self.skip_scope_checkboxes.get(value)
                 if checkbox is not None:
-                    checkbox.setText(_t(label_key, fallback_label))
+                    checkbox.setText(translate(label_key))
         if hasattr(self, "search_scope_checkboxes"):
-            for label_key, value, fallback_label in self._search_scope_options:
+            for label_key, value in self._search_scope_options:
                 checkbox = self.search_scope_checkboxes.get(value)
                 if checkbox is not None:
-                    checkbox.setText(_t(label_key, fallback_label))
+                    checkbox.setText(translate(label_key))
 
         self.update_creator_queue_list()
 
@@ -4651,50 +4603,32 @@ class CreatorDownloaderTab(QWidget):
         """Explain the post rows shown in the downloader box."""
         QMessageBox.information(
             self,
-            _t("downloader_box_info_title", "Downloader Box Help"),
-            _t(
-                "downloader_box_info_text",
-                "Key: Post Title | (Publish Date) | [Last Downloaded Date]\n"
-                "and Double Click to view a posts thumbnail.",
-            ),
+            translate("downloader_box_info_title"),
+            translate("downloader_box_info_text"),
         )
 
     def show_auto_rename_info(self):
         """Show a dialog explaining what Rename & Sort by File order does."""
         QMessageBox.information(
             self,
-            _t("auto_rename_info_title", "Rename & Sort Help"),
-            _t(
-                "auto_rename_info_text",
-                "Adds a number in front of every filename so files sort in download order.\n\nIn per-post folders the number is only the file's position within its own post:\n  1_first.jpg, 2_second.jpg, 3_third.jpg\n\nWhen posts share a folder (Folder Structure set to 'Single creator folder' or 'Subfolders by file type', or a post whose folder was skipped by 'Skip Post Folder'), the post's own order is added in front of it, so every post stays one contiguous, ordered block:\n  1_1_first.jpg, 1_2_second.jpg, 2_1_next_post.jpg\n\nNote: with 'Always Post Folder for Compressed Files' enabled, archives keep their own post folder and get only the position number, while the rest of that post's files are skipped into the shared folder and get the post-order number too.",
-            ),
+            translate("auto_rename_info_title"),
+            translate("auto_rename_info_text"),
         )
 
     def show_skip_folder_info(self):
         """Show a dialog explaining what Skip Post Folder does."""
         QMessageBox.information(
             self,
-            _t("skip_folder_info_title", "Skip Post Folder Help"),
-            _t(
-                "skip_folder_info_text",
-                "When enabled, posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.\n\nFor example, if set to 1, single-image posts will not get their own folder — the image will be placed directly in the creator's folder.\n\nThis only applies when Folder Structure is set to 'Per-post folders'.\n\nThe archive icon toggle next to this button ignores compressed files (ZIP, 7z, RAR) when deciding whether to skip the post folder — those files will always be saved in their own post folder, even if Skip Post Folder would otherwise apply to that post.",
-            ),
+            translate("skip_folder_info_title"),
+            translate("skip_folder_info_text"),
         )
 
     def show_skip_images_info(self):
         """Show a dialog explaining what Skip Images if Compressed does."""
         QMessageBox.information(
             self,
-            _t("skip_images_info_title", "Skip Images Help"),
-            _t(
-                "skip_images_info_text",
-                "When enabled, a post's image files (JPG, JPEG, JPE, PNG, "
-                "GIF, WEBP) are not downloaded if the same post also offers "
-                "a compressed archive (ZIP, 7Z, RAR).\n\n"
-                "The archive has to be one of the files being downloaded — "
-                "if ZIP/7Z/RAR is unticked above, the images are kept.\n\n"
-                "Applies to the main file, attachments and content images.",
-            ),
+            translate("skip_images_info_title"),
+            translate("skip_images_info_text"),
         )
 
     def add_multiple_creators_to_queue(self):
@@ -4932,10 +4866,7 @@ class CreatorDownloaderTab(QWidget):
             self.append_log_to_console(
                 translate(
                     "log_warning",
-                    _t(
-                        "invalid_date_from_ignored",
-                        "Invalid 'Date Range: From' value ignored (use YYYY-MM-DD)",
-                    ),
+                    translate("invalid_date_from_ignored"),
                 ),
                 "WARNING",
             )
@@ -4943,10 +4874,7 @@ class CreatorDownloaderTab(QWidget):
             self.append_log_to_console(
                 translate(
                     "log_warning",
-                    _t(
-                        "invalid_date_to_ignored",
-                        "Invalid 'Date Range: To' value ignored (use YYYY-MM-DD)",
-                    ),
+                    translate("invalid_date_to_ignored"),
                 ),
                 "WARNING",
             )
@@ -4959,10 +4887,7 @@ class CreatorDownloaderTab(QWidget):
             self.append_log_to_console(
                 translate(
                     "log_warning",
-                    _t(
-                        "invalid_file_count_ignored",
-                        "Invalid 'File Count' value ignored (use a whole number)",
-                    ),
+                    translate("invalid_file_count_ignored"),
                 ),
                 "WARNING",
             )
@@ -4970,10 +4895,7 @@ class CreatorDownloaderTab(QWidget):
             self.append_log_to_console(
                 translate(
                     "log_warning",
-                    _t(
-                        "invalid_file_count_ignored",
-                        "Invalid 'File Count' value ignored (use a whole number)",
-                    ),
+                    translate("invalid_file_count_ignored"),
                 ),
                 "WARNING",
             )
@@ -6210,76 +6132,32 @@ class CreatorDownloaderTab(QWidget):
         """Show help text explaining the inline skip-keywords post filter."""
         QMessageBox.information(
             self,
-            _t("skip_posts_keywords_help_title", "Skip Posts Help"),
-            _t(
-                "skip_posts_keywords_help_text",
-                "Comma-separated keywords (e.g. AlienComic, sketch). Posts "
-                "matching any keyword (case-insensitive, whole word) are "
-                "excluded entirely.\n\n"
-                "Use the 'Filter By' checkboxes to choose which fields are "
-                "checked. Any combination can be enabled at once — a post is "
-                "skipped if the keyword matches in ANY enabled field:\n"
-                "  • Title — checks the post title\n"
-                "  • Filenames — checks the main file and attachment names\n"
-                "  • Description — checks the post body text\n"
-                "  • Tags — checks the post's tags\n\n"
-                "Matching is case-insensitive and whole-word. For example, "
-                "'sketch' matches 'Sketch' but not 'SketchBook'. To match "
-                "multiple variations, enter them as separate keywords: "
-                "'AlienComic, Alien Comic, alien_comic'.\n\n"
-                "Leave the keyword box blank to disable.",
-            ),
+            translate("skip_posts_keywords_help_title"),
+            translate("skip_posts_keywords_help_text"),
         )
 
     def show_file_skip_keywords_help(self):
         """Show help text explaining the inline skip-keywords file filter."""
         QMessageBox.information(
             self,
-            _t("skip_files_keywords_help_title", "Skip Files Help"),
-            _t(
-                "skip_files_keywords_help_text",
-                "Comma-separated keywords (e.g. JP, ZH). Individual files "
-                "matching any keyword (case-insensitive, whole word) are "
-                "excluded from download. Only the matched file is skipped — "
-                "never the whole post. Independent from 'Skip Posts "
-                "Containing' above. Leave blank to disable.",
-            ),
+            translate("skip_files_keywords_help_title"),
+            translate("skip_files_keywords_help_text"),
         )
 
     def show_date_filter_help(self):
         """Show help text explaining the post date range filter."""
         QMessageBox.information(
             self,
-            _t("date_filter_help_title", "Post Date Filter Help"),
-            _t(
-                "date_filter_help_text",
-                "Filter posts by their own publish date (not the date they "
-                "were imported/scraped). Enter dates as YYYY-MM-DD in "
-                "'From' and/or 'To' — both bounds are inclusive and both "
-                "are optional; leave either blank to disable that bound. "
-                "Posts with an unknown publish date are always kept.",
-            ),
+            translate("date_filter_help_title"),
+            translate("date_filter_help_text"),
         )
 
     def show_file_count_help(self):
         """Show help text explaining the post file-count range filter."""
         QMessageBox.information(
             self,
-            _t("file_count_help_title", "File Count Filter Help"),
-            _t(
-                "file_count_help_text",
-                "Filter posts by how many files they hold: the main file, "
-                "attachments and content images all count. Enter a minimum in "
-                "'File Count From' and/or a maximum in 'To' — both bounds are "
-                "inclusive and both are optional; leave either blank to "
-                "disable that bound. This count is independent of the file "
-                "type tickboxes.\n\n"
-                "Keep Archives: posts that contain a compressed file (ZIP, "
-                "7Z, RAR) always stay in the list, whatever their file count, "
-                "so archive posts are never filtered out.\n\n"
-                "Applied while posts are fetched — click a creator's eye icon "
-                "to re-apply after changing it.",
-            ),
+            translate("file_count_help_title"),
+            translate("file_count_help_text"),
         )
 
     def expand_logs(self):
@@ -6565,11 +6443,8 @@ class CreatorDownloaderTab(QWidget):
                     self.append_log_to_console(
                         translate(
                             "log_info",
-                            _t(
-                                "posts_skipped_by_date_filter",
-                                f"Skipped {date_skipped_count} post(s) outside the "
-                                f"selected date range.",
-                                date_skipped_count,
+                            translate(
+                                "posts_skipped_by_date_filter", date_skipped_count
                             ),
                         ),
                         "INFO",
@@ -6581,10 +6456,8 @@ class CreatorDownloaderTab(QWidget):
                     self.append_log_to_console(
                         translate(
                             "log_info",
-                            _t(
+                            translate(
                                 "posts_skipped_by_file_count_filter",
-                                f"Skipped {file_count_skipped_count} post(s) outside "
-                                f"the selected file count range.",
                                 file_count_skipped_count,
                             ),
                         ),

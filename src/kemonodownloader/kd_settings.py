@@ -30,20 +30,6 @@ from kemonodownloader.kd_language import language_manager, translate
 GITHUB_REPO_URL = "https://github.com/VoxDroid/KemonoDownloader"
 
 
-def _t(key, fallback):
-    """Translate *key*, falling back to *fallback* text if the key hasn't
-    been added to kd_language.py yet (translate() returns the raw key
-    string when no translation is found for it).
-    """
-    try:
-        value = translate(key)
-    except Exception:
-        value = None
-    if not value or value == key:
-        return fallback
-    return value
-
-
 class SettingsTab(QWidget):
     settings_applied = pyqtSignal()
     language_changed = pyqtSignal()
@@ -118,8 +104,14 @@ class SettingsTab(QWidget):
             self.default_settings["simultaneous_downloads"],
             type=int,
         )
-        settings_dict["language"] = self.qsettings.value(
+        saved_language = self.qsettings.value(
             "language", self.default_settings["language"], type=str
+        )
+        # Only English ships now, so a stale value from an older build falls back.
+        settings_dict["language"] = (
+            saved_language
+            if saved_language in language_manager.get_available_languages()
+            else self.default_settings["language"]
         )
         settings_dict["creator_posts_max_attempts"] = self.qsettings.value(
             "creator_posts_max_attempts",
@@ -439,20 +431,20 @@ class SettingsTab(QWidget):
         self.creator_template_help_btn.clicked.connect(self.show_template_help)
         creator_custom_layout.addWidget(self.creator_template_help_btn, 0, 2)
 
-        self.creator_folder_name_label = QLabel(_t("folder_name_template", "Folder Name Template"))
+        self.creator_folder_name_label = QLabel(translate("folder_name_template"))
         creator_custom_layout.addWidget(self.creator_folder_name_label, 1, 0)
 
         # Folder name template combo (preset selections + editable custom)
         self.creator_folder_name_combo = QComboBox()
         self.creator_folder_name_combo.setEditable(True)
         self._folder_name_presets = [
-            ("tmpl_postid_posttitle_folder", "{post_id}_{post_title}", "Post ID + Title (default)"),
-            ("tmpl_posttitle_only", "{post_title}", "Title only (no ID)"),
+            ("tmpl_postid_posttitle_folder", "{post_id}_{post_title}"),
+            ("tmpl_posttitle_only", "{post_title}"),
         ]
-        for label_key, tpl, fallback_label in self._folder_name_presets:
-            self.creator_folder_name_combo.addItem(_t(label_key, fallback_label), tpl)
+        for label_key, tpl in self._folder_name_presets:
+            self.creator_folder_name_combo.addItem(translate(label_key), tpl)
         self.creator_folder_name_combo.addItem(
-            _t("tmpl_custom", "Custom..."), "{post_id}_{post_title}"
+            translate("tmpl_custom"), "{post_id}_{post_title}"
         )
         current_folder_tpl = self.temp_settings.get(
             "creator_folder_name_template", "{post_id}_{post_title}"
@@ -546,26 +538,6 @@ class SettingsTab(QWidget):
 
         self.update_group.setLayout(update_layout)
         layout.addWidget(self.update_group)
-
-        # Language Settings Group
-        self.language_group = QGroupBox()
-        self.language_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
-        )
-        language_layout = QGridLayout()
-
-        self.language_label = QLabel()
-        language_layout.addWidget(self.language_label, 0, 0)
-
-        self.language_combo = QComboBox()
-        self.update_language_combo()
-
-        self.language_combo.setStyleSheet("padding: 5px; border-radius: 5px;")
-        self.language_combo.currentIndexChanged.connect(self.update_language)
-        language_layout.addWidget(self.language_combo, 0, 1)
-
-        self.language_group.setLayout(language_layout)
-        layout.addWidget(self.language_group)
 
         # Font Settings Group
         self.font_group = QGroupBox()
@@ -816,27 +788,6 @@ class SettingsTab(QWidget):
 
         # Initialize Tor button states
         self.update_tor_button_states()
-
-    def update_language_combo(self):
-        self.language_combo.blockSignals(True)
-        current_language = self.temp_settings["language"]
-        self.language_combo.clear()
-        self.language_combo.addItem(translate("english"), "english")
-        self.language_combo.addItem(translate("japanese"), "japanese")
-        self.language_combo.addItem(translate("korean"), "korean")
-        self.language_combo.addItem(
-            translate("chinese-simplified"), "chinese-simplified"
-        )
-
-        for i in range(self.language_combo.count()):
-            if self.language_combo.itemData(i) == current_language:
-                self.language_combo.setCurrentIndex(i)
-                break
-        self.language_combo.blockSignals(False)
-
-    def update_language(self, index):
-        language = self.language_combo.itemData(index)
-        self.update_temp_setting("language", language)
 
     def update_font(self, index):
         font_family = self.font_combo.itemData(index)
@@ -1138,7 +1089,7 @@ class SettingsTab(QWidget):
         self.download_spinbox.blockSignals(False)
 
     def confirm_and_apply_settings(self):
-        language_name = language_manager.get_text(self.temp_settings["language"])
+        language_name = language_manager.get_language_name()
         proxy_status = (
             translate("enabled")
             if self.temp_settings["use_proxy"]
@@ -1232,8 +1183,6 @@ class SettingsTab(QWidget):
         self.parent.ensure_folders_exist()
 
         if old_base_folder != self.parent.base_folder:
-            self.parent.post_tab.cache_dir = self.parent.cache_folder
-            self.parent.post_tab.other_files_dir = self.parent.other_files_folder
             self.parent.creator_tab.cache_dir = self.parent.cache_folder
             self.parent.creator_tab.other_files_dir = self.parent.other_files_folder
 
@@ -1248,7 +1197,7 @@ class SettingsTab(QWidget):
 
         self.settings_applied.emit()
 
-        language_name = language_manager.get_text(self.settings["language"])
+        language_name = language_manager.get_language_name()
         proxy_status = (
             translate("enabled")
             if self.settings["use_proxy"]
@@ -1340,9 +1289,6 @@ class SettingsTab(QWidget):
         self.tor_path_input.setText(self.temp_settings["tor_path"])
         self.on_use_proxy_changed(self.temp_settings["use_proxy"])
 
-        # Update language combo box
-        self.update_language_combo()
-
         # Update font combo box
         default_font = self.temp_settings.get("font", "JetBrains Mono")
         self.font_combo.blockSignals(True)
@@ -1387,7 +1333,7 @@ class SettingsTab(QWidget):
         self.creator_custom_group.setTitle(translate("creator_downloader_settings"))
         self.creator_custom_label.setText(translate("filename_template"))
         self.creator_folder_name_label.setText(
-            _t("folder_name_template", "Folder Name Template")
+            translate("folder_name_template")
         )
         self.creator_folder_strategy_label.setText(translate("folder_strategy"))
         # Update template presets display (support language change)
@@ -1436,12 +1382,12 @@ class SettingsTab(QWidget):
                 )
                 self.creator_folder_name_combo.blockSignals(True)
                 self.creator_folder_name_combo.clear()
-                for label_key, tpl, fallback_label in self._folder_name_presets:
+                for label_key, tpl in self._folder_name_presets:
                     self.creator_folder_name_combo.addItem(
-                        _t(label_key, fallback_label), tpl
+                        translate(label_key), tpl
                     )
                 self.creator_folder_name_combo.addItem(
-                    _t("tmpl_custom", "Custom..."), "{post_id}_{post_title}"
+                    translate("tmpl_custom"), "{post_id}_{post_title}"
                 )
                 found_folder_index = None
                 for i in range(self.creator_folder_name_combo.count()):
@@ -1494,14 +1440,10 @@ class SettingsTab(QWidget):
             )
         if hasattr(self, "creator_folder_name_help_btn"):
             self.creator_folder_name_help_btn.setToolTip(
-                _t("folder_name_template_help_title", "Folder name template variables")
+                translate("folder_name_template_help_title")
             )
 
         # Update proxy and other text
-
-        self.language_group.setTitle(translate("language_settings"))
-        self.language_label.setText(translate("language"))
-        self.update_language_combo()
 
         self.font_group.setTitle(translate("font_settings"))
         self.font_label.setText(translate("font"))
