@@ -47,6 +47,24 @@ def make_tab(qtbot, tmp_path):
     return tab
 
 
+def test_verbose_logging_follows_the_settings_switch(qtbot, tmp_path):
+    """The tab reads the switch on startup and again when settings apply."""
+    parent = make_parent(tmp_path)
+    switch = {"verbose": True}
+    parent.settings_tab.get_verbose_logging = lambda: switch["verbose"]
+    tab = cd.CreatorDownloaderTab(parent)
+    qtbot.addWidget(tab)
+
+    assert tab._verbose_logging is True
+
+    switch["verbose"] = False
+    tab._refresh_verbose_logging()
+    assert tab._verbose_logging is False
+
+    tab.append_log_to_console("[DEBUG] now hidden", "DEBUG")
+    assert tab.log_line_count() == 0
+
+
 def test_log_panel_is_minimised_by_default(qtbot, tmp_path):
     tab = make_tab(qtbot, tmp_path)
 
@@ -90,8 +108,43 @@ def test_opening_the_panel_replays_the_buffer_in_order(qtbot, tmp_path):
     text = tab.creator_console.toPlainText()
     assert tab.creator_console.isVisibleTo(tab) is True
     assert text.index("first") < text.index("second") < text.index("third")
-    html = tab.creator_console.toHtml()
-    assert "#ffff00" in html and "#ff0000" in html
+    html = tab.creator_console.toHtml().lower()
+    # Colours come from the shared level palette, so WARNING and ERROR stay
+    # distinguishable (and readable on the #2A3B5A console).
+    assert cd.LOG_LEVEL_COLORS["WARNING"].lower() in html
+    assert cd.LOG_LEVEL_COLORS["ERROR"].lower() in html
+
+
+def test_level_to_colour_mapping_covers_every_level_and_unknowns(qtbot, tmp_path):
+    """One palette for every level, unknown levels included."""
+    tab = make_tab(qtbot, tmp_path)
+    tab._verbose_logging = True
+    for level in ("DEBUG", "INFO", "WARNING", "ERROR", "nonsense", "warning"):
+        tab.append_log_to_console(f"{level} line", level)
+
+    assert [colour for _, colour in tab.log_lines_from(0)] == [
+        cd.LOG_LEVEL_COLORS["DEBUG"],
+        cd.LOG_LEVEL_COLORS["INFO"],
+        cd.LOG_LEVEL_COLORS["WARNING"],
+        cd.LOG_LEVEL_COLORS["ERROR"],
+        cd.LOG_DEFAULT_COLOR,
+        cd.LOG_LEVEL_COLORS["WARNING"],  # levels are matched case-insensitively
+    ]
+
+
+def test_debug_lines_stay_out_of_the_log_unless_verbose_is_on(qtbot, tmp_path):
+    """DEBUG is dropped by default so it never fills the line cap."""
+    tab = make_tab(qtbot, tmp_path)
+    tab.append_log_to_console("[DEBUG] internal bookkeeping", "DEBUG")
+    tab.append_log_to_console("[INFO] run started", "INFO")
+    assert [m for m, _ in tab.log_lines_from(0)] == ["[INFO] run started"]
+
+    tab._verbose_logging = True
+    tab.append_log_to_console("[DEBUG] internal bookkeeping", "DEBUG")
+    assert [m for m, _ in tab.log_lines_from(0)] == [
+        "[INFO] run started",
+        "[DEBUG] internal bookkeeping",
+    ]
 
 
 def test_appending_while_open_shows_up_immediately(qtbot, tmp_path):

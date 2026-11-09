@@ -55,7 +55,7 @@ from kemonodownloader.download_history import (
 )
 from kemonodownloader.hash_db import HashDB
 from kemonodownloader.kd_language import translate
-from kemonodownloader.retry_policy import countdown_seconds
+from kemonodownloader.retry_policy import countdown_seconds, is_terminal_error
 
 
 def _log_line_html(message, color):
@@ -66,6 +66,20 @@ def _log_line_html(message, color):
 # Cap for the in-memory log store and for every log view, in lines, so the
 # store and both widgets always agree on how much history is kept.
 LOG_LINE_LIMIT = 5000
+
+# One colour per level, shared by the inline console and the log window and
+# taken from the muted palette the rest of the tab uses. The plain CSS
+# primaries this replaces were unreadable on the #2A3B5A console (green
+# #008000 sat at 2.2:1, red at 2.8:1) and DEBUG fell through to white, which
+# made the least important lines the loudest thing on screen.
+LOG_LEVEL_COLORS = {
+    "DEBUG": "#8A9BB5",
+    "INFO": "#D7E1F0",
+    "WARNING": "#E5C07B",
+    "ERROR": "#E06C75",
+}
+# Unknown levels keep the body text colour rather than shouting in white.
+LOG_DEFAULT_COLOR = "#D7E1F0"
 
 
 def get_post_published_date(post):
@@ -201,6 +215,9 @@ def analyze_post(post):
     - ``tags``: lower-case tag names, space joined
     - ``file_count``: main file + attachments + unique content images
     - ``has_compressed``: True when any of those files is a ZIP/7Z/RAR
+    - ``extensions``: sorted lower-case extensions of every file found, so
+      callers can ask which types a post actually holds
+    - ``extension_counts``: extension -> how many files of that type it holds
 
     The HTML body is parsed once, so callers needing several of these values
     should cache the returned dict instead of calling this again.
@@ -211,6 +228,7 @@ def analyze_post(post):
         "tags": "",
         "file_count": 0,
         "has_compressed": False,
+        "extensions": [],
     }
     if not isinstance(post, dict):
         return analysis
@@ -240,6 +258,13 @@ def analyze_post(post):
                     )
                 )
 
+    # How many files of each type this post holds, main file and attachments
+    # first. These counts back the "On (With filecount)" extension labels.
+    extension_counts = {}
+    for _, ext in names:
+        if ext:
+            extension_counts[ext] = extension_counts.get(ext, 0) + 1
+
     file_count = len(names)
     has_compressed = any(ext in COMPRESSED_EXTENSIONS for _, ext in names)
 
@@ -258,11 +283,18 @@ def analyze_post(post):
                     continue
                 seen_images.add(src)
                 file_count += 1
-                if file_extension(src) in COMPRESSED_EXTENSIONS:
+                image_ext = file_extension(src)
+                if image_ext in COMPRESSED_EXTENSIONS:
                     has_compressed = True
+                if image_ext:
+                    extension_counts[image_ext] = (
+                        extension_counts.get(image_ext, 0) + 1
+                    )
 
     analysis["file_count"] = file_count
     analysis["has_compressed"] = has_compressed
+    analysis["extensions"] = sorted(extension_counts)
+    analysis["extension_counts"] = extension_counts
     analysis["filenames"] = " ".join(name for name, _ in names).lower()
     analysis["tags"] = " ".join(parse_post_tags(post.get("tags"))).lower()
     return analysis
@@ -802,6 +834,7 @@ class PostDetectionThread(QThread):
         file_count_max=None,
         file_count_keep_compressed=False,
         post_search_index=None,
+        found_extensions=None,
     ):
         super().__init__()
         self.url = url
@@ -836,6 +869,10 @@ class PostDetectionThread(QThread):
         # feeds the Creator tab's "Search by" scopes. Only filled when the
         # caller passes a dict, so plain detection runs stay cost-free.
         self.post_search_index = post_search_index
+        # Optional shared dict (extension -> number of posts holding it), so
+        # the Creator tab can show the types this creator actually has. Like
+        # the search index it is only filled when the caller passes a dict.
+        self.found_extensions = found_extensions
         self._skipped_count = 0
         self._keyword_skipped_count = 0
         self._date_skipped_count = 0
@@ -855,6 +892,22 @@ class PostDetectionThread(QThread):
             analysis = analyze_post(post)
             self._analysis_cache[post_id] = analysis
         return analysis
+
+    def _record_found_extensions(self, analysis):
+        """Add this post's per-type file counts into found_extensions.
+
+        The values are file counts, not post counts, so each extension box can
+        say ".png (412)" without re-walking any payload.
+        """
+        if self.found_extensions is None:
+            return
+        counts = analysis.get("extension_counts") or {
+            ext: 1 for ext in analysis.get("extensions") or []
+        }
+        for ext, amount in counts.items():
+            self.found_extensions[ext] = (
+                self.found_extensions.get(ext, 0) + int(amount or 0)
+            )
 
     def _post_file_count_out_of_range(self, post):
         """Return True if *post* should be skipped because its file count falls
@@ -1147,12 +1200,12 @@ class PostDetectionThread(QThread):
                 "log_debug",
                 translate("parsed_url_service_creator", service, creator_id),
             ),
-            "INFO",
+            "DEBUG",
         )
 
         base_api_url = f"{self.domain_config['api_base']}/{service}/user/{creator_id}"
         self.log.emit(
-            translate("log_debug", translate("base_api_url", base_api_url)), "INFO"
+            translate("log_debug", translate("base_api_url", base_api_url)), "DEBUG"
         )
 
         # Parse query parameters
@@ -1324,7 +1377,10 @@ class PostDetectionThread(QThread):
             try:
 
                 if response is None:  # pragma: no cover
-                    self.log.emit("No response received from any endpoint", "ERROR")
+                    self.log.emit(
+                        translate("log_error", "No response received from any endpoint"),
+                        "ERROR",
+                    )
                     attempt += 1
                     continue
 
@@ -1468,13 +1524,20 @@ class PostDetectionThread(QThread):
                 # Feed the Creator tab's "Search by" scopes. The index holds
                 # lower-case text only, so filtering a keystroke stays a cheap
                 # substring test instead of re-parsing HTML every time.
-                if self.post_search_index is not None:
+                analysis = None
+                if (
+                    self.post_search_index is not None
+                    or self.found_extensions is not None
+                ):
                     analysis = self._analyze(post)
+                if analysis is not None and self.post_search_index is not None:
                     self.post_search_index[post_id] = {
                         "filenames": analysis["filenames"],
                         "description": analysis["description"],
                         "tags": analysis["tags"],
                     }
+                if analysis is not None:
+                    self._record_found_extensions(analysis)
 
             if not posts_data:
                 self.log.emit(
@@ -1619,7 +1682,7 @@ class PostPopulationThread(QThread):
                         thumbnail_url,
                     ),
                 ),
-                "INFO",
+                "DEBUG",
             )
         self.log.emit(
             translate(
@@ -1630,7 +1693,7 @@ class PostPopulationThread(QThread):
                     len(post_url_map),
                 ),
             ),
-            "INFO",
+            "DEBUG",
         )
         self.finished.emit(post_url_map, self.detected_posts)
 
@@ -1755,7 +1818,7 @@ class FilePreparationThread(QThread):
                     "log_debug",
                     translate("images_skipped_archive_present", len(skipped)),
                 ),
-                "INFO",
+                "DEBUG",
             )
         return kept
 
@@ -1791,7 +1854,7 @@ class FilePreparationThread(QThread):
             translate(
                 "log_debug", translate("detecting_files_for_post", allowed_extensions)
             ),
-            "INFO",
+            "DEBUG",
         )
 
         def get_effective_extension(file_path, file_name):
@@ -1816,25 +1879,25 @@ class FilePreparationThread(QThread):
                 translate(
                     "log_debug", translate("checking_main_file", file_name, file_ext)
                 ),
-                "INFO",
+                "DEBUG",
             )
             if self._record_file_skip(file_name):
                 self.log.emit(
                     translate(
                         "log_debug", translate("skipped_individual_file", file_name)
                     ),
-                    "INFO",
+                    "DEBUG",
                 )
             elif ".jpg" in allowed_extensions and file_ext in [".jpg", ".jpeg"]:
                 self.log.emit(
                     translate("log_debug", translate("added_main_file", file_name)),
-                    "INFO",
+                    "DEBUG",
                 )
                 files_to_download.append((file_name, file_url))
             elif file_ext in allowed_extensions:
                 self.log.emit(
                     translate("log_debug", translate("added_main_file", file_name)),
-                    "INFO",
+                    "DEBUG",
                 )
                 files_to_download.append((file_name, file_url))
 
@@ -1857,7 +1920,7 @@ class FilePreparationThread(QThread):
                                 "checking_attachment", attachment_name, attachment_ext
                             ),
                         ),
-                        "INFO",
+                        "DEBUG",
                     )
                     if self._record_file_skip(attachment_name):
                         self.log.emit(
@@ -1867,7 +1930,7 @@ class FilePreparationThread(QThread):
                                     "skipped_individual_file", attachment_name
                                 ),
                             ),
-                            "INFO",
+                            "DEBUG",
                         )
                     elif ".jpg" in allowed_extensions and attachment_ext in [
                         ".jpg",
@@ -1878,7 +1941,7 @@ class FilePreparationThread(QThread):
                                 "log_debug",
                                 translate("added_attachment", attachment_name),
                             ),
-                            "INFO",
+                            "DEBUG",
                         )
                         files_to_download.append((attachment_name, attachment_url))
                     elif attachment_ext in allowed_extensions:
@@ -1887,7 +1950,7 @@ class FilePreparationThread(QThread):
                                 "log_debug",
                                 translate("added_attachment", attachment_name),
                             ),
-                            "INFO",
+                            "DEBUG",
                         )
                         files_to_download.append((attachment_name, attachment_url))
 
@@ -1903,7 +1966,7 @@ class FilePreparationThread(QThread):
                         "log_debug",
                         translate("checking_content_image", img_name, img_ext),
                     ),
-                    "INFO",
+                    "DEBUG",
                 )
                 if self._record_file_skip(img_name):
                     self.log.emit(
@@ -1913,14 +1976,14 @@ class FilePreparationThread(QThread):
                                 "skipped_individual_file", img_name
                             ),
                         ),
-                        "INFO",
+                        "DEBUG",
                     )
                 elif ".jpg" in allowed_extensions and img_ext in [".jpg", ".jpeg"]:
                     self.log.emit(
                         translate(
                             "log_debug", translate("added_content_image", img_name)
                         ),
-                        "INFO",
+                        "DEBUG",
                     )
                     files_to_download.append((img_name, img_url))
                 elif img_ext in allowed_extensions:
@@ -1928,7 +1991,7 @@ class FilePreparationThread(QThread):
                         translate(
                             "log_debug", translate("added_content_image", img_name)
                         ),
-                        "INFO",
+                        "DEBUG",
                     )
                     files_to_download.append((img_name, img_url))
 
@@ -1936,7 +1999,7 @@ class FilePreparationThread(QThread):
             translate(
                 "log_debug", translate("total_files_detected", len(files_to_download))
             ),
-            "INFO",
+            "DEBUG",
         )
         files_to_download = self._drop_images_when_archive_present(files_to_download)
         return list(dict.fromkeys(files_to_download))
@@ -2010,7 +2073,7 @@ class FilePreparationThread(QThread):
                             "post_data_for_id", post_id, json.dumps(post, indent=2)
                         ),
                     ),
-                    "INFO",
+                    "DEBUG",
                 )
                 allowed_extensions = [
                     ext.lower()
@@ -2070,7 +2133,7 @@ class FilePreparationThread(QThread):
                 "log_debug",
                 translate("allowed_extensions_for_download", allowed_extensions),
             ),
-            "INFO",
+            "DEBUG",
         )
 
         total_posts = len(self.post_ids)
@@ -2123,7 +2186,7 @@ class FilePreparationThread(QThread):
                                         "log_debug",
                                         translate("detected_file", file_name, file_url),
                                     ),
-                                    "INFO",
+                                    "DEBUG",
                                 )
                             except RuntimeError:
                                 pass
@@ -2176,7 +2239,7 @@ class FilePreparationThread(QThread):
                     "log_debug",
                     translate("total_files_to_download", len(files_to_download)),
                 ),
-                "INFO",
+                "DEBUG",
             )
             # File-skip summary is emitted by CreatorDownloaderTab in
             # creator_download_finished() so it appears as the LAST line in the log.
@@ -2926,7 +2989,7 @@ class CreatorDownloadThread(QThread):
                                 f"[DEBUG 403] Server: {response.headers.get('Server')} | "
                                 f"CF-RAY: {response.headers.get('cf-ray')} | "
                                 f"Body: {response.text[:300]}",
-                                "ERROR",
+                                "DEBUG",
                             )
                         response.raise_for_status()
                         header = response.headers.get("content-length")
@@ -3032,6 +3095,25 @@ class CreatorDownloadThread(QThread):
                 return
 
             except (requests.RequestException, _RetryableDownloadError) as e:
+                resp = getattr(e, "response", None)
+                status_code = getattr(resp, "status_code", None)
+                if is_terminal_error(e):
+                    # 400/404/410/...: the request itself is wrong, so no
+                    # number of retries can succeed. Report it once instead of
+                    # spending the whole retry budget on it: a 404 used to cost
+                    # 50 requests and ~23 minutes of sleeping.
+                    error_msg = translate(
+                        "download_file_unavailable", file_url, status_code
+                    )
+                    self._safe_emit(
+                        self.log, translate("log_error", error_msg), "ERROR"
+                    )
+                    with self.failed_files_lock:
+                        self.failed_files[file_url] = error_msg
+                    self._safe_emit(self.file_progress, file_index, 0)
+                    self._safe_emit(self.file_completed, file_index, file_url, False)
+                    self.check_post_completion(file_url)
+                    return
                 if attempt == max_retries:
                     error_msg = translate(
                         "error_downloading_after_retries", file_url, max_retries, str(e)
@@ -3048,13 +3130,10 @@ class CreatorDownloadThread(QThread):
                 else:
                     # Exponential backoff instead of a flat 1s delay, so
                     # repeated failures don't hammer the server at a fixed
-                    # rate. status_code/Retry-After are only present on
-                    # requests.RequestException (HTTP errors); other
+                    # rate. Retry-After is only present on HTTP errors; other
                     # failures (timeouts, connection errors,
                     # _RetryableDownloadError) fall back to the plain
                     # exponential schedule.
-                    resp = getattr(e, "response", None)
-                    status_code = getattr(resp, "status_code", None)
                     retry_after_header = (
                         resp.headers.get("Retry-After") if resp is not None else None
                     )
@@ -3377,7 +3456,7 @@ class CheckboxToggleThread(QThread):
                     len(posts_to_download),
                 ),
             ),
-            "INFO",
+            "DEBUG",
         )
         self.finished.emit(self.checked_urls, posts_to_download)
 
@@ -3452,6 +3531,7 @@ class LogsWindow(QDialog):
         """
         if not self.needs_update or not self._parent:
             self.needs_update = False
+            self.update_timer.stop()
             return
 
         bar = self.logs_display.verticalScrollBar()
@@ -3478,6 +3558,10 @@ class LogsWindow(QDialog):
 
         bar.setValue(bar.maximum() if at_bottom else old_value)
         self.needs_update = False
+        # Caught up: idle instead of re-firing every 500 ms until the window
+        # closes. ``update_logs_content()`` restarts the timer on the next
+        # line, so nothing can be missed.
+        self.update_timer.stop()
 
     def closeEvent(self, a0):
         """Stop timer when window closes"""
@@ -3530,7 +3614,8 @@ class LogsWindow(QDialog):
             except Exception as e:
                 if self._parent and hasattr(self._parent, "append_log_to_console"):
                     self._parent.append_log_to_console(
-                        f"Failed to save logs: {str(e)}", "ERROR"
+                        translate("log_error", f"Failed to save logs: {str(e)}"),
+                        "ERROR",
                     )
 
 
@@ -3579,6 +3664,7 @@ class CreatorDownloaderTab(QWidget):
         # "tags"), filled while detecting posts so the "Search by" scopes can
         # filter the list without touching the network or re-parsing HTML.
         self.post_search_index = {}
+        self._found_type_counts = {}
         # Set when a filter request arrives while FilterThread is still
         # running, so the change is applied once that pass finishes.
         self._filter_refresh_pending = False
@@ -3623,6 +3709,9 @@ class CreatorDownloaderTab(QWidget):
         # touches a widget (and therefore never invalidates the layout).
         self._log_lines = []
         self._log_line_limit = LOG_LINE_LIMIT
+        # Debug lines are only kept when the Settings switch is on; refreshed
+        # whenever settings are applied and read once more on startup below.
+        self._verbose_logging = False
         # Count of lines dropped from the front of the store, so view indices
         # stay absolute even after the cap starts trimming.
         self._log_dropped = 0
@@ -3647,6 +3736,30 @@ class CreatorDownloaderTab(QWidget):
         if self._parent and hasattr(self._parent, "settings_tab"):
             self._parent.settings_tab.settings_applied.connect(self.refresh_ui)
             self._parent.settings_tab.language_changed.connect(self.update_ui_text)
+            self._parent.settings_tab.settings_applied.connect(
+                self._refresh_verbose_logging
+            )
+            self._parent.settings_tab.settings_applied.connect(
+                self._refresh_show_only_found_filetypes
+            )
+        self._refresh_verbose_logging()
+        self._refresh_show_only_found_filetypes()
+
+    def _refresh_verbose_logging(self):
+        """Pick up the Settings switch, tolerating a parent without settings."""
+        settings_tab = getattr(self._parent, "settings_tab", None)
+        getter = getattr(settings_tab, "get_verbose_logging", None)
+        self._verbose_logging = bool(getter()) if callable(getter) else False
+
+    def _refresh_show_only_found_filetypes(self):
+        """Pick up the Settings mode, then re-lay the extension boxes."""
+        settings_tab = getattr(self._parent, "settings_tab", None)
+        getter = getattr(settings_tab, "get_show_only_found_filetypes", None)
+        mode = getter() if callable(getter) else "off"
+        if mode not in ("on", "on_with_count"):
+            mode = "off"
+        self._found_filetypes_mode = mode
+        self._render_creator_ext_checks()
 
     def _create_thread_settings(self):
         """Create a ThreadSettings object with current settings values"""
@@ -3861,11 +3974,28 @@ class CreatorDownloaderTab(QWidget):
             ".jpe": QCheckBox("JPE"),
             ".webp": QCheckBox("WEBP"),
         }
+        # Remember the plain labels so the count suffix can be dropped again.
+        self._creator_ext_base_labels = {
+            ext: check.text() for ext, check in self.creator_ext_checks.items()
+        }
         for i, (ext, check) in enumerate(self.creator_ext_checks.items()):
             check.setChecked(False)
             check.stateChanged.connect(self.filter_items)
             creator_ext_layout.addWidget(check, i // 5, i % 5)
         self.creator_ext_group.setLayout(creator_ext_layout)
+        # Kept for _render_creator_ext_checks(), which re-lays the boxes from
+        # the Settings "Show only types found in creator" switch.
+        self._creator_ext_layout = creator_ext_layout
+
+        # Shown instead of the boxes when the filter is on and none of the
+        # supported types are present (no creator loaded, or a creator holding
+        # none of them), so an enabled filter never falls back to listing every
+        # type.
+        self.creator_ext_empty_label = QLabel(
+            translate("supported_filetypes_not_present")
+        )
+        self.creator_ext_empty_label.setStyleSheet("color: #8FA6C8;")
+        self.creator_ext_empty_label.setVisible(False)
         creator_options_layout.addWidget(self.creator_ext_group)
 
         self.creator_options_group.setLayout(creator_options_layout)
@@ -3962,6 +4092,15 @@ class CreatorDownloaderTab(QWidget):
         )
         post_list_layout = QVBoxLayout()
 
+        # Filters get their own box above the post list: they act on the whole
+        # creator rather than on the list widget, and keeping them out of the
+        # post group leaves that group height for the posts themselves.
+        self.filters_group = QGroupBox()
+        self.filters_group.setStyleSheet(
+            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+        )
+        filters_layout = QVBoxLayout()
+
         # Inline skip-keywords filter row (above search bar)
         skip_filter_layout = QHBoxLayout()
         skip_filter_layout.setContentsMargins(0, 0, 0, 0)
@@ -3989,7 +4128,7 @@ class CreatorDownloaderTab(QWidget):
         self.skip_keywords_help_btn.clicked.connect(self.show_skip_keywords_help)
         skip_filter_layout.addWidget(self.skip_keywords_help_btn)
 
-        post_list_layout.addLayout(skip_filter_layout)
+        filters_layout.addLayout(skip_filter_layout)
 
         # Skip scope toggles row — each toggle is independent (multi-select),
         # so a post is skipped if the keyword matches in ANY enabled scope.
@@ -4015,7 +4154,7 @@ class CreatorDownloaderTab(QWidget):
             self.skip_scope_checkboxes[value] = checkbox
         skip_scope_layout.addStretch()
 
-        post_list_layout.addLayout(skip_scope_layout)
+        filters_layout.addLayout(skip_scope_layout)
 
         file_skip_filter_layout = QHBoxLayout()
         file_skip_filter_layout.setContentsMargins(0, 0, 0, 0)
@@ -4045,7 +4184,7 @@ class CreatorDownloaderTab(QWidget):
         )
         file_skip_filter_layout.addWidget(self.file_skip_keywords_help_btn)
 
-        post_list_layout.addLayout(file_skip_filter_layout)
+        filters_layout.addLayout(file_skip_filter_layout)
 
         # Post date range filter — "From"/"To" bounds (both optional,
         # both inclusive). Filters by the post's own publish date, not
@@ -4089,7 +4228,7 @@ class CreatorDownloaderTab(QWidget):
         self.date_filter_help_btn.clicked.connect(self.show_date_filter_help)
         date_range_layout.addWidget(self.date_filter_help_btn)
 
-        post_list_layout.addLayout(date_range_layout)
+        filters_layout.addLayout(date_range_layout)
 
         # Post file-count range filter — "From"/"To" bounds on how many files
         # a post holds (main file + attachments + content images). Both bounds
@@ -4137,7 +4276,10 @@ class CreatorDownloaderTab(QWidget):
         self.file_count_help_btn.clicked.connect(self.show_file_count_help)
         file_count_layout.addWidget(self.file_count_help_btn)
 
-        post_list_layout.addLayout(file_count_layout)
+        filters_layout.addLayout(file_count_layout)
+
+        self.filters_group.setLayout(filters_layout)
+        right_layout.addWidget(self.filters_group)
 
         # "Search by" row — same layout as the skip-keyword "Filter By" row,
         # but it points the search bar at the ticked fields. Toggling a box
@@ -4340,6 +4482,9 @@ class CreatorDownloaderTab(QWidget):
 
         # Initial text update
         self.update_ui_text()
+        # Lay the extension boxes out once the widgets exist, so a persisted
+        # "on" filter starts empty instead of showing every type.
+        self._render_creator_ext_checks()
 
     def update_ui_text(self):
         self.creator_multi_url_input.setPlaceholderText(
@@ -4352,7 +4497,11 @@ class CreatorDownloaderTab(QWidget):
         self.creator_queue_group.setTitle(translate("creator_queue"))
         self.creator_options_group.setTitle(translate("download_options"))
         self.creator_ext_group.setTitle(translate("file_extensions"))
+        self.creator_ext_empty_label.setText(
+            translate("supported_filetypes_not_present")
+        )
         self.post_list_group.setTitle(translate("posts_to_download"))
+        self.filters_group.setTitle(translate("filters_group_title"))
 
         self.creator_main_check.setText(translate("main_file"))
         self.creator_attachments_check.setText(translate("attachments"))
@@ -4737,6 +4886,7 @@ class CreatorDownloaderTab(QWidget):
                         self.checked_urls = {}
                         self.all_files_map = {}
                         self.current_creator_url = None
+                        self._reset_found_extensions()
                         self.update_checked_posts()
                         self.filter_items()
                 else:
@@ -4812,6 +4962,7 @@ class CreatorDownloaderTab(QWidget):
         self.post_url_map = {}  # Clear previous creator's post URL mapping
         self.post_dates_map = {}  # Clear previous creator's post dates
         self.post_search_index = {}  # Clear previous creator's search index
+        self._reset_found_extensions()
         self.current_page = 1  # Reset pagination
         self.total_pages = 1
 
@@ -4921,6 +5072,7 @@ class CreatorDownloaderTab(QWidget):
                 self.file_count_keep_compressed_check.isChecked()
             ),
             post_search_index=self.post_search_index,
+            found_extensions=self._found_type_counts,
         )
         self.post_detection_thread.finished.connect(self.on_post_detection_finished)
         self.post_detection_thread.posts_batch.connect(self.on_posts_batch_received)
@@ -4946,6 +5098,9 @@ class CreatorDownloaderTab(QWidget):
         # Store reference to the detection thread for summary emission later
         self._last_detection_thread = self.post_detection_thread
         self._pending_detection_summary = True
+        # The posts are known now, so the extension boxes can reflect what
+        # this creator has (a no-op unless the toggle is ticked).
+        self._render_creator_ext_checks()
         self.start_population_thread(self.all_detected_posts)
 
     def on_posts_batch_received(self, batch_posts):
@@ -5034,7 +5189,7 @@ class CreatorDownloaderTab(QWidget):
                 "log_debug",
                 translate("incremental_filtering_added_posts", len(filtered_batch)),
             ),
-            "INFO",
+            "DEBUG",
         )
 
     def set_fetching_ui_state(self, is_fetching):
@@ -5209,7 +5364,7 @@ class CreatorDownloaderTab(QWidget):
                     len(self.filtered_posts[start_idx:end_idx]),
                 ),
             ),
-            "INFO",
+            "DEBUG",
         )
 
     def update_pagination_controls(self):
@@ -5291,7 +5446,7 @@ class CreatorDownloaderTab(QWidget):
                     self.current_creator_url,
                 ),
             ),
-            "INFO",
+            "DEBUG",
         )
         self.background_task_progress.setRange(0, 100)
         self.background_task_progress.setValue(0)
@@ -5586,7 +5741,7 @@ class CreatorDownloaderTab(QWidget):
                 "log_debug",
                 translate("prepared_files_for_download", self.total_files_to_download),
             ),
-            "INFO",
+            "DEBUG",
         )
         self.background_task_progress.setRange(0, 100)
         self.background_task_progress.setValue(0)
@@ -5699,7 +5854,7 @@ class CreatorDownloaderTab(QWidget):
                                 thread.__class__.__name__,
                             ),
                         ),
-                        "INFO",
+                        "DEBUG",
                     )
                 except Exception:
                     pass
@@ -5711,7 +5866,7 @@ class CreatorDownloaderTab(QWidget):
                 translate(
                     "log_debug", translate("remove_thread", thread.__class__.__name__)
                 ),
-                "INFO",
+                "DEBUG",
             )
 
         # Ensure the native thread has fully exited before we let the object
@@ -5738,7 +5893,7 @@ class CreatorDownloaderTab(QWidget):
         ):
             self.append_log_to_console(
                 translate("log_debug", translate("all_files_attempted_for_creator")),
-                "INFO",
+                "DEBUG",
             )
             # Clear any remaining active threads
             for t in self.active_threads[:]:
@@ -5769,7 +5924,7 @@ class CreatorDownloaderTab(QWidget):
             self.creator_download_finished()
         elif not self.active_threads:
             self.append_log_to_console(
-                translate("log_debug", translate("no_more_active_threads")), "INFO"
+                translate("log_debug", translate("no_more_active_threads")), "DEBUG"
             )
             self.creator_download_finished()
         else:
@@ -5784,7 +5939,7 @@ class CreatorDownloaderTab(QWidget):
                         len(self.active_threads),
                     ),
                 ),
-                "INFO",
+                "DEBUG",
             )
 
         # The run's thread is really gone now, so the retry button may unlock
@@ -5879,7 +6034,7 @@ class CreatorDownloaderTab(QWidget):
                         "log_debug",
                         translate("deleting_thread", thread.__class__.__name__),
                     ),
-                    "INFO",
+                    "DEBUG",
                 )
                 thread.deleteLater()
             except RuntimeError:
@@ -5953,7 +6108,7 @@ class CreatorDownloaderTab(QWidget):
                                 self.total_files_to_download,
                             ),
                         ),
-                        "INFO",
+                        "DEBUG",
                     )
             else:
                 if file_url not in self.failed_files:
@@ -5971,7 +6126,7 @@ class CreatorDownloaderTab(QWidget):
                             "log_debug",
                             translate("file_failed", file_url, len(self.failed_files)),
                         ),
-                        "INFO",
+                        "DEBUG",
                     )
             self.update_overall_progress()
             if (
@@ -5980,7 +6135,7 @@ class CreatorDownloaderTab(QWidget):
                 >= self.total_files_to_download
             ):
                 self.append_log_to_console(
-                    translate("log_debug", translate("all_files_attempted")), "INFO"
+                    translate("log_debug", translate("all_files_attempted")), "DEBUG"
                 )
                 self.creator_download_finished()
         if self.current_file_index == file_index:
@@ -6035,7 +6190,7 @@ class CreatorDownloaderTab(QWidget):
         ):
             self.append_log_to_console(
                 translate("log_debug", translate("all_posts_and_files_completed")),
-                "INFO",
+                "DEBUG",
             )
             # self.creator_download_finished()
 
@@ -6275,7 +6430,7 @@ class CreatorDownloaderTab(QWidget):
                     visible_count,
                 ),
             ),
-            "INFO",
+            "DEBUG",
         )
 
     def update_checked_posts(self):
@@ -6325,7 +6480,7 @@ class CreatorDownloaderTab(QWidget):
                     self.posts_to_download,
                 ),
             ),
-            "INFO",
+            "DEBUG",
         )
 
     def filter_items(self):
@@ -6393,7 +6548,7 @@ class CreatorDownloaderTab(QWidget):
                 "log_debug",
                 translate("filtering_completed_displayed_posts", len(filtered_items)),
             ),
-            "INFO",
+            "DEBUG",
         )
         # Surface which post filters dropped how many posts, next to the
         # progress bars instead of only in the log.
@@ -6587,7 +6742,7 @@ class CreatorDownloaderTab(QWidget):
                 )
                 + f" (Applied to {count} items)",
             ),
-            "INFO",
+            "DEBUG",
         )
         self.background_task_progress.setRange(0, 100)
         self.background_task_progress.setValue(0)
@@ -6628,7 +6783,7 @@ class CreatorDownloaderTab(QWidget):
             translate(
                 "log_debug", translate("check_all_state_updated", all_visible_checked)
             ),
-            "INFO",
+            "DEBUG",
         )
 
     def _on_row_double_click(self, item, event):
@@ -6786,9 +6941,12 @@ class CreatorDownloaderTab(QWidget):
         self.set_log_panel_visible(not self._log_visible)
 
     def append_log_to_console(self, message, level="INFO"):
-        color = {"INFO": "green", "WARNING": "yellow", "ERROR": "red"}.get(
-            level, "white"
-        )
+        level = str(level).upper()
+        # Debug lines describe the program to itself: skip them entirely
+        # unless verbose logging is on, so they never eat into the line cap.
+        if level == "DEBUG" and not self._verbose_logging:
+            return
+        color = LOG_LEVEL_COLORS.get(level, LOG_DEFAULT_COLOR)
         self._log_lines.append((message, color))
         if len(self._log_lines) > self._log_line_limit:
             dropped = len(self._log_lines) - self._log_line_limit
@@ -6846,6 +7004,71 @@ class CreatorDownloaderTab(QWidget):
             counts.items(), key=lambda item: (-item[1], item[0].lower())
         )
         return [f"  {keyword}: {count}" for keyword, count in ordered]
+
+    def _reset_found_extensions(self):
+        """Forget the file types collected for the previous creator.
+
+        The collected types describe one creator's posts, so they must never
+        outlive it: an empty view showing the last creator's types would keep
+        extension boxes hidden for files that no longer exist.
+        """
+        self._found_type_counts = {}
+        self._render_creator_ext_checks()
+
+    def _render_creator_ext_checks(self):
+        """Re-lay the file-extension boxes, hiding unused types.
+
+        With "Show only filetypes found in creator" set to on, boxes for
+        extensions this creator has no files of are dropped from the grid, so
+        the list reflects the creator instead of the whole catalogue; the
+        "On (With filecount)" mode also appends each type's file count. A
+        ticked box is always kept: hiding an active filter would silently
+        change what gets downloaded. Before detection has filled the shared
+        tally there is nothing to compare against, so every box stays visible.
+        """
+        layout = getattr(self, "_creator_ext_layout", None)
+        if layout is None:
+            return
+        mode = getattr(self, "_found_filetypes_mode", "off")
+        only_found = mode != "off"
+        show_counts = mode == "on_with_count"
+        found = getattr(self, "_found_type_counts", None) or {}
+        base_labels = getattr(self, "_creator_ext_base_labels", {})
+
+        # Empty the grid first; the dict still owns the checkboxes.
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setVisible(False)
+
+        row = 0
+        column = 0
+        shown = 0
+        for ext, checkbox in self.creator_ext_checks.items():
+            unused = ext not in found and not checkbox.isChecked()
+            if only_found and unused:
+                continue
+            label = base_labels.get(ext, checkbox.text())
+            if show_counts and ext in found:
+                checkbox.setText(f"{label} ({found[ext]})")
+            elif label:
+                checkbox.setText(label)
+            checkbox.setVisible(True)
+            layout.addWidget(checkbox, row, column)
+            column += 1
+            shown += 1
+            if column == 5:
+                column = 0
+                row += 1
+
+        # An enabled filter with nothing to compare against shows no boxes at
+        # all rather than the whole catalogue, with a hint saying why.
+        empty_label = getattr(self, "creator_ext_empty_label", None)
+        if empty_label is not None:
+            empty_label.setVisible(shown == 0)
+            if shown == 0:
+                layout.addWidget(empty_label, 0, 0, 1, 5)
 
     def _skip_tooltip(self):
         """Tooltip text listing how many skips each keyword caused."""
@@ -7188,7 +7411,7 @@ class CancellationThread(QThread):
                                 "signaled_stop_for_thread", thread.__class__.__name__
                             ),
                         ),
-                        "INFO",
+                        "DEBUG",
                     )
                 except RuntimeError:
                     self.log.emit(

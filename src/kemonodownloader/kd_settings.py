@@ -30,6 +30,12 @@ from kemonodownloader.kd_language import language_manager, translate
 GITHUB_REPO_URL = "https://github.com/VoxDroid/KemonoDownloader"
 
 
+# Modes for "Show only filetypes found in creator". Kept as plain strings
+# and validated on load so a hand-edited settings file cannot land on an
+# unknown state.
+SHOW_ONLY_FILETYPE_MODES = ("off", "on", "on_with_count")
+
+
 class SettingsTab(QWidget):
     settings_applied = pyqtSignal()
     language_changed = pyqtSignal()
@@ -53,6 +59,10 @@ class SettingsTab(QWidget):
             "post_data_max_retries": 7,
             "file_download_max_retries": 50,
             "api_request_max_retries": 3,
+            # Debug lines (internal bookkeeping and per-item detail the UI
+            # already summarises) stay out of the log unless this is on.
+            "verbose_logging": False,
+            "show_only_found_filetypes": "off",
             "use_proxy": False,
             "proxy_type": "tor",  # "custom", "tor"
             "custom_proxy_url": "",
@@ -133,6 +143,18 @@ class SettingsTab(QWidget):
             self.default_settings["api_request_max_retries"],
             type=int,
         )
+        settings_dict["verbose_logging"] = self.qsettings.value(
+            "verbose_logging",
+            self.default_settings["verbose_logging"],
+            type=bool,
+        )
+        settings_dict["show_only_found_filetypes"] = self.qsettings.value(
+            "show_only_found_filetypes",
+            self.default_settings["show_only_found_filetypes"],
+            type=str,
+        )
+        if settings_dict["show_only_found_filetypes"] not in SHOW_ONLY_FILETYPE_MODES:
+            settings_dict["show_only_found_filetypes"] = "off"
         settings_dict["use_proxy"] = False  # Always start with proxy disabled
         settings_dict["proxy_type"] = self.qsettings.value(
             "proxy_type", self.default_settings["proxy_type"], type=str
@@ -190,6 +212,13 @@ class SettingsTab(QWidget):
         )
         self.qsettings.setValue(
             "api_request_max_retries", self.settings["api_request_max_retries"]
+        )
+        self.qsettings.setValue(
+            "verbose_logging", self.settings.get("verbose_logging", False)
+        )
+        self.qsettings.setValue(
+            "show_only_found_filetypes",
+            self.settings.get("show_only_found_filetypes", "off"),
         )
         self.qsettings.setValue("proxy_type", self.settings["proxy_type"])
         self.qsettings.setValue("custom_proxy_url", self.settings["custom_proxy_url"])
@@ -519,6 +548,43 @@ class SettingsTab(QWidget):
         )
         creator_custom_layout.addWidget(self.creator_folder_strategy_combo, 2, 1)
 
+        # Limit the Creator tab extension boxes to the filetypes a creator
+        # really has: off, on, or on with a per-type filecount beside each box.
+        self.show_only_found_filetypes_label = QLabel()
+        self.show_only_found_filetypes_label.setStyleSheet("color: white;")
+        creator_custom_layout.addWidget(
+            self.show_only_found_filetypes_label, 3, 0
+        )
+
+        self.show_only_found_filetypes_combo = QComboBox()
+        for label_key, mode in (
+            ("filetype_filter_off", "off"),
+            ("filetype_filter_on", "on"),
+            ("filetype_filter_on_with_count", "on_with_count"),
+        ):
+            self.show_only_found_filetypes_combo.addItem(
+                translate(label_key), mode
+            )
+        self.show_only_found_filetypes_combo.setStyleSheet(
+            "padding: 5px; border-radius: 5px;"
+        )
+        current_mode = self.temp_settings.get(
+            "show_only_found_filetypes", "off"
+        )
+        for i in range(self.show_only_found_filetypes_combo.count()):
+            if self.show_only_found_filetypes_combo.itemData(i) == current_mode:
+                self.show_only_found_filetypes_combo.setCurrentIndex(i)
+                break
+        self.show_only_found_filetypes_combo.currentIndexChanged.connect(
+            lambda idx: self.update_temp_setting(
+                "show_only_found_filetypes",
+                self.show_only_found_filetypes_combo.itemData(idx),
+            )
+        )
+        creator_custom_layout.addWidget(
+            self.show_only_found_filetypes_combo, 3, 1, 1, 2
+        )
+
         self.creator_custom_group.setLayout(creator_custom_layout)
         layout.addWidget(self.creator_custom_group)
 
@@ -613,6 +679,23 @@ class SettingsTab(QWidget):
         # Unblock signals
         self.use_proxy_checkbox.blockSignals(False)
         self.proxy_type_combo.blockSignals(False)
+
+        # Verbose logging sits with the proxy switch at the bottom of the tab:
+        # both are "when a run misbehaves" knobs. Off by default, so the log
+        # keeps only events, warnings and errors.
+        self.verbose_logging_checkbox = QCheckBox()
+        self.verbose_logging_checkbox.setStyleSheet(
+            "QCheckBox::indicator { width: 16px; height: 16px; } "
+            "QCheckBox::indicator:unchecked { background: #2A3B5A; } "
+            "QCheckBox::indicator:checked { background: #4A6B9A; }"
+        )
+        self.verbose_logging_checkbox.setChecked(
+            bool(self.temp_settings.get("verbose_logging", False))
+        )
+        self.verbose_logging_checkbox.toggled.connect(
+            lambda checked: self.update_temp_setting("verbose_logging", bool(checked))
+        )
+        layout.addWidget(self.verbose_logging_checkbox)
 
         layout.addWidget(self.use_proxy_checkbox)
 
@@ -1275,6 +1358,16 @@ class SettingsTab(QWidget):
         self.api_request_max_retries_spinbox.setValue(
             self.temp_settings["api_request_max_retries"]
         )
+        self.verbose_logging_checkbox.setChecked(
+            bool(self.temp_settings.get("verbose_logging", False))
+        )
+        mode = self.temp_settings.get("show_only_found_filetypes", "off")
+        self.show_only_found_filetypes_combo.blockSignals(True)
+        for i in range(self.show_only_found_filetypes_combo.count()):
+            if self.show_only_found_filetypes_combo.itemData(i) == mode:
+                self.show_only_found_filetypes_combo.setCurrentIndex(i)
+                break
+        self.show_only_found_filetypes_combo.blockSignals(False)
 
         # Update proxy settings
         self.use_proxy_checkbox.blockSignals(True)
@@ -1323,6 +1416,26 @@ class SettingsTab(QWidget):
             translate("file_download_max_retries")
         )
         self.api_request_max_retries_label.setText(translate("api_request_max_retries"))
+        self.verbose_logging_checkbox.setText(translate("verbose_logging"))
+        self.verbose_logging_checkbox.setToolTip(translate("verbose_logging_tooltip"))
+        self.show_only_found_filetypes_label.setText(
+            translate("show_only_found_filetypes")
+        )
+        self.show_only_found_filetypes_combo.blockSignals(True)
+        for index, label_key in enumerate(
+            (
+                "filetype_filter_off",
+                "filetype_filter_on",
+                "filetype_filter_on_with_count",
+            )
+        ):
+            self.show_only_found_filetypes_combo.setItemText(
+                index, translate(label_key)
+            )
+        self.show_only_found_filetypes_combo.blockSignals(False)
+        self.show_only_found_filetypes_combo.setToolTip(
+            translate("show_only_found_filetypes_tooltip")
+        )
 
         self.update_group.setTitle(translate("update_settings"))
         self.github_repo_link.setText(
@@ -1479,6 +1592,19 @@ class SettingsTab(QWidget):
 
     def get_api_request_max_retries(self):
         return self.settings["api_request_max_retries"]
+
+    def get_verbose_logging(self):
+        """True when internal debug lines should reach the log."""
+        return bool(self.settings.get("verbose_logging", False))
+
+    def get_show_only_found_filetypes(self):
+        """Which filetype filter mode the Creator tab should use.
+
+        One of "off", "on" or "on_with_count"; anything unrecognised falls
+        back to "off" so a stale settings file cannot break the tab.
+        """
+        mode = str(self.settings.get("show_only_found_filetypes", "off"))
+        return mode if mode in SHOW_ONLY_FILETYPE_MODES else "off"
 
     def get_creator_filename_template(self):
         return self.settings.get("creator_filename_template", "{post_id}_{orig_name}")

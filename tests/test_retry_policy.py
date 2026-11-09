@@ -17,6 +17,7 @@ from kemonodownloader.retry_policy import (
     RETRY_AFTER_CAP,
     api_retry_delay,
     countdown_seconds,
+    is_terminal_error,
     is_terminal_status,
     retry_after_seconds,
 )
@@ -91,6 +92,36 @@ def test_terminal_statuses_are_not_retried(status_code):
 @pytest.mark.parametrize("status_code", [200, 403, 429, 500, 503, None, "nope"])
 def test_other_statuses_are_retryable(status_code):
     assert not is_terminal_status(status_code)
+
+
+class TestTerminalErrors:
+    """``is_terminal_error`` is what the download loop actually asks."""
+
+    @staticmethod
+    def _http_error(status_code):
+        response = SimpleNamespace(status_code=status_code)
+
+        class _Error(Exception):
+            pass
+
+        error = _Error("boom")
+        error.response = response
+        return error
+
+    @pytest.mark.parametrize("status_code", [400, 404, 410, 451])
+    def test_terminal_http_errors_are_final(self, status_code):
+        assert is_terminal_error(self._http_error(status_code))
+
+    @pytest.mark.parametrize("status_code", [403, 429, 500, 503])
+    def test_waf_and_server_errors_stay_retryable(self, status_code):
+        assert not is_terminal_error(self._http_error(status_code))
+
+    def test_errors_without_a_response_stay_retryable(self):
+        # Timeouts, connection resets and the size-mismatch sentinel carry no
+        # response, so they must never be treated as terminal.
+        assert not is_terminal_error(TimeoutError("read timed out"))
+        assert not is_terminal_error(SimpleNamespace(response=None))
+        assert not is_terminal_error(RuntimeError("size mismatch"))
 
 
 def test_creator_fetch_and_detect_uses_the_short_countdown(monkeypatch):

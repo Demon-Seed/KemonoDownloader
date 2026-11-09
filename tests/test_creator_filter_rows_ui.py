@@ -96,9 +96,13 @@ def _patch_detection_thread(monkeypatch):
     return FakeDetectionThread.instances
 
 
-def _row_index_holding(tab, widget):
-    """Index of the row (a QHBoxLayout) inside the post list group."""
-    layout = tab.post_list_group.layout()
+def _row_index_holding(tab, widget, group=None):
+    """Index of the row (a QHBoxLayout) inside a group box.
+
+    Defaults to the post list group; pass ``group=tab.filters_group`` for rows
+    that live in the Filters box above it.
+    """
+    layout = (group if group is not None else tab.post_list_group).layout()
     for i in range(layout.count()):
         row = layout.itemAt(i).layout()
         if row is not None and row.indexOf(widget) >= 0:
@@ -217,8 +221,10 @@ def test_incremental_filtering_uses_the_selected_scopes(qtbot, tmp_path, monkeyp
 def test_file_count_row_sits_below_the_date_range_row(qtbot, tmp_path):
     tab = make_tab(qtbot, tmp_path)
 
-    date_row = _row_index_holding(tab, tab.date_from_label)
-    count_row = _row_index_holding(tab, tab.file_count_label)
+    date_row = _row_index_holding(tab, tab.date_from_label, tab.filters_group)
+    count_row = _row_index_holding(
+        tab, tab.file_count_label, tab.filters_group
+    )
     assert date_row >= 0 and count_row > date_row
 
 

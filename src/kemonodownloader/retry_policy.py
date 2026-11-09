@@ -31,6 +31,21 @@ def is_terminal_status(status_code) -> bool:
         return False
 
 
+def is_terminal_error(error) -> bool:
+    """True when *error* carries a status code that retrying cannot fix.
+
+    ``requests`` hangs the response off ``HTTPError`` (raised by
+    ``raise_for_status``), so this covers exactly the failures where the
+    request itself is wrong.  Errors with no response attached - timeouts,
+    connection resets, our own size-mismatch sentinel - return ``False`` and
+    stay retryable.
+    """
+    response = getattr(error, "response", None)
+    if response is None:
+        return False
+    return is_terminal_status(getattr(response, "status_code", None))
+
+
 def retry_after_seconds(response) -> Optional[float]:
     """Return the server's Retry-After value in seconds, if it sent one."""
     headers = getattr(response, "headers", None)

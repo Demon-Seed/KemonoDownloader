@@ -28,6 +28,28 @@ def test_get_default_base_directory_platforms(monkeypatch, tmp_path):
     assert "Kemono Downloader" in path
 
 
+def test_show_only_found_filetypes_defaults_to_off():
+    s = SettingsTab.__new__(SettingsTab)
+    s.settings = {}
+
+    assert s.get_show_only_found_filetypes() == "off"
+
+
+def test_show_only_found_filetypes_reads_each_mode():
+    s = SettingsTab.__new__(SettingsTab)
+
+    for mode in ("off", "on", "on_with_count"):
+        s.settings = {"show_only_found_filetypes": mode}
+        assert s.get_show_only_found_filetypes() == mode
+
+
+def test_show_only_found_filetypes_falls_back_on_junk():
+    s = SettingsTab.__new__(SettingsTab)
+    s.settings = {"show_only_found_filetypes": "yes please"}
+
+    assert s.get_show_only_found_filetypes() == "off"
+
+
 def test_save_and_load_settings_roundtrip(tmp_path):
     ini_path = str(tmp_path / "test_settings.ini")
     qs = QSettings(ini_path, QSettings.Format.IniFormat)
@@ -44,6 +66,8 @@ def test_save_and_load_settings_roundtrip(tmp_path):
         "post_data_max_retries": 2,
         "file_download_max_retries": 5,
         "api_request_max_retries": 1,
+        "verbose_logging": False,
+        "show_only_found_filetypes": "off",
         "proxy_type": "custom",
         "custom_proxy_url": "http://127.0.0.1:8080",
         "tor_path": "",
