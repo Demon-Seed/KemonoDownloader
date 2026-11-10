@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from kemonodownloader import kd_paths
 from kemonodownloader.kd_language import language_manager, translate
 
 # Main repository (VoxDroid) used by the in-app update/repository links.
@@ -51,8 +52,14 @@ class SettingsTab(QWidget):
         # class to a temporary INI for the whole suite.
         self.qsettings = QSettings("VoxDroid", "KemonoDownloader")
         self.default_settings = {
+            # Legacy: the old "<save>/<folder name>" level is gone, so this no
+            # longer affects any path. Kept so existing configs keep loading.
             "base_folder_name": "Kemono Downloader",
             "base_directory": self.get_default_base_directory(),
+            # Where the app's own working files live (cache, databases). Defaults
+            # to the same folder as the Save Directory, so a fresh install keeps
+            # them together until the user splits them.
+            "data_directory": kd_paths.default_data_directory(),
             "simultaneous_downloads": 5,
             "language": "english",
             "creator_posts_max_attempts": 200,
@@ -87,19 +94,13 @@ class SettingsTab(QWidget):
         self.setup_ui()
 
     def get_default_base_directory(self):
-        """Return a platform-appropriate default directory for app data."""
-        if sys.platform == "win32":  # Windows
-            return os.path.join(
-                os.getenv("APPDATA", os.path.expanduser("~")), "Kemono Downloader"
-            )
-        elif sys.platform == "darwin":  # macOS
-            return os.path.expanduser("~/Library/Application Support/Kemono Downloader")
-        else:  # Linux and others
-            fallback_data_home = os.path.join(os.path.expanduser("~"), ".local/share")
-            return os.path.join(
-                os.getenv("XDG_DATA_HOME", fallback_data_home),
-                "Kemono Downloader",
-            )
+        """Return the platform-appropriate default Save Directory.
+
+        Shares the program-data default so a fresh install keeps the posts and
+        the app's own files in one place; the two are separate settings, so
+        either can be pointed elsewhere later.
+        """
+        return kd_paths.default_data_directory()
 
     def load_settings(self):
         settings_dict = {}
@@ -108,6 +109,12 @@ class SettingsTab(QWidget):
         )
         settings_dict["base_directory"] = self.qsettings.value(
             "base_directory", self.default_settings["base_directory"], type=str
+        )
+        settings_dict["data_directory"] = self.qsettings.value(
+            "data_directory",
+            self.default_settings.get("data_directory")
+            or kd_paths.default_data_directory(),
+            type=str,
         )
         settings_dict["simultaneous_downloads"] = self.qsettings.value(
             "simultaneous_downloads",
@@ -198,6 +205,9 @@ class SettingsTab(QWidget):
         self.qsettings.setValue("base_folder_name", self.settings["base_folder_name"])
         self.qsettings.setValue("base_directory", self.settings["base_directory"])
         self.qsettings.setValue(
+            "data_directory", self.settings.get("data_directory") or ""
+        )
+        self.qsettings.setValue(
             "simultaneous_downloads", self.settings["simultaneous_downloads"]
         )
         self.qsettings.setValue("language", self.settings["language"])
@@ -253,19 +263,8 @@ class SettingsTab(QWidget):
         )
         folder_layout = QGridLayout()
 
-        self.folder_name_label = QLabel()
-        folder_layout.addWidget(self.folder_name_label, 0, 0)
-        self.folder_name_input = QLineEdit(self.temp_settings["base_folder_name"])
-        self.folder_name_input.setStyleSheet("padding: 5px; border-radius: 5px;")
-        self.folder_name_input.textChanged.connect(
-            lambda: self.update_temp_setting(
-                "base_folder_name", self.folder_name_input.text()
-            )
-        )
-        folder_layout.addWidget(self.folder_name_input, 0, 1)
-
         self.directory_label = QLabel()
-        folder_layout.addWidget(self.directory_label, 1, 0)
+        folder_layout.addWidget(self.directory_label, 0, 0)
         self.directory_input = QLineEdit(self.temp_settings["base_directory"])
         self.directory_input.setStyleSheet("padding: 5px; border-radius: 5px;")
         self.directory_input.textChanged.connect(
@@ -273,21 +272,37 @@ class SettingsTab(QWidget):
                 "base_directory", self.directory_input.text()
             )
         )
-        folder_layout.addWidget(self.directory_input, 1, 1)
+        folder_layout.addWidget(self.directory_input, 0, 1)
 
         self.browse_button = QPushButton()
         self.browse_button.setStyleSheet(
             "background: #4A5B7A; padding: 5px; border-radius: 5px;"
         )
         self.browse_button.clicked.connect(self.browse_directory)
-        folder_layout.addWidget(self.browse_button, 1, 2)
+        folder_layout.addWidget(self.browse_button, 0, 2)
 
-        self.open_directory_button = QPushButton()
-        self.open_directory_button.setStyleSheet(
+        # Where the app keeps its own working files. Separate from the Save
+        # Directory so a library folder only ever holds saved posts.
+        self.data_directory_label = QLabel()
+        folder_layout.addWidget(self.data_directory_label, 1, 0)
+        self.data_directory_input = QLineEdit(
+            self.temp_settings.get("data_directory")
+            or kd_paths.default_data_directory()
+        )
+        self.data_directory_input.setStyleSheet("padding: 5px; border-radius: 5px;")
+        self.data_directory_input.textChanged.connect(
+            lambda: self.update_temp_setting(
+                "data_directory", self.data_directory_input.text()
+            )
+        )
+        folder_layout.addWidget(self.data_directory_input, 1, 1)
+
+        self.browse_data_button = QPushButton()
+        self.browse_data_button.setStyleSheet(
             "background: #4A5B7A; padding: 5px; border-radius: 5px;"
         )
-        self.open_directory_button.clicked.connect(self.open_app_directory)
-        folder_layout.addWidget(self.open_directory_button, 1, 3)
+        self.browse_data_button.clicked.connect(self.browse_data_directory)
+        folder_layout.addWidget(self.browse_data_button, 1, 2)
 
         self.folder_group.setLayout(folder_layout)
         layout.addWidget(self.folder_group)
@@ -917,33 +932,16 @@ class SettingsTab(QWidget):
             self.directory_input.setText(directory)
             self.update_temp_setting("base_directory", directory)
 
-    def open_app_directory(self):
-        """Open the current app directory in the system file explorer."""
-        directory = os.path.join(
-            self.temp_settings["base_directory"], self.temp_settings["base_folder_name"]
+    def browse_data_directory(self):
+        """Pick where the app keeps its own working files."""
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            translate("browse"),
+            kd_paths.data_directory(self.temp_settings.get("data_directory")),
         )
-
-        # Create directory if it doesn't exist
-        if not os.path.exists(directory):
-            try:
-                os.makedirs(directory, exist_ok=True)
-            except OSError:
-                QMessageBox.warning(
-                    self, translate("error"), f"Could not create directory: {directory}"
-                )
-                return
-
-        try:
-            if sys.platform == "win32":  # Windows
-                os.startfile(directory)
-            elif sys.platform == "darwin":  # macOS
-                subprocess.call(["open", directory])
-            else:  # Linux and other Unix-like systems
-                subprocess.call(["xdg-open", directory])
-        except Exception as e:
-            QMessageBox.warning(
-                self, translate("error"), f"Could not open directory: {str(e)}"
-            )
+        if directory:
+            self.data_directory_input.setText(directory)
+            self.update_temp_setting("data_directory", directory)
 
     def browse_tor_executable(self):
         """Browse for Tor executable file."""
@@ -1083,30 +1081,30 @@ class SettingsTab(QWidget):
                 ]
             )
 
-        # Also look for Tor inside the app's base directory / download folders
+        # Also look for Tor inside the app's data directory / save directory
         try:
             base_dir = self.temp_settings.get("base_directory")
-            base_name = self.temp_settings.get("base_folder_name")
+            data_dir = kd_paths.data_directory(
+                self.temp_settings.get("data_directory")
+            )
         except Exception:
             base_dir = None
-            base_name = None
+            data_dir = None
 
         candidate_roots = []
         if base_dir:
             candidate_roots.extend(
                 [
                     base_dir,
-                    os.path.join(base_dir, base_name) if base_name else base_dir,
                     os.path.join(base_dir, "Tor"),
-                    (
-                        os.path.join(base_dir, base_name, "Tor")
-                        if base_name
-                        else os.path.join(base_dir, "Tor")
-                    ),
+                    # Where older builds kept it, so an existing install is
+                    # still found after the folder layout change.
                     os.path.join(base_dir, "Downloads"),
                     os.path.join(base_dir, "Downloads", "Tor"),
                 ]
             )
+        if data_dir:
+            candidate_roots.extend([data_dir, os.path.join(data_dir, "Tor")])
 
         # If parent (app) provides download_folder use that too
         if hasattr(self, "parent") and getattr(self.parent, "download_folder", None):
@@ -1205,7 +1203,7 @@ class SettingsTab(QWidget):
             translate("confirm_settings_change"),
             translate(
                 "confirm_settings_message",
-                self.temp_settings["base_folder_name"],
+                kd_paths.data_directory(self.temp_settings.get("data_directory")),
                 self.temp_settings["base_directory"],
                 self.temp_settings["simultaneous_downloads"],
                 language_name,
@@ -1223,15 +1221,7 @@ class SettingsTab(QWidget):
         if reply == QMessageBox.StandardButton.No:
             return
 
-        if not self.temp_settings["base_folder_name"].strip():
-            QMessageBox.warning(
-                self, translate("invalid_input"), translate("folder_name_empty")
-            )
-            self.folder_name_input.setText(self.settings["base_folder_name"])
-            self.temp_settings["base_folder_name"] = self.settings["base_folder_name"]
-            return
-
-        # Create the base_directory if it doesn’t exist
+        # Create the Save Directory if it does not exist
         base_dir = self.temp_settings["base_directory"]
         if not os.path.isdir(base_dir):
             try:
@@ -1254,20 +1244,21 @@ class SettingsTab(QWidget):
             False  # Always keep proxy disabled in saved settings
         )
         self.save_settings()
-        old_base_folder = self.parent.base_folder
-        self.parent.base_folder = os.path.join(
-            self.settings["base_directory"], self.settings["base_folder_name"]
+        # Posts go straight into the Save Directory; the app's own files go to
+        # the Data Directory, so the library folder only ever holds posts.
+        self.parent.download_folder = self.settings["base_directory"]
+        self.parent.cache_folder = kd_paths.cache_dir(
+            self.settings.get("data_directory")
         )
-        self.parent.download_folder = os.path.join(self.parent.base_folder, "Downloads")
-        self.parent.cache_folder = os.path.join(self.parent.base_folder, "Cache")
-        self.parent.other_files_folder = os.path.join(
-            self.parent.base_folder, "Other Files"
+        self.parent.other_files_folder = kd_paths.other_files_dir(
+            self.settings.get("data_directory")
         )
         self.parent.ensure_folders_exist()
 
-        if old_base_folder != self.parent.base_folder:
-            self.parent.creator_tab.cache_dir = self.parent.cache_folder
-            self.parent.creator_tab.other_files_dir = self.parent.other_files_folder
+        creator_tab = getattr(self.parent, "creator_tab", None)
+        if creator_tab is not None:
+            creator_tab.cache_dir = self.parent.cache_folder
+            creator_tab.other_files_dir = self.parent.other_files_folder
 
         if language_changed:
             language_manager.set_language(self.settings["language"])
@@ -1311,7 +1302,7 @@ class SettingsTab(QWidget):
             translate("settings_applied"),
             translate(
                 "settings_applied_message",
-                self.settings["base_folder_name"],
+                kd_paths.data_directory(self.settings.get("data_directory")),
                 self.settings["base_directory"],
                 self.settings["simultaneous_downloads"],
                 language_name,
@@ -1342,8 +1333,11 @@ class SettingsTab(QWidget):
         self.temp_settings = self.default_settings.copy()
 
         # Update UI elements to reflect default values
-        self.folder_name_input.setText(self.temp_settings["base_folder_name"])
         self.directory_input.setText(self.temp_settings["base_directory"])
+        self.data_directory_input.setText(
+            self.temp_settings.get("data_directory")
+            or kd_paths.default_data_directory()
+        )
         self.download_slider.setValue(self.temp_settings["simultaneous_downloads"])
         self.download_spinbox.setValue(self.temp_settings["simultaneous_downloads"])
         self.creator_posts_max_attempts_spinbox.setValue(
@@ -1397,12 +1391,11 @@ class SettingsTab(QWidget):
 
     def update_ui_text(self):
         self.folder_group.setTitle(translate("folder_settings"))
-        self.folder_name_label.setText(translate("folder_name"))
         self.directory_label.setText(translate("save_directory"))
+        self.data_directory_label.setText(translate("data_directory"))
+        self.data_directory_input.setToolTip(translate("data_directory_tooltip"))
         self.browse_button.setText(translate("browse"))
-        self.open_directory_button.setText(
-            translate("open_directory")
-        )  # Added text for open directory button
+        self.browse_data_button.setText(translate("browse"))
 
         self.download_group.setTitle(translate("download_settings"))
         self.simultaneous_downloads_label.setText(translate("simultaneous_downloads"))
@@ -1993,10 +1986,9 @@ GeoIPExcludeUnknown 1
                 tor_url = "https://archive.torproject.org/tor-package-archive/torbrowser/15.0.3/tor-expert-bundle-linux-x86_64-15.0.3.tar.gz"
                 tor_extract_dir = "tor-expert-bundle-linux-x86_64-15.0.3"
 
-            # Create tor directory in app data
+            # Create tor directory in the app's data folder
             tor_path = os.path.join(
-                self.temp_settings["base_directory"],
-                self.temp_settings["base_folder_name"],
+                kd_paths.data_directory(self.temp_settings.get("data_directory")),
                 "Tor",
             )
             os.makedirs(tor_path, exist_ok=True)

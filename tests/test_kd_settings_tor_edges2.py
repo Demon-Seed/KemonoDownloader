@@ -20,57 +20,6 @@ def make_tab(tmp_path):
     return SettingsTab(parent)
 
 
-def test_open_app_directory_creation_failure_warns(tmp_path, monkeypatch, qapp):
-    tab = make_tab(tmp_path)
-    tab.temp_settings["base_directory"] = str(tmp_path)
-    tab.temp_settings["base_folder_name"] = "AppFolder"
-    target = os.path.join(str(tmp_path), "AppFolder")
-
-    real_exists = os.path.exists
-    monkeypatch.setattr(
-        ks.os.path,
-        "exists",
-        lambda p: False if p == target else real_exists(p),
-    )
-
-    def fail_makedirs(*args, **kwargs):
-        raise OSError("cannot create")
-
-    monkeypatch.setattr(ks.os, "makedirs", fail_makedirs)
-
-    warned = {}
-    monkeypatch.setattr(
-        ks.QMessageBox, "warning", lambda *a, **k: warned.setdefault("called", True)
-    )
-
-    tab.open_app_directory()
-    assert warned.get("called") is True
-
-
-def test_open_app_directory_open_failure_warns(tmp_path, monkeypatch, qapp):
-    tab = make_tab(tmp_path)
-    tab.temp_settings["base_directory"] = str(tmp_path)
-    tab.temp_settings["base_folder_name"] = "AppFolder"
-
-    app_dir = tmp_path / "AppFolder"
-    app_dir.mkdir(parents=True, exist_ok=True)
-
-    monkeypatch.setattr(ks.sys, "platform", "darwin")
-    monkeypatch.setattr(
-        ks.subprocess,
-        "call",
-        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("open failed")),
-    )
-
-    warned = {}
-    monkeypatch.setattr(
-        ks.QMessageBox, "warning", lambda *a, **k: warned.setdefault("called", True)
-    )
-
-    tab.open_app_directory()
-    assert warned.get("called") is True
-
-
 def test_browse_tor_executable_windows_updates_path(tmp_path, monkeypatch, qapp):
     tab = make_tab(tmp_path)
     tab.temp_settings["tor_path"] = ""

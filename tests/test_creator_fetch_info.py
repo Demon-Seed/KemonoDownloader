@@ -80,3 +80,98 @@ def test_fetch_creator_and_post_info_populates(monkeypatch, tmp_path):
     key = ("svc", "creator123", "1")
     assert key in thread.post_titles_map
     assert thread.post_titles_map[key] == sanitize_filename("Post Title")
+
+
+def test_creator_name_is_retried_before_falling_back(monkeypatch, tmp_path):
+    """One failed profile request must not rename the creator's folder.
+
+    Falling back to "Unknown_Creator" on a single blip put a creator's files in
+    two folders (12_Name and 12_Unknown_Creator).
+    """
+    import requests
+
+    monkeypatch.setattr(
+        "kemonodownloader.creator_downloader.time",
+        SimpleNamespace(sleep=lambda *_: None),
+    )
+
+    class FlakySession:
+        def __init__(self):
+            self.profile_attempts = 0
+
+        def get(self, url, *args, **kwargs):
+            if url.endswith("/profile"):
+                self.profile_attempts += 1
+                if self.profile_attempts == 1:
+                    raise requests.RequestException("blip")
+                return FakeResponse({"name": "Recovered Name"}, 200)
+            return FakeResponse({}, 404)
+
+    session = FlakySession()
+    thread = CreatorDownloadThread(
+        service="svc",
+        creator_id="creator123",
+        download_folder=str(tmp_path / "out"),
+        selected_posts=[],
+        files_to_download=[],
+        files_to_posts_map={},
+        console=None,
+        other_files_dir=str(tmp_path / "other"),
+        post_titles_map={},
+        auto_rename_enabled=False,
+        settings=make_settings(),
+        download_text=False,
+    )
+    monkeypatch.setattr(
+        "kemonodownloader.creator_downloader.get_session",
+        lambda settings_tab=None: session,
+    )
+
+    thread.fetch_creator_and_post_info()
+
+    assert session.profile_attempts == 2
+    assert thread.creator_name == sanitize_filename("Recovered Name")
+
+
+def test_creator_name_falls_back_after_the_last_attempt(monkeypatch, tmp_path):
+    import requests
+
+    monkeypatch.setattr(
+        "kemonodownloader.creator_downloader.time",
+        SimpleNamespace(sleep=lambda *_: None),
+    )
+
+    class DeadSession:
+        def __init__(self):
+            self.profile_attempts = 0
+
+        def get(self, url, *args, **kwargs):
+            if url.endswith("/profile"):
+                self.profile_attempts += 1
+                raise requests.RequestException("down")
+            return FakeResponse({}, 404)
+
+    session = DeadSession()
+    thread = CreatorDownloadThread(
+        service="svc",
+        creator_id="creator123",
+        download_folder=str(tmp_path / "out"),
+        selected_posts=[],
+        files_to_download=[],
+        files_to_posts_map={},
+        console=None,
+        other_files_dir=str(tmp_path / "other"),
+        post_titles_map={},
+        auto_rename_enabled=False,
+        settings=make_settings(),
+        download_text=False,
+    )
+    monkeypatch.setattr(
+        "kemonodownloader.creator_downloader.get_session",
+        lambda settings_tab=None: session,
+    )
+
+    thread.fetch_creator_and_post_info()
+
+    assert session.profile_attempts == 3
+    assert thread.creator_name == "Unknown_Creator"

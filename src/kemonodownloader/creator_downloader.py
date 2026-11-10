@@ -2,6 +2,7 @@ import asyncio
 import ctypes
 import gzip
 import hashlib
+import html
 import json
 import locale
 import os
@@ -46,7 +47,6 @@ from kemonodownloader.domain_config import (
     clean_file_url,
     file_host_headers,
     get_domain_config,
-    get_domains,
     warm_file_host,
 )
 from kemonodownloader.download_history import (
@@ -59,8 +59,15 @@ from kemonodownloader.retry_policy import countdown_seconds, is_terminal_error
 
 
 def _log_line_html(message, color):
-    """Render one log line as coloured rich text."""
-    return f"<span style='color:{color}'>{message}</span>"
+    """Render one log line as coloured rich text.
+
+    The text is escaped first: log messages carry server response bodies,
+    URLs and file names straight from the network, and the console renders
+    rich text. An unescaped ``<`` in a 403 body (or a filename like
+    ``a<b.png``) was parsed as markup, which swallowed the rest of the line
+    or silently rendered nothing.
+    """
+    return f"<span style='color:{color}'>{html.escape(str(message))}</span>"
 
 
 # Cap for the in-memory log store and for every log view, in lines, so the
@@ -106,6 +113,20 @@ def get_post_published_date(post):
             except Exception:
                 continue
     return None
+
+
+def _hash_file(path):
+    """Return the md5 of *path*, read in blocks.
+
+    Streamed so a multi-gigabyte file is never loaded into memory, and called
+    through ``asyncio.to_thread`` so hashing one file does not stall the other
+    downloads sharing the event loop.
+    """
+    digest = hashlib.md5()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def parse_filter_date(text):
@@ -382,7 +403,13 @@ class PostFilters(NamedTuple):
     file_count_min: object = None
     file_count_max: object = None
     keep_compressed: bool = False
-    required_filetypes: frozenset = frozenset()
+    # None = the filetype filter is off. An *empty* frozenset means the filter
+    # is on with nothing ticked, which no post can satisfy.
+    required_filetypes: object = None
+    # Whether the run also writes the post's description. A post holding no
+    # files at all still produces desc_<id>.txt when this is on, so it is not
+    # "empty" from the download's point of view.
+    download_post_text: bool = False
 
 
 def keyword_skip_reason(post_title, facts, filters):
@@ -482,15 +509,28 @@ def file_count_out_of_range(facts, filters):
 def filetypes_out_of_scope(facts, filters):
     """True when the post holds none of the required filetypes.
 
-    One file of a required type anywhere in the post keeps it, and a post
-    with nothing readable to compare is kept rather than dropped.
+    ``required_filetypes`` is None while the filter is off, and an empty set
+    while it is on with nothing ticked - a state nothing can satisfy, so the
+    list is empty on purpose.
+
+    One file of a required type anywhere in the post keeps it. A post with no
+    files at all is out of scope: a run would fetch nothing for it unless the
+    description is being downloaded, which is why "Download Post Text" keeps
+    text-only posts visible. A post that does hold files but whose types cannot
+    be read (no suffix on the name or path) is kept - dropping it would lose a
+    real download over a naming detail.
     """
-    required = set(filters.required_filetypes or ())
-    if not required:
+    required = filters.required_filetypes
+    if required is None:
         return False
+    required = set(required)
+    if not required:
+        return True
     extensions = set(facts.get("extensions") or [])
     if not extensions:
-        return False
+        if facts.get("file_count", 0) > 0:
+            return False
+        return not filters.download_post_text
     return not extensions & required
 
 
@@ -504,9 +544,14 @@ def post_skip_reason(post_title, facts, filters):
 
     *facts* is the post's entry in the tab's post index (see
     :func:`analyze_post`). A post with no entry is kept: emptying the list
-    because the details are unavailable would hide posts for no reason.
+    because the details are unavailable would hide posts for no reason. The
+    exception is a filetype filter that is on with nothing ticked - that
+    matches no post, so it needs no details to reject one.
     """
     if not isinstance(facts, dict):
+        required = filters.required_filetypes
+        if required is not None and not set(required):
+            return "filetypes", ""
         return None, ""
     keyword = keyword_skip_reason(post_title, facts, filters)
     if keyword:
@@ -627,11 +672,6 @@ def get_user_agent() -> str:
     return _user_agent
 
 
-# get_domain_config is imported from domain_config; re-exported for
-# any callers that import it directly from this module.
-__all__ = ["get_domain_config", "get_domains"]
-
-
 # Default headers (will be updated per request based on domain)
 def _build_headers() -> dict:
     # Use the first/default domain's referer for the generic header set
@@ -661,10 +701,6 @@ def get_headers() -> dict:
     if HEADERS is None:
         HEADERS = _build_headers()
     return HEADERS
-
-
-# API_BASE kept for backwards compatibility; resolves to first domain's api_base
-API_BASE = get_domain_config("")["api_base"]
 
 
 # Thread-local storage for per-thread sessions.
@@ -980,17 +1016,11 @@ def _keyword_matches_text(keywords, text):
         keyword_lower = keyword.lower()
         if not keyword_lower:
             continue
-        try:
-            pattern = (
-                r"(?<![a-z0-9])"
-                + re.escape(keyword_lower)
-                + r"(?![a-z0-9])"
-            )
-            if re.search(pattern, text_lower):
-                return True
-        except re.error:
-            if keyword_lower in text_lower:
-                return True
+        # re.escape() cannot produce an invalid pattern, so this is a plain
+        # whole-word search; the old re.error fallback was unreachable.
+        pattern = r"(?<![a-z0-9])" + re.escape(keyword_lower) + r"(?![a-z0-9])"
+        if re.search(pattern, text_lower):
+            return True
     return False
 
 
@@ -1086,7 +1116,9 @@ class PostDetectionThread(QThread):
             file_count_min=self.file_count_min,
             file_count_max=self.file_count_max,
             keep_compressed=self.file_count_keep_compressed,
-            required_filetypes=frozenset(self.required_filetypes),
+            # Empty means "no requirement" for callers using the individual
+            # options, which is the off state, not "on with nothing ticked".
+            required_filetypes=frozenset(self.required_filetypes) or None,
         )
         self._skipped_count = 0
         self._keyword_skipped_count = 0
@@ -1128,6 +1160,36 @@ class PostDetectionThread(QThread):
         self.is_running = False
 
     def run(self):
+        """Run the detection pass, always leaving the tab able to continue.
+
+        Everything this thread touches comes off the network, so an
+        unexpected shape (``attachments: null``, a non-dict ``file``) used
+        to raise inside ``run``: Qt printed the traceback to stderr, no
+        signal was emitted, and the tab stayed in its fetching state with
+        every other tab disabled. Whatever goes wrong now reaches the tab,
+        whose error handler unlocks the UI.
+        """
+        try:
+            self._run()
+        except Exception as e:
+            try:
+                self.log.emit(
+                    translate(
+                        "log_error", translate("unexpected_error_detecting", str(e))
+                    ),
+                    "ERROR",
+                )
+            except Exception:
+                pass
+            # A cancelled run stops on purpose: the cancel path owns the
+            # cleanup, so only a genuine failure is reported here.
+            if self.is_running:
+                try:
+                    self.error.emit(str(e))
+                except Exception:
+                    pass
+
+    def _run(self):
         try:
             if not self.is_running:
                 return
@@ -1358,14 +1420,6 @@ class PostDetectionThread(QThread):
             response_text = ""
             try:
 
-                if response is None:  # pragma: no cover
-                    self.log.emit(
-                        translate("log_error", "No response received from any endpoint"),
-                        "ERROR",
-                    )
-                    attempt += 1
-                    continue
-
                 is_gzipped = response.content[:2] == b"\x1f\x8b"
 
                 if is_gzipped:
@@ -1566,17 +1620,20 @@ class PostDetectionThread(QThread):
                 if reason is not None:
                     self._skipped_count += 1
                 thumbnail_url = None
-                if "file" in post and post["file"] and "path" in post["file"]:
-                    if (
-                        post["file"]["path"]
-                        .lower()
-                        .endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
+                # The API has been seen to send ``"attachments": null`` and a
+                # non-dict ``file``; neither is a reason to lose the whole
+                # fetch, so anything unexpected is simply "no thumbnail".
+                main_file = post.get("file")
+                if isinstance(main_file, dict) and main_file.get("path"):
+                    if main_file["path"].lower().endswith(
+                        (".jpg", ".jpeg", ".png", ".gif", ".webp")
                     ):
                         thumbnail_url = clean_file_url(
-                            post["file"]["path"], self.domain_config
+                            main_file["path"], self.domain_config
                         )
-                if not thumbnail_url and "attachments" in post:
-                    for attachment in post["attachments"]:
+                attachments = post.get("attachments")
+                if not thumbnail_url and isinstance(attachments, list):
+                    for attachment in attachments:
                         if (
                             isinstance(attachment, dict)
                             and "path" in attachment
@@ -1590,12 +1647,11 @@ class PostDetectionThread(QThread):
                             break
                 if (
                     not thumbnail_url
-                    and "file" in post
-                    and post["file"]
-                    and "path" in post["file"]
+                    and isinstance(main_file, dict)
+                    and main_file.get("path")
                 ):
                     thumbnail_url = clean_file_url(
-                        post["file"]["path"], self.domain_config
+                        main_file["path"], self.domain_config
                     )
                 batch_posts.append((title, (post_id, thumbnail_url)))
 
@@ -1817,11 +1873,23 @@ class FilePreparationThread(QThread):
         max_concurrent=20,
         file_skip_keywords=None,
         skip_images_if_compressed=False,
+        allowed_extensions=None,
     ):
         super().__init__()
         self.post_ids = post_ids
         self.all_files_map = all_files_map
         self.creator_ext_checks = creator_ext_checks
+        # Snapshot the ticked extensions here, on the GUI thread. The workers
+        # used to call checkbox.isChecked() themselves, which is a widget read
+        # from a foreign thread and picked up any tick made mid-run.
+        if allowed_extensions is not None:
+            self.allowed_extensions = [str(ext).lower() for ext in allowed_extensions]
+        else:
+            self.allowed_extensions = [
+                str(ext).lower()
+                for ext, checkbox in (creator_ext_checks or {}).items()
+                if checkbox.isChecked()
+            ]
         self.creator_main_check = creator_main_check
         self.creator_attachments_check = creator_attachments_check
         self.creator_content_check = creator_content_check
@@ -1921,14 +1989,14 @@ class FilePreparationThread(QThread):
             return name_ext if name_ext else path_ext
 
         # Main file detection
+        main_file = post.get("file")
         if (
             self.creator_main_check
-            and "file" in post
-            and post["file"]
-            and "path" in post["file"]
+            and isinstance(main_file, dict)
+            and main_file.get("path")
         ):
-            file_path = post["file"]["path"]
-            file_name = post["file"].get("name", "")
+            file_path = main_file["path"]
+            file_name = main_file.get("name", "")
             file_ext = get_effective_extension(file_path, file_name)
             file_url = clean_file_url(file_path, domain_config)
             if "f=" not in file_url and file_name:
@@ -1960,8 +2028,9 @@ class FilePreparationThread(QThread):
                 files_to_download.append((file_name, file_url))
 
         # Attachments detection
-        if self.creator_attachments_check and "attachments" in post:
-            for attachment in post["attachments"]:
+        attachments = post.get("attachments")
+        if self.creator_attachments_check and isinstance(attachments, list):
+            for attachment in attachments:
                 if isinstance(attachment, dict) and "path" in attachment:
                     attachment_path = attachment["path"]
                     attachment_name = attachment.get("name", "")
@@ -2087,19 +2156,43 @@ class FilePreparationThread(QThread):
                 headers = get_headers().copy()
                 headers["Referer"] = domain_config["referer"]
                 response = get_session(self.settings.settings_tab).get(
-                    api_url, headers=headers
+                    api_url, headers=headers, timeout=(15, 30)
                 )
                 if response.status_code != 200:
-                    if response.status_code == 429 and attempt < max_retries:
-                        self.log.emit(
-                            translate(
-                                "log_warning",
+                    # A 429 is a rate limit and a 5xx is the server having a bad
+                    # day; both are worth the retry budget. Other 4xx mean the
+                    # request itself is wrong, so retrying cannot help.
+                    retryable_status = response.status_code == 429 or (
+                        500 <= response.status_code < 600
+                    )
+                    if retryable_status and attempt < max_retries:
+                        if response.status_code == 429:
+                            self.log.emit(
                                 translate(
-                                    "rate_limit_hit", api_url, attempt, max_retries
+                                    "log_warning",
+                                    translate(
+                                        "rate_limit_hit",
+                                        api_url,
+                                        attempt,
+                                        max_retries,
+                                    ),
                                 ),
-                            ),
-                            "WARNING",
-                        )
+                                "WARNING",
+                            )
+                        else:
+                            self.log.emit(
+                                translate(
+                                    "log_warning",
+                                    translate(
+                                        "server_error_retrying",
+                                        api_url,
+                                        response.status_code,
+                                        attempt,
+                                        max_retries,
+                                    ),
+                                ),
+                                "WARNING",
+                            )
                         delay = countdown_seconds(attempt, retry_delay_seconds)
                         for i in range(delay, 0, -1):
                             self.log.emit(
@@ -2133,18 +2226,10 @@ class FilePreparationThread(QThread):
                     ),
                     "DEBUG",
                 )
-                allowed_extensions = [
-                    ext.lower()
-                    for ext, checkbox in self.creator_ext_checks.items()
-                    if checkbox.isChecked()
-                ]
                 detected_files = self.detect_files(
-                    post, allowed_extensions, domain_config
+                    post, self.allowed_extensions, domain_config
                 )
-                files_to_download = [
-                    (file_name, file_url) for file_name, file_url in detected_files
-                ]
-                return (post_id, files_to_download)
+                return (post_id, detected_files)
             except Exception as e:
                 if attempt == max_retries:
                     self.log.emit(
@@ -2181,15 +2266,12 @@ class FilePreparationThread(QThread):
             return
         files_to_download = []
         files_to_posts_map = {}
-        allowed_extensions = [
-            ext.lower()
-            for ext, checkbox in self.creator_ext_checks.items()
-            if checkbox.isChecked()
-        ]
         self.log.emit(
             translate(
                 "log_debug",
-                translate("allowed_extensions_for_download", allowed_extensions),
+                translate(
+                    "allowed_extensions_for_download", self.allowed_extensions
+                ),
             ),
             "DEBUG",
         )
@@ -2250,8 +2332,19 @@ class FilePreparationThread(QThread):
                                 pass
                             files_to_download.append(file_url)
                             files_to_posts_map[file_url] = pid_result
-            except Exception:
-                pass  # fetch_and_detect_files handles its own logging
+            except Exception as e:
+                # fetch_and_detect_files logs its own failures, but anything it
+                # raises on the way out used to vanish here: a post's files
+                # then simply never appeared, with no line saying why.
+                try:
+                    self.log.emit(
+                        translate(
+                            "log_error", translate("unexpected_error_detecting", str(e))
+                        ),
+                        "ERROR",
+                    )
+                except RuntimeError:
+                    pass
             finally:
                 with slot_lock:
                     active_slots[0] -= 1
@@ -2290,18 +2383,35 @@ class FilePreparationThread(QThread):
             while w.is_alive() and time.monotonic() < _deadline:
                 time.sleep(0.05)
 
+        # Whatever those stragglers were about to queue is lost, so say it
+        # rather than dropping their files silently: a run of 429 countdowns
+        # was enough to hit the deadline and leave files unexplained.
+        stragglers = [w for w in workers if w.is_alive()]
+        if stragglers and self.is_running:
+            self.log.emit(
+                translate(
+                    "log_warning",
+                    translate("file_preparation_deadline_warning", len(stragglers)),
+                ),
+                "WARNING",
+            )
+
         if self.is_running:
-            files_to_download = list(dict.fromkeys(files_to_download))
+            # Snapshot under the workers' lock: a straggler may still be
+            # appending, and iterating the live list would race with it.
+            with results_lock:
+                queued = list(dict.fromkeys(files_to_download))
+                queued_map = dict(files_to_posts_map)
             self.log.emit(
                 translate(
                     "log_debug",
-                    translate("total_files_to_download", len(files_to_download)),
+                    translate("total_files_to_download", len(queued)),
                 ),
                 "DEBUG",
             )
             # File-skip summary is emitted by CreatorDownloaderTab in
             # creator_download_finished() so it appears as the LAST line in the log.
-            self.finished.emit(files_to_download, files_to_posts_map)
+            self.finished.emit(queued, queued_map)
 
 
 def sanitize_filename(name, max_length=100):
@@ -2381,13 +2491,9 @@ class CreatorDownloadThread(QThread):
         self.post_titles_map = post_titles_map
         self.creator_name = None
         self.auto_rename_enabled = auto_rename_enabled
-        self.download_text = download_text
         self.skip_folder_enabled = skip_folder_enabled
         self.skip_folder_threshold = skip_folder_threshold
         self.force_folder_for_compressed = force_folder_for_compressed
-        # Extensions treated as "compressed archives" for the
-        # force_folder_for_compressed toggle.
-        self.COMPRESSED_EXTENSIONS = (".zip", ".7z", ".rar")
         self.domain_config = self._get_domain_config_from_files()
         # Locks for thread-safe access to shared dictionaries
         self.failed_files_lock = threading.Lock()
@@ -2432,57 +2538,102 @@ class CreatorDownloadThread(QThread):
         return post_files_map
 
     def build_post_order_map(self):
-        """Map each post id to its 1-based position in the selection order.
+        """Map each post id to the block number its files share.
 
         ``files_to_download`` is assembled by concurrent detection threads
         (``FilePreparationThread._worker``), so the order of posts *within*
-        that flat list is not deterministic. ``selected_posts`` keeps the
-        order the user selected/detected the posts in, which is the order
-        the auto-rename prefix must follow so that every post stays a
-        contiguous, internally ordered block when posts share a folder.
+        that flat list is not deterministic. The block number therefore comes
+        from the download database: a post is numbered once, on first sight,
+        and keeps that number for every later run. Without that, the number was
+        the post's rank in the current selection, so downloading a different
+        set renamed the same post's files and left duplicates behind.
         """
-        post_order_map = {}
+        ordered_ids = []
+        seen = set()
         for post_id in self.selected_posts:
-            if post_id not in post_order_map:
-                post_order_map[post_id] = len(post_order_map) + 1
+            if post_id not in seen:
+                seen.add(post_id)
+                ordered_ids.append(post_id)
         # Defensive: ids that reached the queue without being listed in
         # ``selected_posts`` (e.g. files whose url is missing from
         # ``files_to_posts_map`` default to the creator id) still need a
         # stable slot instead of colliding with post 1.
         for file_url in self.files_to_download:
             post_id = self.files_to_posts_map.get(file_url)
-            if post_id is not None and post_id not in post_order_map:
-                post_order_map[post_id] = len(post_order_map) + 1
+            if post_id is not None and post_id not in seen:
+                seen.add(post_id)
+                ordered_ids.append(post_id)
+
+        stored = self._stored_post_blocks(ordered_ids)
+        post_order_map = {}
+        for post_id in ordered_ids:
+            block = stored.get(str(post_id))
+            post_order_map[post_id] = block if block else len(post_order_map) + 1
         return post_order_map
 
-    def get_post_order(self, post_id):
-        """Return the 1-based selection order of *post_id*.
+    def _stored_post_blocks(self, post_ids):
+        """Return ``{post_id: block}`` from the database, or ``{}``.
 
-        Unknown ids are appended to the end of the order so they still form
-        a single stable block. This only mutates on the first miss, which
-        happens on the download event loop thread.
+        A download run must never fail because the block table is unavailable,
+        so any database problem falls back to numbering in selection order.
+        """
+        assign = getattr(self.hash_db, "assign_post_blocks", None)
+        if assign is None:
+            return {}
+        try:
+            return assign(self.service, self.creator_id, post_ids) or {}
+        except Exception:
+            return {}
+
+    def get_post_order(self, post_id):
+        """Return the block number of *post_id*, assigning one on first sight.
+
+        Unknown ids are numbered after the highest one this run already has and
+        persisted, so they still form a single stable block.
         """
         order = self.post_order_map.get(post_id)
         if order is None:
-            order = len(self.post_order_map) + 1
+            stored = self._stored_post_blocks([post_id])
+            order = stored.get(str(post_id)) or (
+                max(self.post_order_map.values(), default=0) + 1
+            )
             self.post_order_map[post_id] = order
         return order
 
     def fetch_creator_and_post_info(self):
         """Fetch creator name and retrieve post titles from post_titles_map."""
         profile_url = f"{self.domain_config['api_base']}/{self.service}/user/{self.creator_id}/profile"
-        try:
-            headers = get_headers().copy()
-            headers["Referer"] = self.domain_config["referer"]
-            profile_response = get_session(self.settings.settings_tab).get(
-                profile_url, headers=headers, timeout=10
-            )
-            if profile_response.status_code == 200:
-                profile_data = profile_response.json()
-                self.creator_name = sanitize_filename(
-                    profile_data.get("name", "Unknown_Creator")
+        # The creator name becomes a folder name, so a single blip must not
+        # rename it: falling back to "Unknown_Creator" split a creator's files
+        # across two folders. Retry before accepting the fallback.
+        profile_attempts = 3
+        for attempt in range(1, profile_attempts + 1):
+            try:
+                headers = get_headers().copy()
+                headers["Referer"] = self.domain_config["referer"]
+                profile_response = get_session(self.settings.settings_tab).get(
+                    profile_url, headers=headers, timeout=10
                 )
-            else:
+                if profile_response.status_code == 200:
+                    profile_data = profile_response.json()
+                    self.creator_name = sanitize_filename(
+                        profile_data.get("name", "Unknown_Creator")
+                    )
+                    break
+                if attempt < profile_attempts:
+                    self._safe_emit(
+                        self.log,
+                        translate(
+                            "log_debug",
+                            translate(
+                                "retrying_creator_name_fetch",
+                                f"HTTP {profile_response.status_code}",
+                            ),
+                        ),
+                        "DEBUG",
+                    )
+                    time.sleep(1)
+                    continue
                 self.creator_name = "Unknown_Creator"
                 self._safe_emit(
                     self.log,
@@ -2492,15 +2643,29 @@ class CreatorDownloadThread(QThread):
                     ),
                     "WARNING",
                 )
-        except requests.RequestException as e:
-            self._safe_emit(
-                self.log,
-                translate(
-                    "log_error", translate("error_fetching_creator_name", str(e))
-                ),
-                "ERROR",
-            )
-            self.creator_name = "Unknown_Creator"
+                break
+            except requests.RequestException as e:
+                if attempt < profile_attempts:
+                    self._safe_emit(
+                        self.log,
+                        translate(
+                            "log_debug",
+                            translate("retrying_creator_name_fetch", str(e)),
+                        ),
+                        "DEBUG",
+                    )
+                    time.sleep(1)
+                    continue
+                self._safe_emit(
+                    self.log,
+                    translate(
+                        "log_error",
+                        translate("error_fetching_creator_name", str(e)),
+                    ),
+                    "ERROR",
+                )
+                self.creator_name = "Unknown_Creator"
+                break
 
         for post_id in self.selected_posts:
             key = (self.service, self.creator_id, post_id)
@@ -2730,7 +2895,7 @@ class CreatorDownloadThread(QThread):
         else:  # per_post (default)
             # Check if skip-folder toggle is on and this post has few enough files
             post_file_count = len(self.post_files_map.get(post_id, []))
-            is_compressed_file = file_ext.lower() in self.COMPRESSED_EXTENSIONS
+            is_compressed_file = file_ext.lower() in COMPRESSED_EXTENSIONS
             skip_folder_applies = (
                 self.skip_folder_enabled
                 and post_file_count <= self.skip_folder_threshold
@@ -2783,9 +2948,21 @@ class CreatorDownloadThread(QThread):
         elif strategy == "single_folder":
             return creator_folder
         else:  # per_post
-            # Respect skip-folder toggle for description files too
-            post_file_count = len(self.post_files_map.get(post_id, []))
-            if self.skip_folder_enabled and post_file_count <= self.skip_folder_threshold:
+            # Respect skip-folder toggle for description files too, and mirror
+            # the file rule exactly: an archive forces the post folder, so the
+            # description belongs there rather than in the creator root.
+            post_files = self.post_files_map.get(post_id, [])
+            post_file_count = len(post_files)
+            post_has_archive = any(
+                file_extension(urlparse(url).path) in COMPRESSED_EXTENSIONS
+                for url in post_files
+            )
+            skip_folder_applies = (
+                self.skip_folder_enabled
+                and post_file_count <= self.skip_folder_threshold
+                and not (self.force_folder_for_compressed and post_has_archive)
+            )
+            if skip_folder_applies:
                 return creator_folder
             return os.path.join(
                 creator_folder,
@@ -2851,6 +3028,35 @@ class CreatorDownloadThread(QThread):
                 "WARNING",
             )
 
+    def _discard_part_file(self, part_path):
+        """Delete a partial transfer, logging what happened.
+
+        Only the ".part" file is ever touched: the real name is created by a
+        rename that happens after the size check, so anything half-written
+        lives here and nowhere else.
+        """
+        try:
+            if not os.path.exists(part_path):
+                return
+            os.remove(part_path)
+            self._safe_emit(
+                self.log,
+                translate("log_info", translate("deleted_incomplete_file", part_path)),
+                "INFO",
+            )
+        except OSError as e:
+            self._safe_emit(
+                self.log,
+                translate(
+                    "log_error",
+                    translate("failed_to_delete_incomplete_file", part_path, str(e)),
+                ),
+                "ERROR",
+            )
+        except Exception:
+            # Best-effort cleanup; never mask the original failure.
+            pass
+
     async def download_file(self, file_url, folder, file_index, total_files, page_number):
         if not self.is_running or file_url not in self.files_to_download:
             self._safe_emit(
@@ -2868,7 +3074,11 @@ class CreatorDownloadThread(QThread):
             page_number
         )
 
-        full_path = os.path.join(target_folder, filename.replace("/", "_"))
+        full_path = os.path.join(target_folder, filename)
+        # Transfers land here first and are renamed on success, so a cancelled
+        # or failed download can never leave a truncated file at the real name
+        # for the next run's dedup lookup to trust.
+        part_path = full_path + ".part"
         url_hash = hashlib.md5(file_url.encode()).hexdigest()
 
         entry = self.hash_db.lookup(url_hash)
@@ -2901,8 +3111,9 @@ class CreatorDownloadThread(QThread):
                         "INFO",
                     )
                 else:
-                    with open(existing_path, "rb") as f:
-                        file_hash = hashlib.md5(f.read()).hexdigest()
+                    # Hashing re-reads the whole file, so hand it to a worker
+                    # thread: on the loop it stalled every other download.
+                    file_hash = await asyncio.to_thread(_hash_file, existing_path)
                     if file_hash == entry["file_hash"]:
                         self._safe_emit(
                             self.log,
@@ -2990,7 +3201,11 @@ class CreatorDownloadThread(QThread):
                 # cross-site subresource request (file.<domain> is a
                 # different origin than the referring page's domain).
                 headers["Accept"] = "*/*"
-                headers["Accept-Encoding"] = "gzip, deflate, br"
+                # Streamed files are size-checked against content-length, which
+                # counts encoded bytes, so asking for compression would make
+                # the check fail on any server that honours it ("br" also needs
+                # a brotli module that this app does not depend on).
+                headers["Accept-Encoding"] = "identity"
                 headers["Sec-Fetch-Dest"] = "empty"
                 headers["Sec-Fetch-Mode"] = "cors"
                 headers["Sec-Fetch-Site"] = "same-site"
@@ -3056,14 +3271,16 @@ class CreatorDownloadThread(QThread):
                         except Exception:
                             file_size = 0
                         downloaded_size = 0
+                        hasher = hashlib.md5()
 
-                        file_handle = open(full_path, "wb")
+                        file_handle = open(part_path, "wb")
                         try:
                             for chunk in response.iter_content(chunk_size=8192):
                                 if not self.is_running:
                                     raise Exception("Download interrupted by user")
                                 if chunk:
                                     file_handle.write(chunk)
+                                    hasher.update(chunk)
                                     downloaded_size += len(chunk)
                                     if file_size > 0:
                                         progress = int(
@@ -3079,12 +3296,12 @@ class CreatorDownloadThread(QThread):
                         finally:
                             file_handle.close()
 
-                        return file_size, downloaded_size
+                        return file_size, downloaded_size, hasher.hexdigest()
                     finally:
                         response.close()
 
                 # Run the download in a thread to avoid blocking
-                file_size, downloaded_size = await asyncio.to_thread(
+                file_size, downloaded_size, file_hash = await asyncio.to_thread(
                     download_with_requests
                 )
 
@@ -3096,31 +3313,8 @@ class CreatorDownloadThread(QThread):
                     self._safe_emit(
                         self.log, translate("log_warning", error_msg), "WARNING"
                     )
-                    # Delete incomplete file
-                    if os.path.exists(full_path):
-                        try:
-                            os.remove(full_path)
-                            self._safe_emit(
-                                self.log,
-                                translate(
-                                    "log_info",
-                                    translate("deleted_incomplete_file", full_path),
-                                ),
-                                "INFO",
-                            )
-                        except OSError as e:
-                            self._safe_emit(
-                                self.log,
-                                translate(
-                                    "log_error",
-                                    translate(
-                                        "failed_to_delete_incomplete_file",
-                                        full_path,
-                                        str(e),
-                                    ),
-                                ),
-                                "ERROR",
-                            )
+                    # Delete the partial transfer so nothing truncated is left
+                    self._discard_part_file(part_path)
                     # Raise a retryable exception so this is caught by the
                     # RequestException/_RetryableDownloadError branch below
                     # and actually retried, instead of falling into the
@@ -3130,11 +3324,12 @@ class CreatorDownloadThread(QThread):
                         f"Size mismatch: downloaded {downloaded_size} bytes, expected {file_size} bytes"
                     )
 
-                with open(full_path, "rb") as f:
-                    file_hash = hashlib.md5(f.read()).hexdigest()
-                actual_file_size = os.path.getsize(full_path)
+                # Only a complete transfer is promoted to its final name. The
+                # hash comes from the same pass that wrote the bytes, so the
+                # file is never re-read just to hash it.
+                os.replace(part_path, full_path)
                 self.hash_db.store(
-                    url_hash, full_path, file_hash, file_url, actual_file_size
+                    url_hash, full_path, file_hash, file_url, downloaded_size
                 )
                 # The file is on disk now, so this post was last downloaded
                 # today.
@@ -3179,6 +3374,9 @@ class CreatorDownloadThread(QThread):
                     self._safe_emit(
                         self.log, translate("log_error", error_msg), "ERROR"
                     )
+                    # Out of retries: the truncated transfer must not stay on
+                    # disk under any name.
+                    self._discard_part_file(part_path)
                     with self.failed_files_lock:
                         self.failed_files[file_url] = str(e)
                     self._safe_emit(self.file_progress, file_index, 0)
@@ -3233,35 +3431,10 @@ class CreatorDownloadThread(QThread):
                     ),
                     "ERROR",
                 )
-                # Attempt to remove any incomplete file left on disk
-                try:
-                    if os.path.exists(full_path):
-                        try:
-                            os.remove(full_path)
-                            self._safe_emit(
-                                self.log,
-                                translate(
-                                    "log_info",
-                                    translate("deleted_incomplete_file", full_path),
-                                ),
-                                "INFO",
-                            )
-                        except OSError as e_remove:
-                            self._safe_emit(
-                                self.log,
-                                translate(
-                                    "log_error",
-                                    translate(
-                                        "failed_to_delete_incomplete_file",
-                                        full_path,
-                                        str(e_remove),
-                                    ),
-                                ),
-                                "ERROR",
-                            )
-                except Exception:
-                    # Best-effort deletion; ignore errors here to avoid masking original exception
-                    pass
+                # Attempt to remove the partial transfer left on disk. The
+                # final name is only ever created by a successful rename, so
+                # this is the only place leftovers can be.
+                self._discard_part_file(part_path)
 
                 with self.failed_files_lock:
                     self.failed_files[file_url] = str(e)
@@ -3560,8 +3733,6 @@ class LogsWindow(QDialog):
         layout.addLayout(buttons_layout)
 
         # Batch update with timer to reduce UI updates
-        from PyQt6.QtCore import QTimer
-
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self._do_update)
         self.update_timer.setInterval(500)  # Update every 500ms instead of every log
@@ -3639,10 +3810,6 @@ class LogsWindow(QDialog):
 
     def download_logs(self):
         """Download logs as a txt file"""
-        from datetime import datetime
-
-        from PyQt6.QtWidgets import QFileDialog
-
         # Get plain text content (without HTML formatting)
         logs_content = self.logs_display.toPlainText()
 
@@ -3705,7 +3872,6 @@ class CreatorDownloaderTab(QWidget):
         # Locks for thread-safe access to shared data structures
         self.completed_files_lock = threading.Lock()
         self.failed_files_lock = threading.Lock()
-        self.validation_thread = None
         self.post_detection_thread = None
         self.post_population_thread = None
         self.filter_thread = None
@@ -3792,6 +3958,9 @@ class CreatorDownloaderTab(QWidget):
         self._last_run_failed_files = {}
         self._last_run_files_to_posts_map = {}
         self._last_run_creator_url = None
+        # Ordered post ids of the preparation run in flight, used to number a
+        # first download's auto-rename blocks in list order.
+        self._preparation_post_order = None
         self.files_to_posts_map = {}
         os.makedirs(self.cache_dir, exist_ok=True)
         os.makedirs(self.other_files_dir, exist_ok=True)
@@ -4043,7 +4212,7 @@ class CreatorDownloaderTab(QWidget):
         }
         for i, (ext, check) in enumerate(self.creator_ext_checks.items()):
             check.setChecked(False)
-            check.stateChanged.connect(self.filter_items)
+            check.stateChanged.connect(self._on_filetype_filter_changed)
             creator_ext_layout.addWidget(check, i // 5, i % 5)
         self.creator_ext_group.setLayout(creator_ext_layout)
         # Kept for _render_creator_ext_checks(), which re-lays the boxes from
@@ -4454,6 +4623,8 @@ class CreatorDownloaderTab(QWidget):
         # because the creator has nothing.
         self.creator_post_empty_label = QLabel()
         self.creator_post_empty_label.setStyleSheet("color: #8FA6C8;")
+        # Centred: it stands in for the list when every post is filtered out.
+        self.creator_post_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.creator_post_empty_label.setVisible(False)
         post_list_layout.addWidget(self.creator_post_empty_label)
 
@@ -4761,6 +4932,12 @@ class CreatorDownloaderTab(QWidget):
         self.background_task_progress.setStyleSheet(separator_style)
 
     def refresh_ui(self):
+        """Re-apply the visual state after settings change.
+
+        The counters reset, but the last run's failures and the post-list skip
+        counts are kept: applying a setting is not a new run, and losing them
+        would grey out Retry Failed Downloads for no reason.
+        """
         self.update_progress_bar_style()
         if not self.downloading:
             self.creator_file_progress.setValue(0)
@@ -4773,7 +4950,9 @@ class CreatorDownloaderTab(QWidget):
             self.completed_posts.clear()
             self.completed_files.clear()
             self.total_files_to_download = 0
-            self._reset_download_summary()
+            self._reset_download_summary(
+                keep_post_stats=True, keep_run_failures=True
+            )
             self.background_task_progress.setRange(0, 100)
             self.background_task_progress.setValue(0)
             self.background_task_label.setText(translate("idle"))
@@ -4933,7 +5112,7 @@ class CreatorDownloaderTab(QWidget):
             normalized_url, post_id = resolve_creator_url(url)
             normalized_url = normalized_url.rstrip("/")
 
-            # Validate URL format (same rules as ValidationThread)
+            # Validate URL format (same rules as the detection thread)
             parts = normalized_url.split("/")
             domain_config = get_domain_config(normalized_url)
             if (
@@ -5011,6 +5190,7 @@ class CreatorDownloaderTab(QWidget):
                         self.checked_urls = {}
                         self.all_files_map = {}
                         self.current_creator_url = None
+                        self._clear_filetype_selection()
                         self._reset_found_extensions()
                         self.update_checked_posts()
                         self.filter_items()
@@ -5074,6 +5254,18 @@ class CreatorDownloaderTab(QWidget):
                 "ERROR",
             )
             return
+        # Refuse before touching any state: this used to clear the whole view
+        # first and only then discover a fetch was still running, which left an
+        # empty list with the old fetch still writing into it.
+        if (
+            getattr(self, "post_detection_thread", None) is not None
+            and self.post_detection_thread.isRunning()
+        ):
+            self.append_log_to_console(
+                translate("log_warning", translate("post_detection_in_progress")),
+                "WARNING",
+            )
+            return
         self.append_log_to_console(
             translate("log_info", translate("viewing_creator", url)), "INFO"
         )
@@ -5125,16 +5317,6 @@ class CreatorDownloaderTab(QWidget):
 
         # Always attempt to fetch/refetch posts when viewing a creator
         # This allows users to refresh the post list even if already cached
-        if (
-            hasattr(self, "post_detection_thread")
-            and self.post_detection_thread is not None
-            and self.post_detection_thread.isRunning()
-        ):
-            self.append_log_to_console(
-                translate("log_warning", translate("post_detection_in_progress")),
-                "WARNING",
-            )
-            return
         self.background_task_label.setText(translate("detecting_posts"))
         self.background_task_progress.setRange(0, 0)
 
@@ -5323,6 +5505,19 @@ class CreatorDownloaderTab(QWidget):
         # Search scopes
         for checkbox in self.search_scope_checkboxes.values():
             checkbox.setEnabled(not is_fetching)
+        # The extension grid feeds the "no selected filetypes" filter, so it is
+        # part of the Filters box: locked with the rest of it while a fetch
+        # rewrites the list underneath.
+        for checkbox in getattr(self, "creator_ext_checks", {}).values():
+            checkbox.setEnabled(not is_fetching)
+        filetype_filter = getattr(self, "filter_no_selected_filetypes_check", None)
+        if filetype_filter is not None:
+            filetype_filter.setEnabled(not is_fetching)
+        # The fetch froze its copy of "Download Post Text" when it started, and
+        # that value decides whether text-only posts are filtered out.
+        text_option = getattr(self, "creator_download_text_check", None)
+        if text_option is not None:
+            text_option.setEnabled(not is_fetching)
 
         # Pagination controls
         self.prev_page_btn.setEnabled(not is_fetching and self.current_page > 1)
@@ -5406,6 +5601,14 @@ class CreatorDownloaderTab(QWidget):
         self.file_count_help_btn.setEnabled(enabled)
         for checkbox in self.search_scope_checkboxes.values():
             checkbox.setEnabled(enabled)
+        # The download workers read a snapshot taken when the run started, so
+        # leaving these clickable would only mislead: the ticks would not apply
+        # to the run in flight.
+        for checkbox in getattr(self, "creator_ext_checks", {}).values():
+            checkbox.setEnabled(enabled)
+        filetype_filter = getattr(self, "filter_no_selected_filetypes_check", None)
+        if filetype_filter is not None:
+            filetype_filter.setEnabled(enabled)
 
         # Pagination
         self.prev_page_btn.setEnabled(enabled and self.current_page > 1)
@@ -5437,12 +5640,23 @@ class CreatorDownloaderTab(QWidget):
         """Show why the post list is empty, or hide the hint.
 
         Only when there are posts to show: a creator with no posts at all
-        is a different situation and keeps the plain empty list.
+        is a different situation and keeps the plain empty list. With the
+        filetype filter on and nothing ticked, no post can match, so the hint
+        names that instead of blaming the filters in general.
         """
         label = getattr(self, "creator_post_empty_label", None)
         if label is None:
             return
-        label.setVisible(bool(self.all_detected_posts) and not self.filtered_posts)
+        empty = bool(self.all_detected_posts) and not self.filtered_posts
+        if empty:
+            required = self._required_filetypes()
+            if required is not None and not required:
+                text = translate("supported_filetypes_not_present")
+            else:
+                text = translate("no_posts_match_filters")
+            if label.text() != text:
+                label.setText(text)
+        label.setVisible(empty)
 
     def display_current_page(self):
         """Display the current page of posts"""
@@ -5791,6 +6005,10 @@ class CreatorDownloaderTab(QWidget):
 
         file_skip_keywords = self._file_skip_keywords_from_widgets()
 
+        # Ordered list order is what a first download's auto-rename blocks
+        # follow; the preparation workers return files out of order, so the
+        # order is remembered here and handed to the download thread.
+        self._preparation_post_order = list(post_ids)
         self.file_preparation_thread = FilePreparationThread(
             post_ids,
             self.all_files_map,
@@ -5804,6 +6022,8 @@ class CreatorDownloaderTab(QWidget):
             skip_images_if_compressed=(
                 self.creator_skip_images_check.isChecked()
             ),
+            # Read on the GUI thread; the workers never touch the boxes.
+            allowed_extensions=self._selected_extensions(),
         )
         self.file_preparation_thread.progress.connect(self.update_background_progress)
         self.file_preparation_thread.finished.connect(
@@ -5871,12 +6091,16 @@ class CreatorDownloaderTab(QWidget):
             return
 
         self._start_download_thread(
-            files_to_download, files_to_posts_map, urls[0]
+            files_to_download,
+            files_to_posts_map,
+            urls[0],
+            post_order=self._preparation_post_order,
         )
+        self._preparation_post_order = None
         return
 
     def _start_download_thread(
-        self, files_to_download, files_to_posts_map, creator_url=None
+        self, files_to_download, files_to_posts_map, creator_url=None, post_order=None
     ):
         """Create and start a CreatorDownloadThread for the current creator.
 
@@ -5886,7 +6110,20 @@ class CreatorDownloaderTab(QWidget):
         creator_url = creator_url or self.current_creator_url
         self._last_run_creator_url = creator_url
         self.files_to_posts_map = dict(files_to_posts_map)
-        selected_posts = list(dict.fromkeys(files_to_posts_map.values()))
+        file_post_ids = list(dict.fromkeys(files_to_posts_map.values()))
+        # A first download numbers each post in the order the post list shows it,
+        # so the auto-rename blocks are reproducible instead of following
+        # whichever preparation worker answered first. Posts whose files arrived
+        # some other way still get a slot, after the ordered ones.
+        selected_posts = [
+            post_id
+            for post_id in dict.fromkeys(post_order or ())
+            if post_id in file_post_ids
+        ]
+        chosen = set(selected_posts)
+        selected_posts.extend(
+            post_id for post_id in file_post_ids if post_id not in chosen
+        )
 
         url = (creator_url or "").rstrip("/")
         parts = url.split("/")
@@ -6092,24 +6329,27 @@ class CreatorDownloaderTab(QWidget):
             self.background_task_progress.setRange(0, 100)
             self.background_task_progress.setValue(0)
             self.background_task_label.setText(translate("idle"))
-            # Keep only posts that are already selected for download
-            selected_post_ids = set(self.posts_to_download)
-            self.all_detected_posts = [
+            # Keep everything that was fetched. Cancelling a fetch means "stop
+            # loading", not "throw away the pages already here": pruning the
+            # list to the ticked posts emptied it completely when nothing was
+            # ticked, and forced a refetch to get back to where the user was.
+            fetched = [
                 post
                 for post in self.all_detected_posts
-                if post[1][0] in selected_post_ids
+                if post[1][0] in set(self.posts_to_download)
             ]
-            self.filtered_posts = [
-                post for post in self.filtered_posts if post[1] in selected_post_ids
-            ]
-            self.all_files_map[self.current_creator_url] = self.all_detected_posts
+            if self.current_creator_url:
+                self.all_files_map[self.current_creator_url] = list(
+                    self.all_detected_posts
+                )
             # Refresh the display
             self.display_current_page()
             self.update_pagination_controls()
             self.append_log_to_console(
                 translate(
                     "log_info",
-                    f"Kept {len(self.all_detected_posts)} selected posts after cancelling detection",
+                    f"Kept {len(self.all_detected_posts)} fetched posts "
+                    f"({len(fetched)} selected) after cancelling detection",
                 ),
                 "INFO",
             )
@@ -6198,7 +6438,6 @@ class CreatorDownloaderTab(QWidget):
         self.post_population_thread = None
         self.filter_thread = None
         self.checkbox_toggle_thread = None
-        self.validation_thread = None
 
     def update_creator_file_progress(self, file_index, progress):
         if self.current_file_index == file_index or self.current_file_index == -1:
@@ -6389,7 +6628,6 @@ class CreatorDownloaderTab(QWidget):
         self.post_population_thread = None
         self.filter_thread = None
         self.checkbox_toggle_thread = None
-        self.validation_thread = None
 
         # Fully restore the UI. The creator queue is deliberately left as-is:
         # finishing a download must never remove or alter queued creators.
@@ -6816,7 +7054,12 @@ class CreatorDownloaderTab(QWidget):
         check_box = QCheckBox()
         check_box.setStyleSheet("color: white;")
         check_box.setChecked(is_checked)
-        check_box.clicked.connect(lambda: self.toggle_checkbox_state(text))
+        # The row's own post id is bound here rather than looked up from the
+        # title on click: two posts with the same title and date share a key,
+        # and the lookup then returned whichever one won the dict.
+        check_box.clicked.connect(
+            lambda: self.toggle_checkbox_state(text, post_id, widget)
+        )
         layout.addWidget(check_box)
 
         # *text* already ends with the post's publish date in parentheses, so
@@ -6838,6 +7081,7 @@ class CreatorDownloaderTab(QWidget):
         # The undecorated title doubles as the post_url_map / cache key, so
         # keep it even though the label text may carry a date suffix.
         widget.post_key = text
+        widget.post_id = post_id
         # Rows are child widgets, so the list view does not always receive the
         # double-click itself; handle it here too (see _on_row_double_click).
         widget.mouseDoubleClickEvent = (
@@ -6848,11 +7092,17 @@ class CreatorDownloaderTab(QWidget):
         # Cache the widget for O(1) lookups
         self.post_widget_cache[text] = (item, widget)
 
-    def toggle_checkbox_state(self, post_title):
+    def toggle_checkbox_state(self, post_title, post_id=None, source_widget=None):
         self.background_task_label.setText(translate("toggling_checkbox"))
         self.background_task_progress.setRange(0, 0)
 
-        base_post_id, _ = self.post_url_map.get(post_title, (None, None))
+        # A row that knows its own id (the normal case) passes it in, which
+        # keeps the toggle attached to the post the user actually clicked even
+        # when two posts share a title and publish date.
+        if post_id:
+            base_post_id = post_id
+        else:
+            base_post_id, _ = self.post_url_map.get(post_title, (None, None))
         if not base_post_id:
             self.append_log_to_console(
                 translate(
@@ -6880,6 +7130,11 @@ class CreatorDownloaderTab(QWidget):
                 w = self.creator_post_list.itemWidget(item)
                 if w:
                     widgets_to_update.append(w)
+        elif source_widget is not None:
+            # The row that was clicked knows which post it belongs to, so use
+            # it directly: resolving the row by title is ambiguous whenever two
+            # posts share a title and date.
+            widgets_to_update.append(source_widget)
         else:
             # Apply only to single item
             w = self.get_widget_for_post_title(post_title)
@@ -6892,9 +7147,11 @@ class CreatorDownloaderTab(QWidget):
                 # The label may carry a "[last downloaded]" suffix, so prefer
                 # the undecorated key stored when the row was built.
                 title = getattr(widget, "post_key", widget.label.text())
-                post_id, _ = self.post_url_map.get(title, (None, None))
-                if post_id:
-                    self.checked_urls[post_id] = new_state
+                row_post_id = getattr(widget, "post_id", None)
+                if not row_post_id:
+                    row_post_id, _ = self.post_url_map.get(title, (None, None))
+                if row_post_id:
+                    self.checked_urls[row_post_id] = new_state
                     widget.check_box.blockSignals(True)
                     widget.check_box.setChecked(new_state)
                     widget.check_box.blockSignals(False)
@@ -7186,6 +7443,23 @@ class CreatorDownloaderTab(QWidget):
         )
         return [f"  {keyword}: {count}" for keyword, count in ordered]
 
+    def _on_filetype_filter_changed(self, *_args):
+        """Re-filter after a tick that the filetype filter depends on.
+
+        The extension grid and "Download Post Text" both drive only "Filter
+        posts with no selected filetypes": a tick while that box is clear
+        cannot change which posts are listed, and rebuilding up to 200 rows for
+        it was pure churn. A tick during a fetch is left to the fetch, which
+        owns the list and runs its own pass; those inputs are disabled then.
+        """
+        checkbox = getattr(self, "filter_no_selected_filetypes_check", None)
+        if checkbox is None or not checkbox.isChecked():
+            return
+        thread = getattr(self, "post_detection_thread", None)
+        if thread is not None and thread.isRunning():
+            return
+        self.filter_items()
+
     def _schedule_filter_refresh(self):
         """Re-run the filter pass once a filter edit settles.
 
@@ -7227,6 +7501,10 @@ class CreatorDownloaderTab(QWidget):
             checkbox.stateChanged.connect(self.filter_items)
         self.file_count_keep_compressed_check.stateChanged.connect(self.filter_items)
         self.filter_no_selected_filetypes_check.stateChanged.connect(self.filter_items)
+        # Both feed the filetype rule, so they only re-filter while it is on.
+        self.creator_download_text_check.stateChanged.connect(
+            self._on_filetype_filter_changed
+        )
 
     def _log_filter_warnings(self, warnings):
         """Say once when a filter entry cannot be read.
@@ -7303,28 +7581,52 @@ class CreatorDownloaderTab(QWidget):
             file_count_min=file_count_min,
             file_count_max=file_count_max,
             keep_compressed=self.file_count_keep_compressed_check.isChecked(),
-            required_filetypes=frozenset(self._required_filetypes() or ()),
+            required_filetypes=self._required_filetypes(),
+            download_post_text=self.creator_download_text_check.isChecked(),
         )
         return filters, warnings
 
-    def _required_filetypes(self):
-        """Return the filetypes the post filter must find, or None.
+    def _selected_extensions(self):
+        """Return the ticked file-extension boxes as a plain list.
 
-        Backs "Filter posts with no selected filetypes": the ticked
-        extension boxes become the types a post has to hold at least one
-        file of. The filter is off while the box is clear, and inert when
-        it is ticked with nothing selected — there is no type to require
-        then, so dropping every post would be the wrong answer.
+        Called on the GUI thread so download workers can be handed a snapshot
+        instead of reading checkboxes from a foreign thread.
+        """
+        return [
+            str(ext).lower()
+            for ext, box in getattr(self, "creator_ext_checks", {}).items()
+            if box.isChecked()
+        ]
+
+    def _clear_filetype_selection(self):
+        """Untick every filetype box without firing a pass per box.
+
+        Used when the view is reset (clearing the queue): a tick that survives
+        a creator it was meant for is a filter nobody asked for any more.
+        """
+        for box in getattr(self, "creator_ext_checks", {}).values():
+            if box.isChecked():
+                box.blockSignals(True)
+                box.setChecked(False)
+                box.blockSignals(False)
+        self._render_creator_ext_checks()
+
+    def _required_filetypes(self):
+        """Return the filetypes the post filter must find.
+
+        None while "Filter posts without selected filetypes" is off. An empty
+        frozenset means the filter is on with nothing ticked: there is no type
+        any post could hold, so the list is deliberately empty rather than
+        showing everything.
         """
         checkbox = getattr(self, "filter_no_selected_filetypes_check", None)
         if checkbox is None or not checkbox.isChecked():
             return None
-        selected = {
+        return frozenset(
             ext.lower()
             for ext, box in getattr(self, "creator_ext_checks", {}).items()
             if box.isChecked()
-        }
-        return selected or None
+        )
 
     def _reset_found_extensions(self):
         """Forget the file types collected for the previous creator.
@@ -7509,13 +7811,20 @@ class CreatorDownloaderTab(QWidget):
             if label.styleSheet() != sheet:
                 label.setStyleSheet(sheet)
 
-    def _reset_download_summary(self, keep_post_stats=False):
-        """Reset the run stats and forget the last run's failures."""
+    def _reset_download_summary(self, keep_post_stats=False, keep_run_failures=False):
+        """Reset the run stats.
+
+        *keep_post_stats* keeps the per-filter post counts (they describe the
+        loaded list, not the run). *keep_run_failures* keeps the last run's
+        failures so Retry Failed Downloads survives, which matters when a
+        settings change - not a new run - is what triggers the reset.
+        """
         self._skip_summary_cache = None
-        self._file_skip_count = 0
-        self._images_skipped_count = 0
-        self._last_run_failed_files = {}
-        self._last_run_files_to_posts_map = {}
+        if not keep_run_failures:
+            self._file_skip_count = 0
+            self._images_skipped_count = 0
+            self._last_run_failed_files = {}
+            self._last_run_files_to_posts_map = {}
         self._refresh_retry_button()
 
         if not keep_post_stats:
@@ -7528,7 +7837,8 @@ class CreatorDownloaderTab(QWidget):
                 "filetypes": 0,
             }
             self._post_keyword_skip_counts = {}
-        self._file_keyword_skip_counts = {}
+        if not keep_run_failures:
+            self._file_keyword_skip_counts = {}
 
         # Re-render rather than blank the block: the skip breakdown stays
         # visible at all times, showing zeros when nothing has been skipped.

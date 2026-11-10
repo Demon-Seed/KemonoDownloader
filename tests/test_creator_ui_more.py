@@ -77,3 +77,35 @@ def test_cancel_creator_download_no_active_threads(qapp, tmp_path):
     tab.set_log_panel_visible(True)
     text = tab.creator_console.toPlainText()
     assert text.strip() != ""
+
+
+def test_duplicate_titles_toggle_their_own_post(qapp, tmp_path):
+    """Two posts sharing title and date must not swap ids when ticked.
+
+    Rows are keyed by "{title} ({date})", so a creator posting "Update" twice in
+    one day produced two rows with one key. The checkbox looked up its post id
+    by that key on click, which returned the same post for both rows.
+    """
+    parent = SimpleNamespace()
+    parent.cache_folder = str(tmp_path)
+    parent.other_files_folder = str(tmp_path)
+    parent.download_folder = str(tmp_path)
+
+    tab = cd.CreatorDownloaderTab(parent)
+
+    key = "Update (2024-01-01)"
+    tab.post_url_map[key] = ("first", None)
+    tab.add_list_item(key, None, False)
+    tab.post_url_map[key] = ("second", None)  # same key: the map keeps the last
+    tab.add_list_item(key, None, False)
+
+    first_widget = tab.creator_post_list.itemWidget(tab.creator_post_list.item(0))
+    second_widget = tab.creator_post_list.itemWidget(tab.creator_post_list.item(1))
+    first_widget.check_box.click()
+
+    # Only the post belonging to the clicked row is selected, and only that
+    # row's box is ticked.
+    assert tab.checked_urls.get("first") is True
+    assert tab.checked_urls.get("second", False) is False
+    assert first_widget.check_box.isChecked() is True
+    assert second_widget.check_box.isChecked() is False

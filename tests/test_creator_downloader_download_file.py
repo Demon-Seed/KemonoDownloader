@@ -132,3 +132,132 @@ def test_terminal_http_error_is_reported_once_and_not_retried(tmp_path, monkeypa
     assert ("ERROR" in [level for _, level in logs]) is True
     # The reason is kept for Retry Failed Downloads, and it names the status.
     assert "404" in t.failed_files[file_url]
+
+
+# ---------------------------------------------------------------------------
+# Streaming writes
+# ---------------------------------------------------------------------------
+
+
+class _Resp:
+    """Minimal streamed response, with an optional lying content-length."""
+
+    def __init__(self, payload, declared=None):
+        self.status_code = 200
+        self._payload = payload
+        self.headers = {
+            "content-length": str(len(payload) if declared is None else declared)
+        }
+
+    def raise_for_status(self):
+        return None
+
+    def iter_content(self, chunk_size=8192):
+        yield self._payload
+
+    def close(self):
+        return None
+
+
+class _Session:
+    """Serves one payload for every request, warm-up included."""
+
+    def __init__(self, payload, declared=None, seen=None, file_url=None):
+        self._payload = payload
+        self._declared = declared
+        self._seen = seen
+        self._file_url = file_url
+
+    def get(self, url, headers=None, **kwargs):
+        if self._seen is not None and url == self._file_url:
+            self._seen.update(headers or {})
+        return _Resp(self._payload, declared=self._declared)
+
+
+def make_stream_thread(tmp_path, file_url):
+    settings = SimpleNamespace(settings_tab=None, file_download_max_retries=1)
+    thread = cd.CreatorDownloadThread(
+        "service",
+        "creator",
+        str(tmp_path),
+        ["1"],
+        [file_url],
+        {file_url: "1"},
+        None,
+        str(tmp_path),
+        {},
+        False,
+        settings,
+    )
+    thread.domain_config = {
+        "base_url": "https://kemono.cr",
+        "api_base": "https://kemono.cr/api",
+        "referer": "https://kemono.cr/",
+        "file_base_url": "https://n1.kemono.cr",
+    }
+    return thread
+
+
+def test_download_writes_a_part_file_then_renames_it(monkeypatch, tmp_path):
+    payload = b"0123456789"
+    file_url = "https://n1.kemono.cr/data/ab/cd/ok.jpg"
+    seen = {}
+
+    monkeypatch.setattr(
+        cd,
+        "get_session",
+        lambda *a, **k: _Session(payload, seen=seen, file_url=file_url),
+    )
+
+    thread = make_stream_thread(tmp_path, file_url)
+    thread.generate_filename_and_folder = lambda *a, **k: (str(tmp_path), "ok.jpg")
+    stored = {}
+
+    class FakeHashDB:
+        def lookup(self, h):
+            return None
+
+        def store(self, url_hash, path, file_hash, url, size):
+            stored.update(path=path, file_hash=file_hash, size=size)
+
+    thread.hash_db = FakeHashDB()
+
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
+
+    assert (tmp_path / "ok.jpg").read_bytes() == payload
+    assert not (tmp_path / "ok.jpg.part").exists()
+    # The hash comes from the written bytes, not from re-reading the file.
+    assert stored["file_hash"] == hashlib.md5(payload).hexdigest()
+    assert stored["size"] == len(payload)
+    # Size checks compare written bytes with content-length, so the transfer
+    # must not be compressed behind the check's back.
+    assert seen["Accept-Encoding"] == "identity"
+
+
+def test_failed_size_check_leaves_nothing_behind(monkeypatch, tmp_path):
+    payload = b"short"
+    file_url = "https://n1.kemono.cr/data/ab/cd/bad.jpg"
+
+    monkeypatch.setattr(
+        cd, "get_session", lambda *a, **k: _Session(payload, declared=99)
+    )
+
+    thread = make_stream_thread(tmp_path, file_url)
+    thread.generate_filename_and_folder = lambda *a, **k: (str(tmp_path), "bad.jpg")
+    thread.hash_db = SimpleNamespace(lookup=lambda h: None, store=lambda *a, **k: None)
+
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
+
+    # A truncated transfer never reaches the real name, and its ".part" is
+    # cleaned up rather than left for the next run to trust.
+    assert not (tmp_path / "bad.jpg").exists()
+    assert not (tmp_path / "bad.jpg.part").exists()
+    assert file_url in thread.failed_files
+
+
+def test_hash_file_matches_md5_of_the_whole_file(tmp_path):
+    data = b"x" * (2 * 1024 * 1024 + 7)
+    path = tmp_path / "big.bin"
+    path.write_bytes(data)
+
+    assert cd._hash_file(str(path)) == hashlib.md5(data).hexdigest()

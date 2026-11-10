@@ -466,7 +466,7 @@ def test_detection_receives_the_shared_type_tally(qtbot, tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Filter posts with no selected filetypes
+# Filter posts without selected filetypes
 # ---------------------------------------------------------------------------
 
 
@@ -475,7 +475,7 @@ def test_the_filetype_filter_checkbox_lives_in_the_filters_box(qtbot, tmp_path):
     check = tab.filter_no_selected_filetypes_check
 
     assert tab.filters_group.isAncestorOf(check)
-    assert check.text() == "Filter posts with no selected filetypes"
+    assert check.text() == "Filter posts without selected filetypes"
     assert check.isChecked() is False
 
 
@@ -494,13 +494,17 @@ def test_required_filetypes_needs_the_box_and_a_ticked_type(
     assert tab._required_filetypes() == {".psd"}
 
 
-def test_required_filetypes_is_none_when_nothing_is_ticked(qtbot, tmp_path):
+def test_required_filetypes_is_empty_when_nothing_is_ticked(qtbot, tmp_path):
+    """On with nothing ticked: no post can match, so nothing is listed.
+
+    It used to go inert, which meant an enabled filter quietly showed
+    everything.
+    """
     tab = make_tab(qtbot, tmp_path)
 
     tab.filter_no_selected_filetypes_check.setChecked(True)
 
-    # Nothing ticked means there is no type to require, not "drop every post".
-    assert tab._required_filetypes() is None
+    assert tab._required_filetypes() == frozenset()
 
 
 def test_detection_receives_the_required_filetypes(qtbot, tmp_path, monkeypatch):
@@ -543,10 +547,12 @@ def test_the_help_button_explains_the_filetype_filter(qtbot, tmp_path, monkeypat
 
     tab.filter_no_selected_filetypes_help_btn.click()
 
-    assert shown["title"] == "Filter Posts With No Selected Filetypes Help"
-    assert "File Extensions" in shown["text"]
+    assert shown["title"] == "Filter Posts Without Selected Filetypes Help"
+    # It names the option it depends on, briefly.
+    assert "Download Post Text" in shown["text"]
     # One short paragraph, not a spec sheet.
     assert "\n" not in shown["text"]
+    assert len(shown["text"]) < 260
 
 
 # ---------------------------------------------------------------------------

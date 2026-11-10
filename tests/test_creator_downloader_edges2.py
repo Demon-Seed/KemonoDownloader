@@ -8,6 +8,18 @@ from types import SimpleNamespace
 from kemonodownloader import creator_downloader as cd
 
 
+def with_part_cleanup(dummy):
+    """Give a stand-in thread the real ".part" cleanup helper.
+
+    ``download_file`` deletes partial transfers through the thread's own
+    helper, so a hand-built stand-in has to carry it too.
+    """
+    dummy._discard_part_file = (
+        lambda part_path: cd.CreatorDownloadThread._discard_part_file(dummy, part_path)
+    )
+    return dummy
+
+
 def test_generate_filename_template_error_fallback():
     dummy = SimpleNamespace()
     dummy.service = "fanbox"
@@ -122,6 +134,7 @@ def test_download_file_deletion_failure(monkeypatch, tmp_path):
     # Download-history hook called by download_file.
     dummy._record_post_download = lambda *a, **k: None
     dummy.download_text = False
+    with_part_cleanup(dummy)
 
     # generate filename
     dummy.generate_filename_and_folder = (
@@ -306,6 +319,7 @@ def test_download_file_retry_exhaustion(monkeypatch, tmp_path):
     # Download-history hooks called by download_file.
     dummy._record_post_download = lambda *a, **k: None
     dummy.download_text = False
+    with_part_cleanup(dummy)
     dummy.generate_filename_and_folder = (
         lambda file_url, folder, file_index, total_files, post_id, post_title, page_number: (
             str(tmp_path),

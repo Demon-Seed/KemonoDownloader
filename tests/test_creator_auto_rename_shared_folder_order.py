@@ -312,3 +312,46 @@ def test_skip_folder_mixed_post_shared_block_stays_contiguous(tmp_path):
     # Siblings were skipped into the shared creator folder -> two-level prefix.
     for _, folder in results[1:]:
         assert folder == os.path.join(str(tmp_path / "dl"), "42_Creator")
+
+
+def test_the_block_number_survives_a_different_selection(tmp_path):
+    """Downloading a different set later must not rename an existing post.
+
+    The block number used to be the post's rank in the current selection, so
+    selecting another post first renamed this one's files from ``1_...`` to
+    ``2_...`` and left the old copies behind - the same post split in two.
+    """
+    post_files = {
+        "174816708": ["https://kemono.cr/files/one.jpg"],
+        "174700000": ["https://kemono.cr/files/other.jpg"],
+    }
+    template = "{post_id}_{orig_name}"
+
+    first = make_thread(
+        tmp_path,
+        strategy="single_folder",
+        template=template,
+        posts=("174816708",),
+        post_files=post_files,
+    )
+    ((first_name, _folder),) = generate(first, str(tmp_path / "dl"))
+
+    # Later run: another post is selected before it, same database folder.
+    second = make_thread(
+        tmp_path,
+        strategy="single_folder",
+        template=template,
+        posts=("174700000", "174816708"),
+        post_files=post_files,
+    )
+    names = [name for name, _ in generate(second, str(tmp_path / "dl"))]
+
+    assert first_name == "1_1_174816708_one.jpg"
+    # The already-numbered post keeps its block even though it is second now.
+    assert [name for name in names if "174816708" in name] == [
+        "1_1_174816708_one.jpg"
+    ]
+    # The unseen post is numbered after the highest block this creator has.
+    assert [name for name in names if "174700000" in name] == [
+        "2_1_174700000_other.jpg"
+    ]

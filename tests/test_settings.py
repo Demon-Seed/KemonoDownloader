@@ -158,7 +158,7 @@ class TestBaseDirectoryLogic:
             # Mock Linux without XDG_DATA_HOME
             monkeypatch.delenv("XDG_DATA_HOME", raising=False)
             home = os.path.expanduser("~")
-            expected = os.path.join(home, ".local/share", "Kemono Downloader")
+            expected = os.path.join(home, ".local", "share", "Kemono Downloader")
             assert st.get_default_base_directory() == expected
         finally:
             st.deleteLater()
@@ -387,47 +387,6 @@ class TestSettingsUIInteractions:
         finally:
             st.deleteLater()
 
-    def test_open_app_directory(self, qapp, monkeypatch):
-        import subprocess
-
-        from kemonodownloader.kd_settings import SettingsTab
-
-        # Mock parent
-        class MockParent:
-            def log(self, m):
-                pass
-
-        st = SettingsTab(MockParent())
-        try:
-            # Mock directory existence
-            monkeypatch.setattr(os.path, "exists", lambda p: True)
-
-            # Mock platform-specific open - use more robust mocking
-            mock_open_called = False
-
-            def mock_subprocess_call(*args, **kwargs):
-                nonlocal mock_open_called
-                mock_open_called = True
-                return 0
-
-            monkeypatch.setattr(subprocess, "call", mock_subprocess_call)
-            monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: None)
-            from PyQt6.QtWidgets import QMessageBox
-
-            monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
-
-            if sys.platform == "win32":
-                monkeypatch.setattr(
-                    os, "startfile", lambda p: setattr(st, "_mock_open_called", True)
-                )
-
-            st.open_app_directory()
-            # If on Mac/Linux, we check mock_open_called
-            if sys.platform != "win32":
-                assert mock_open_called is True
-        finally:
-            st.deleteLater()
-
     def test_settings_apply_and_reset(self, qapp, monkeypatch):
         from kemonodownloader.kd_settings import SettingsTab
 
@@ -468,7 +427,7 @@ class TestSettingsUIInteractions:
             monkeypatch.setattr(st, "save_settings", lambda: None)
 
             # Test Apply
-            st.update_temp_setting("base_folder_name", "Applied Folder")
+            st.update_temp_setting("base_directory", "/fake/Applied Folder")
             from PyQt6.QtWidgets import QMessageBox
 
             # Patch all dialog methods for safety
@@ -479,14 +438,15 @@ class TestSettingsUIInteractions:
             monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
 
             st.confirm_and_apply_settings()
-            assert st.settings["base_folder_name"] == "Applied Folder"
-            assert str(parent.base_folder).endswith("Applied Folder")
+            # Posts now go straight into the Save Directory, with no
+            # "<folder name>/Downloads" layer under it.
+            assert str(parent.download_folder) == "/fake/Applied Folder"
 
             # Test Reset
             st.confirm_and_reset_settings()
             assert (
-                st.temp_settings["base_folder_name"]
-                == st.default_settings["base_folder_name"]
+                st.temp_settings["data_directory"]
+                == st.default_settings["data_directory"]
             )
         finally:
             st.deleteLater()
@@ -939,37 +899,6 @@ class TestCustomUIState:
 class TestDetailedUI:
     """Tests for remaining UI edge cases and help dialogs."""
 
-    def test_open_app_directory_platforms(self, qapp, monkeypatch):
-        import subprocess
-        import sys
-
-        from kemonodownloader.kd_settings import SettingsTab
-
-        st = SettingsTab(MagicMock())
-        try:
-            st.temp_settings["base_directory"] = "/tmp/fake"
-            monkeypatch.setattr(os, "makedirs", lambda p, exist_ok=True: None)
-            monkeypatch.setattr(os.path, "exists", lambda p: True)
-
-            # Mock Windows
-            monkeypatch.setattr(sys, "platform", "win32")
-            mock_startfile = MagicMock()
-            # Raising=False because os.startfile doesn't exist on Mac/Linux
-            monkeypatch.setattr(os, "startfile", mock_startfile, raising=False)
-            st.open_app_directory()
-
-            # Mock Linux
-            monkeypatch.setattr(sys, "platform", "linux")
-            mock_popen = MagicMock()
-            monkeypatch.setattr(subprocess, "Popen", mock_popen)
-            st.open_app_directory()
-
-            # Mock macOS
-            monkeypatch.setattr(sys, "platform", "darwin")
-            st.open_app_directory()
-        finally:
-            st.deleteLater()
-
     def test_help_dialogs(self, qapp, monkeypatch):
         from kemonodownloader.kd_settings import SettingsTab
 
@@ -1172,12 +1101,7 @@ class TestQSettingsIntegration:
             monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
             monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
 
-            # 1. Empty folder name (1102-1107)
-            st.temp_settings["base_folder_name"] = "  "
-            st.confirm_and_apply_settings()
-
-            # 2. Directory creation failure (1112-1122)
-            st.temp_settings["base_folder_name"] = "Valid"
+            # Directory creation failure: the Save Directory cannot be made.
             st.temp_settings["base_directory"] = "/root/no_permission"
             monkeypatch.setattr(os.path, "isdir", lambda p: False)
             monkeypatch.setattr(

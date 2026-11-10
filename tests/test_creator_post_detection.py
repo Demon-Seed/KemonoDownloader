@@ -245,10 +245,30 @@ def test_filetype_filter_is_inert_without_selected_types(monkeypatch):
     assert thread.filetype_skipped_count == 0
 
 
-def test_filetype_filter_keeps_posts_with_nothing_to_compare(monkeypatch):
+def test_filetype_filter_drops_posts_that_download_nothing(monkeypatch):
+    """A post with no files is out of scope for a filetype requirement.
+
+    It used to count as "nothing to compare, keep it", so it survived every
+    requirement: a .webp-only filter kept text posts and the list disagreed
+    with the file counts in the extension grid. The post is still listed (the
+    fetch keeps everything for the live pass) but it is counted as skipped.
+    """
     posts = [{"id": "p4", "title": "Words only", "content": "just text"}]
 
     thread, kept = run_detection(monkeypatch, posts, required_filetypes={".png"})
+
+    assert kept == ["Words only"]
+    assert thread.filetype_skipped_count == 1
+
+
+def test_downloading_the_post_text_keeps_text_only_posts(monkeypatch):
+    """"Download Post Text" makes the description a download, so nothing skips."""
+    posts = [{"id": "p5", "title": "Words only", "content": "just text"}]
+    filters = cd.PostFilters(
+        required_filetypes=frozenset({".png"}), download_post_text=True
+    )
+
+    thread, kept = run_detection(monkeypatch, posts, post_filters=filters)
 
     assert kept == ["Words only"]
     assert thread.filetype_skipped_count == 0
@@ -288,3 +308,58 @@ def test_relaxing_a_filter_brings_posts_back_without_another_fetch(monkeypatch):
     shown = [title for title, _, _, _ in relaxed.finished.emit.call_args[0][0]]
 
     assert sorted(shown) == ["art bundle", "plain post"]
+
+
+# ---------------------------------------------------------------------------
+# Posts whose shape is not what the API promises
+# ---------------------------------------------------------------------------
+
+
+def test_detection_tolerates_null_attachments_and_odd_file(monkeypatch):
+    """A null attachments list or a non-dict file must not lose the fetch.
+
+    Both used to raise inside the thumbnail scan, which killed the thread
+    before it emitted anything.
+    """
+    posts = [
+        {"id": "1", "title": "Null attachments", "attachments": None},
+        {"id": "2", "title": "String file", "file": "/data/ab/cd/file.jpg"},
+        {
+            "id": "3",
+            "title": "Normal",
+            "file": {"path": "/data/ab/cd/n.jpg", "name": "n.jpg"},
+        },
+    ]
+
+    thread, kept = run_detection(monkeypatch, posts)
+
+    assert kept == ["Null attachments", "String file", "Normal"]
+    assert thread.error.emit.called is False
+    # The one post with a real image keeps its thumbnail; the odd ones get none
+    # rather than a mangled path built from the string.
+    thumbnails = {
+        title: thumbnail
+        for call in thread.posts_batch.emit.call_args_list
+        for title, (_post_id, thumbnail) in call.args[0]
+    }
+    assert thumbnails["Normal"] is not None
+    assert thumbnails["String file"] is None
+
+
+def test_detection_failure_reaches_the_tab(monkeypatch):
+    """An unexpected exception must be reported, not swallowed by the thread.
+
+    Without this the tab stayed in its fetching state, with every other tab
+    disabled, until the app was restarted.
+    """
+    monkeypatch.setattr(
+        cd,
+        "post_skip_reason",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    thread, _ = run_detection(monkeypatch, [{"id": "1", "title": "T"}])
+
+    assert thread.error.emit.called
+    assert "boom" in str(thread.error.emit.call_args[0][0])
+    assert "boom" in str(thread.log.emit.call_args_list[-1].args[0])

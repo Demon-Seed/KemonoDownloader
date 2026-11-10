@@ -276,7 +276,14 @@ def test_skip_tooltip_keys_translated_in_all_languages():
         language_manager.set_language(original)
 
 
-def test_refresh_ui_resets_the_summary_and_retry(qtbot, tmp_path):
+def test_refresh_ui_keeps_the_retry_data(qtbot, tmp_path):
+    """Applying settings must not throw away the last run's retry list.
+
+    Settings-apply calls refresh_ui(), which resets the visible counters. That
+    used to clear the recorded failures too, so greying out Retry Failed
+    Downloads for an unrelated setting change; the post-list skip counts went
+    with it even though they describe the list, not the run.
+    """
     tab = make_tab(qtbot, tmp_path)
     tab.downloading = False
     tab._post_skip_stats = {"keywords": 2, "date": 0, "file_count": 0}
@@ -286,12 +293,14 @@ def test_refresh_ui_resets_the_summary_and_retry(qtbot, tmp_path):
 
     tab.refresh_ui()
 
-    # The block stays populated (zeros) instead of going blank.
+    # The download counters still reset, so nothing looks stale.
     assert "Downloaded: 0" in tab.creator_download_summary_label.text()
-    assert "Skipped Posts: 0" in tab.creator_skip_summary_label.text()
+    # ...but the run's failures survive, so the retry action stays usable.
+    assert tab._last_run_failed_files == {"https://x/y.jpg": "boom"}
     assert tab.creator_retry_failed_btn.isVisibleTo(tab) is True
-    assert tab.creator_retry_failed_btn.isEnabled() is False
-    assert tab._last_run_failed_files == {}
+    assert tab.creator_retry_failed_btn.isEnabled() is True
+    # The skip row describes the loaded list, so its numbers stay as they were.
+    assert "Skipped Posts: 2" in tab.creator_skip_summary_label.text()
 
 
 def test_failed_counter_names_the_post_count(qtbot, tmp_path):

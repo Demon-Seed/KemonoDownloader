@@ -149,6 +149,8 @@ def test_creator_fetch_and_detect_uses_the_short_countdown(monkeypatch):
     class Stub:
         settings = SimpleNamespace(post_data_max_retries=3, settings_tab=None)
         creator_ext_checks = {}
+        # The extension snapshot __init__ normally takes on the GUI thread.
+        allowed_extensions = []
         log = SimpleNamespace(emit=lambda *args, **kwargs: None)
 
         def detect_files(self, post, allowed_extensions, domain_config):

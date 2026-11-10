@@ -227,7 +227,7 @@ def test_fetch_and_detect_files_retry(monkeypatch):
 
     def fake_get_session(tab=None):
         class S:
-            def get(self, url, headers=None):
+            def get(self, url, headers=None, **kwargs):
                 calls["count"] += 1
                 if calls["count"] == 1:
                     return FakeResp429()

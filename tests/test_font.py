@@ -15,7 +15,6 @@ class MockParent:
     """Minimal mock parent for SettingsTab instantiation."""
 
     def __init__(self):
-        self.base_folder = ""
         self.download_folder = ""
         self.cache_folder = ""
         self.other_files_folder = ""
@@ -27,7 +26,9 @@ class MockParent:
         self.creator_tab = DummyTab()
 
     def ensure_folders_exist(self):
-        os.makedirs(self.base_folder, exist_ok=True)
+        # The real window creates its folders here; tests only need the call
+        # to succeed, and the paths can legitimately be empty strings.
+        return None
 
     def log(self, msg):
         pass

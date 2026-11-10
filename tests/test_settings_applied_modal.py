@@ -8,7 +8,6 @@ from kemonodownloader.kd_settings import SettingsTab
 
 class MockParent:
     def __init__(self):
-        self.base_folder = ""
         self.download_folder = ""
         self.cache_folder = ""
         self.other_files_folder = ""
@@ -21,7 +20,8 @@ class MockParent:
         self.creator_tab = DummyTab()
 
     def ensure_folders_exist(self):
-        os.makedirs(self.base_folder, exist_ok=True)
+        # Real window creates the folders; the mock only needs the call to work.
+        return None
 
     def log(self, msg):
         pass

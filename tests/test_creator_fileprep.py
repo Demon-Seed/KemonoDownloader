@@ -99,7 +99,7 @@ def test_fetch_and_detect_files_success(monkeypatch, qapp):
             }
 
     class S:
-        def get(self, url, headers=None):
+        def get(self, url, headers=None, **kwargs):
             return Resp()
 
     monkeypatch.setattr(cd, "get_session", lambda st: S())
@@ -139,7 +139,7 @@ def test_fetch_and_detect_files_429_retry(monkeypatch, qapp):
     calls = {"i": 0}
 
     class S:
-        def get(self, url, headers=None):
+        def get(self, url, headers=None, **kwargs):
             calls["i"] += 1
             return Resp429() if calls["i"] == 1 else Resp200()
 
@@ -147,3 +147,121 @@ def test_fetch_and_detect_files_429_retry(monkeypatch, qapp):
 
     res = thread.fetch_and_detect_files("p1", "https://kemono.cr/artist/user/10")
     assert res is not None and res[0] == "p1"
+
+
+def test_fetch_and_detect_files_retries_a_server_error(monkeypatch, qapp):
+    """A 5xx is transient, so it gets the retry budget a 4xx does not."""
+    monkeypatch.setattr(cd, "time", SimpleNamespace(sleep=lambda *_: None))
+
+    thread = cd.FilePreparationThread(
+        post_ids=[],
+        all_files_map={},
+        creator_ext_checks={".png": _mk_checkbox(True)},
+        creator_main_check=True,
+        creator_attachments_check=True,
+        creator_content_check=True,
+        settings=SimpleNamespace(post_data_max_retries=2, settings_tab=None),
+    )
+
+    class Resp503:
+        status_code = 503
+
+    class Resp200:
+        status_code = 200
+
+        def json(self):
+            return {"id": "p1", "file": {"path": "/media/1.png", "name": "img1.png"}}
+
+    calls = {"i": 0}
+    seen_kwargs = {}
+
+    class S:
+        def get(self, url, headers=None, **kwargs):
+            calls["i"] += 1
+            seen_kwargs.update(kwargs)
+            return Resp503() if calls["i"] == 1 else Resp200()
+
+    monkeypatch.setattr(cd, "get_session", lambda st: S())
+
+    res = thread.fetch_and_detect_files("p1", "https://kemono.cr/artist/user/10")
+
+    assert calls["i"] == 2
+    assert res is not None and res[0] == "p1"
+    # A stalled connection used to hang the worker until the deadline.
+    assert seen_kwargs.get("timeout") == (15, 30)
+
+
+def test_fetch_and_detect_files_does_not_retry_a_404(monkeypatch, qapp):
+    monkeypatch.setattr(cd, "time", SimpleNamespace(sleep=lambda *_: None))
+
+    thread = cd.FilePreparationThread(
+        post_ids=[],
+        all_files_map={},
+        creator_ext_checks={".png": _mk_checkbox(True)},
+        creator_main_check=True,
+        creator_attachments_check=True,
+        creator_content_check=True,
+        settings=SimpleNamespace(post_data_max_retries=3, settings_tab=None),
+    )
+
+    class Resp404:
+        status_code = 404
+
+    calls = {"i": 0}
+
+    class S:
+        def get(self, url, headers=None, **kwargs):
+            calls["i"] += 1
+            return Resp404()
+
+    monkeypatch.setattr(cd, "get_session", lambda st: S())
+
+    assert (
+        thread.fetch_and_detect_files("p1", "https://kemono.cr/artist/user/10") is None
+    )
+    assert calls["i"] == 1
+
+
+def test_preparation_warns_when_the_deadline_drops_work(monkeypatch, qapp):
+    """Files a straggler was about to queue used to vanish without a word."""
+    import itertools
+    import threading
+
+    release = threading.Event()
+    creator_url = "https://kemono.cr/artist/user/1"
+    thread = cd.FilePreparationThread(
+        ["1"],
+        {creator_url: [("T", ("1", None))]},
+        {".png": _mk_checkbox(True)},
+        creator_main_check=True,
+        creator_attachments_check=True,
+        creator_content_check=True,
+        settings=SimpleNamespace(post_data_max_retries=1, settings_tab=None),
+    )
+    thread.fetch_and_detect_files = lambda pid, curl: release.wait(5) or (
+        pid,
+        [("a.png", "https://n1.kemono.cr/a.png")],
+    )
+    logs = []
+    thread.log = SimpleNamespace(
+        emit=lambda message, level: logs.append((message, level))
+    )
+    thread.finished = SimpleNamespace(emit=lambda *a, **k: None)
+    thread.progress = SimpleNamespace(emit=lambda *a, **k: None)
+
+    # Walk the clock past the 30 s deadline without waiting for it.
+    ticks = itertools.count(0, 100)
+    monkeypatch.setattr(
+        cd,
+        "time",
+        SimpleNamespace(monotonic=lambda: next(ticks), sleep=lambda *_: None),
+    )
+
+    try:
+        thread.run()
+    finally:
+        release.set()
+
+    assert any(
+        level == "WARNING" and "timed out" in message.lower() for message, level in logs
+    )

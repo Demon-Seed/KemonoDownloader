@@ -74,7 +74,11 @@ class TestKemonoDownloader:
             assert window.windowTitle() == "app_title"
             assert window.centralWidget() == window.main_widget
             assert not hasattr(window, "intro_screen")
-            assert "Kemono" in window.base_folder
+            # Posts go straight into the Save Directory (the mocked "/tmp").
+            assert window.download_folder == "/tmp"
+            # The app's own files live in the Data Directory instead.
+            assert window.cache_folder != window.download_folder
+            assert window.other_files_folder != window.download_folder
         finally:
             window.deleteLater()
 
@@ -155,6 +159,9 @@ class TestKemonoDownloader:
 
         # 2. load_bundled_fonts (55-60)
         monkeypatch.setattr(os.path, "exists", lambda p: True)
+        # The window creates its folders; patched for the same reason the other
+        # tests patch it (and because exists() is faked above).
+        monkeypatch.setattr(os, "makedirs", MagicMock())
         from PyQt6.QtGui import QFontDatabase
 
         monkeypatch.setattr(QFontDatabase, "addApplicationFont", MagicMock())

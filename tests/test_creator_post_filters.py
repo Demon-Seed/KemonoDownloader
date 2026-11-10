@@ -130,10 +130,95 @@ def test_filetypes_need_one_matching_file():
     assert cd.filetypes_out_of_scope(facts(extensions=[".png"]), filters) is True
 
 
-def test_posts_with_no_readable_files_are_kept():
+def test_posts_with_files_of_unknown_type_are_kept():
+    """A file whose name carries no suffix is a real download we cannot type."""
     filters = cd.PostFilters(required_filetypes=frozenset({".psd"}))
 
-    assert cd.filetypes_out_of_scope(facts(extensions=[]), filters) is False
+    assert (
+        cd.filetypes_out_of_scope(facts(extensions=[], file_count=1), filters)
+        is False
+    )
+
+
+def test_posts_with_no_files_are_filtered_out():
+    """A text-only post downloads nothing, so the filetype filter drops it.
+
+    It used to survive every requirement: an empty extension set meant
+    "nothing to compare", so a .webp-only filter kept every text post and the
+    list disagreed with the file counts in the extension grid.
+    """
+    filters = cd.PostFilters(required_filetypes=frozenset({".webp"}))
+    post = cd.analyze_post(
+        {"id": "172398889", "title": "COMMISSIONS OPEN!!!", "content": "words"}
+    )
+
+    assert post["file_count"] == 0
+    assert cd.filetypes_out_of_scope(post, filters) is True
+    assert cd.post_skip_reason("COMMISSIONS OPEN!!!", post, filters) == (
+        "filetypes",
+        "",
+    )
+
+
+def test_downloading_the_post_text_keeps_text_only_posts():
+    """The description is a download, so the post is not empty when it is on."""
+    filters = cd.PostFilters(
+        required_filetypes=frozenset({".webp"}), download_post_text=True
+    )
+    post = cd.analyze_post({"id": "1", "title": "T", "content": "words"})
+
+    assert cd.filetypes_out_of_scope(post, filters) is False
+    assert cd.post_skip_reason("T", post, filters) == (None, "")
+
+
+def test_the_text_rule_waits_for_a_required_type():
+    """With the filetype filter off, a text-only post is untouched."""
+    post = cd.analyze_post({"id": "1", "title": "T", "content": "words"})
+
+    assert cd.filetypes_out_of_scope(post, cd.PostFilters()) is False
+    assert (
+        cd.filetypes_out_of_scope(
+            post, cd.PostFilters(download_post_text=False)
+        )
+        is False
+    )
+
+
+def test_an_enabled_filter_with_no_types_matches_nothing():
+    """On with nothing ticked: no post can satisfy the filter."""
+    filters = cd.PostFilters(required_filetypes=frozenset())
+    post = cd.analyze_post(
+        {"id": "1", "title": "T", "attachments": [{"name": "a.png"}]}
+    )
+
+    assert cd.filetypes_out_of_scope(post, filters) is True
+    assert cd.post_skip_reason("T", post, filters) == ("filetypes", "")
+
+
+def test_the_filetype_filter_is_off_by_default():
+    """The default is off, not "on with nothing ticked"."""
+    post = cd.analyze_post(
+        {"id": "1", "title": "T", "attachments": [{"name": "a.png"}]}
+    )
+
+    assert cd.PostFilters().required_filetypes is None
+    assert cd.filetypes_out_of_scope(post, cd.PostFilters()) is False
+
+
+def test_no_types_ticked_needs_no_post_details():
+    """A filter matching nothing rejects even a post with no stored facts.
+
+    Posts without details are normally kept, since nothing can be judged; an
+    enabled filter with no types holds no information about the post at all.
+    """
+    empty_filter = cd.PostFilters(required_filetypes=frozenset())
+
+    assert cd.post_skip_reason("T", None, empty_filter) == ("filetypes", "")
+    # Every other filter still needs the details and keeps the post.
+    assert cd.post_skip_reason("T", None, cd.PostFilters()) == (None, "")
+    assert cd.post_skip_reason(
+        "T", None, cd.PostFilters(required_filetypes=frozenset({".png"}))
+    ) == (None, "")
 
 
 def test_jpeg_files_count_as_jpg_for_the_filetype_filter():

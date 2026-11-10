@@ -24,7 +24,65 @@ class TestHashDBInit:
         assert db.count() == 0
 
 
-class TestHashDBStoreAndLookup:
+class TestHashDBPostBlocks:
+    """Stable per-post block numbers for the auto-rename prefix."""
+
+    def test_numbers_follow_the_order_they_are_first_seen(self, isolated_hash_dir):
+        db = HashDB(isolated_hash_dir)
+
+        blocks = db.assign_post_blocks("patreon", "42", ["b", "a", "c"])
+
+        assert blocks == {"b": 1, "a": 2, "c": 3}
+
+    def test_a_known_post_keeps_its_number(self, isolated_hash_dir):
+        db = HashDB(isolated_hash_dir)
+        db.assign_post_blocks("patreon", "42", ["a", "b"])
+
+        # A later run with another post first must not renumber "a".
+        blocks = db.assign_post_blocks("patreon", "42", ["c", "a"])
+
+        assert blocks == {"c": 3, "a": 1}
+
+    def test_ids_are_matched_as_text(self, isolated_hash_dir):
+        db = HashDB(isolated_hash_dir)
+
+        first = db.assign_post_blocks("patreon", "42", ["123"])
+        again = db.assign_post_blocks("patreon", "42", [123])
+
+        assert first == {"123": 1}
+        assert again == {"123": 1}
+
+    def test_each_creator_is_numbered_separately(self, isolated_hash_dir):
+        db = HashDB(isolated_hash_dir)
+        db.assign_post_blocks("patreon", "42", ["a"])
+
+        other_creator = db.assign_post_blocks("patreon", "43", ["a"])
+        other_service = db.assign_post_blocks("fanbox", "42", ["a"])
+
+        assert other_creator == {"a": 1}
+        assert other_service == {"a": 1}
+
+    def test_duplicates_in_one_call_take_a_single_number(self, isolated_hash_dir):
+        db = HashDB(isolated_hash_dir)
+
+        blocks = db.assign_post_blocks("patreon", "42", ["a", "a", "b", None])
+
+        assert blocks == {"a": 1, "b": 2}
+
+    def test_an_empty_request_returns_nothing(self, isolated_hash_dir):
+        db = HashDB(isolated_hash_dir)
+
+        assert db.assign_post_blocks("patreon", "42", []) == {}
+
+    def test_numbers_are_persisted_across_instances(self, isolated_hash_dir):
+        HashDB(isolated_hash_dir).assign_post_blocks("patreon", "42", ["a", "b"])
+
+        reopened = HashDB(isolated_hash_dir)
+
+        assert reopened.assign_post_blocks("patreon", "42", ["b"]) == {"b": 2}
+
+
+
     """Test basic CRUD operations."""
 
     def test_store_and_lookup(self, isolated_hash_dir):

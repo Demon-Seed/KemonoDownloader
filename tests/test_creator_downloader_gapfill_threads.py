@@ -447,7 +447,7 @@ def test_file_prep_fetch_detect_cleans_query_parts(monkeypatch):
         status_code = 500
 
     class Sess:
-        def get(self, url, headers=None):
+        def get(self, url, headers=None, **kwargs):
             called["url"] = url
             return Resp()
 
@@ -470,7 +470,7 @@ def test_file_prep_fetch_detect_unknown_service_fallback(monkeypatch):
         status_code = 500
 
     class Sess:
-        def get(self, url, headers=None):
+        def get(self, url, headers=None, **kwargs):
             called["url"] = url
             return Resp()
 

@@ -413,10 +413,12 @@ class TestCreatorDownloadThread:
         # Mock text download settings
         download_thread.settings.settings_tab.get_download_text.return_value = False
 
-        # Mock folder creation and file operations
+        # Mock folder creation and file operations. The transfer is written to
+        # a ".part" file and renamed into place, so the rename is mocked too.
         monkeypatch.setattr("os.makedirs", MagicMock())
         monkeypatch.setattr("os.path.exists", lambda p: False)
         monkeypatch.setattr("os.path.getsize", lambda p: 4)
+        monkeypatch.setattr("os.replace", MagicMock())
 
         # Mock open to return a handle that yields bytes
         mock_file_handle = MagicMock()

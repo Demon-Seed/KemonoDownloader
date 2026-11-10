@@ -1,5 +1,3 @@
-import os
-import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -140,35 +138,48 @@ def test_proxy_type_and_get_proxy_settings(tmp_path, monkeypatch):
     assert "http" in proxies
 
 
-def test_browse_and_open_directory(tmp_path, monkeypatch):
+def test_browse_sets_each_directory(tmp_path, monkeypatch):
     tab = make_tab(tmp_path)
-    # browse_directory
     monkeypatch.setattr(
         "kemonodownloader.kd_settings.QFileDialog.getExistingDirectory",
         lambda *a, **k: str(tmp_path),
     )
+
     tab.browse_directory()
+
     assert tab.directory_input.text() == str(tmp_path)
 
-    # open_app_directory must not reach the real file manager: stub both the
-    # Windows (os.startfile) and the macOS/Linux (subprocess.call) branches.
-    tab.temp_settings["base_directory"] = str(tmp_path)
-    tab.temp_settings["base_folder_name"] = "MyApp"
-    launched = []
-    monkeypatch.setattr(os, "startfile", launched.append, raising=False)
-    monkeypatch.setattr(subprocess, "call", lambda cmd, *a, **k: launched.append(cmd))
-    tab.open_app_directory()
-    assert launched, "open_app_directory never called the stubbed launcher"
+    other = tmp_path / "program data"
+    monkeypatch.setattr(
+        "kemonodownloader.kd_settings.QFileDialog.getExistingDirectory",
+        lambda *a, **k: str(other),
+    )
+    tab.browse_data_directory()
+
+    assert tab.data_directory_input.text() == str(other)
+    assert tab.temp_settings["data_directory"] == str(other)
+
+
+def test_the_folder_group_has_no_open_buttons(tmp_path):
+    """Both rows are just a path and a Browse button."""
+    tab = make_tab(tmp_path)
+
+    assert tab.browse_button.text() != ""
+    assert tab.browse_data_button.text() != ""
+    for removed in ("open_directory_button", "open_data_button"):
+        assert not hasattr(tab, removed)
 
 
 def test_reset_to_defaults_and_template_help(tmp_path, monkeypatch):
     tab = make_tab(tmp_path)
     # change some fields
-    tab.folder_name_input.setText("X")
+    tab.data_directory_input.setText("X")
     tab.directory_input.setText(str(tmp_path))
     # Reset should restore defaults
     monkeypatch.setattr(
         "kemonodownloader.kd_settings.QMessageBox.information", lambda *a, **k: None
     )
     tab.reset_to_defaults()
-    assert tab.folder_name_input.text() == tab.default_settings["base_folder_name"]
+    assert (
+        tab.data_directory_input.text() == tab.default_settings["data_directory"]
+    )

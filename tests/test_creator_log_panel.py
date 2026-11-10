@@ -281,3 +281,31 @@ def test_log_panel_keys_translated_in_all_languages():
                 assert translate(key, 1) not in ("", key)
     finally:
         language_manager.set_language(original)
+
+
+def test_log_lines_escape_markup(qtbot, tmp_path):
+    """A log line must render literally, markup and all.
+
+    The console is a rich-text widget and the log carries text straight from
+    the network: the 403 debug line prints the response body, and file names
+    come from the server too. An unescaped ``<`` was parsed as markup, which
+    swallowed the rest of the line.
+    """
+    tab = make_tab(qtbot, tmp_path)
+    tab.set_log_panel_visible(True)
+
+    message = "Body: <b>blocked</b> & <script>alert(1)</script> a<b.png"
+    tab.append_log_to_console(message, "INFO")
+
+    # The user sees the raw text, not an interpretation of it.
+    assert message in tab.creator_console.toPlainText()
+    # And the widget's own markup holds the escaped form, not the tags.
+    rendered = tab.creator_console.toHtml()
+    assert "&lt;b&gt;blocked&lt;/b&gt;" in rendered
+    assert "<b>blocked</b>" not in rendered
+
+
+def test_log_line_html_escapes_values_it_is_given():
+    rendered = cd._log_line_html("a < b & c > d", "#FFF")
+
+    assert rendered == "<span style='color:#FFF'>a &lt; b &amp; c &gt; d</span>"

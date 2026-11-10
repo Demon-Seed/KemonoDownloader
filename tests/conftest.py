@@ -73,15 +73,17 @@ def isolate_qsettings(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def block_file_manager_launches(monkeypatch):
-    """Keep the suite from opening a real Explorer/Finder window.
+def isolate_program_data(tmp_path, monkeypatch):
+    """Keep the suite out of the real per-user data folder.
 
-    ``SettingsTab.open_app_directory()`` calls ``os.startfile`` on Windows,
-    which launches the real file manager whenever a test forgets to stub that
-    branch. Neutralise it for every test; tests that assert the call still
-    work because they install their own replacement on top of this one.
+    ``kd_paths`` resolves Cache/ and Other Files/ from the Data Directory, which
+    defaults to the user's AppData. Every path lookup reads this override, so
+    tests can never create or touch the real one.
     """
-    monkeypatch.setattr(os, "startfile", lambda path: None, raising=False)
+    from kemonodownloader import kd_paths
+
+    monkeypatch.setenv(kd_paths.DATA_DIR_ENV, str(tmp_path / "program_data"))
+    yield
 
 
 @pytest.fixture()

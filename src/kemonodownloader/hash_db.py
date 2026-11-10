@@ -76,6 +76,22 @@ class HashDB:
                         "ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0"
                     )
                     conn.commit()
+                # Stable auto-rename block numbers, one row per post. A post's
+                # number is handed out once and never changes, so its files keep
+                # a single contiguous block in a shared folder across runs
+                # instead of being renamed when the selection changes.
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS post_blocks (
+                        service    TEXT NOT NULL,
+                        creator_id TEXT NOT NULL,
+                        post_id    TEXT NOT NULL,
+                        block      INTEGER NOT NULL,
+                        PRIMARY KEY (service, creator_id, post_id)
+                    )
+                    """
+                )
+                conn.commit()
             finally:
                 conn.close()
 
@@ -175,6 +191,67 @@ class HashDB:
     def contains(self, url_hash: str) -> bool:
         """Check whether *url_hash* already exists."""
         return self.lookup(url_hash) is not None
+
+    def assign_post_blocks(self, service: str, creator_id: str, post_ids) -> dict:
+        """Return a stable block number for every post id, assigning new ones.
+
+        Block numbers are what the auto-rename prefix uses to keep one post's
+        files together in a shared folder. A number is handed out once and then
+        never changes, so re-downloading with a different selection does not
+        rename (and therefore duplicate) a post's files.
+
+        New posts are numbered in the order they are first seen here, starting
+        after the highest block this creator already has. Ids are returned as
+        strings, matching how post ids are stored everywhere else.
+        """
+        ordered = []
+        seen = set()
+        for post_id in post_ids or ():
+            if post_id is None:
+                continue
+            key = str(post_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            ordered.append(key)
+        if not ordered:
+            return {}
+
+        service_key = str(service or "")
+        creator_key = str(creator_id or "")
+        blocks = {}
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                for post_id in ordered:
+                    row = conn.execute(
+                        "SELECT block FROM post_blocks "
+                        "WHERE service = ? AND creator_id = ? AND post_id = ?",
+                        (service_key, creator_key, post_id),
+                    ).fetchone()
+                    if row is not None:
+                        blocks[post_id] = int(row["block"])
+
+                missing = [post_id for post_id in ordered if post_id not in blocks]
+                if missing:
+                    row = conn.execute(
+                        "SELECT COALESCE(MAX(block), 0) AS highest FROM post_blocks "
+                        "WHERE service = ? AND creator_id = ?",
+                        (service_key, creator_key),
+                    ).fetchone()
+                    next_block = int(row["highest"] if row else 0) + 1
+                    for post_id in missing:
+                        conn.execute(
+                            "INSERT INTO post_blocks "
+                            "(service, creator_id, post_id, block) VALUES (?, ?, ?, ?)",
+                            (service_key, creator_key, post_id, next_block),
+                        )
+                        blocks[post_id] = next_block
+                        next_block += 1
+                    conn.commit()
+                return blocks
+            finally:
+                conn.close()
 
     def count(self) -> int:
         """Return total number of stored hashes."""
