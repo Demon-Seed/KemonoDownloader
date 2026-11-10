@@ -28,6 +28,8 @@ def run_detection(monkeypatch, posts, **kwargs):
 
     monkeypatch.setattr(cd, "get_session", lambda st: S())
 
+    # Facts have to exist for the live filter pass to work on them.
+    kwargs.setdefault("post_search_index", {})
     thread = cd.PostDetectionThread(
         "https://kemono.cr/artist/user/12", {}, settings, **kwargs
     )
@@ -44,6 +46,22 @@ def run_detection(monkeypatch, posts, **kwargs):
         for title, _ in call.args[0]
     ]
     return thread, kept
+
+
+def visible_posts(thread):
+    """Run the live filter pass over what the fetch kept."""
+    filter_thread = cd.FilterThread(
+        thread.finished.emit.call_args[0][0],
+        {},
+        "",
+        post_search_index=thread.post_search_index or {},
+        post_filters=thread.post_filters,
+    )
+    filter_thread.finished = SimpleNamespace(emit=MagicMock())
+    filter_thread.run()
+    return [
+        title for title, _, _, _ in filter_thread.finished.emit.call_args[0][0]
+    ]
 
 
 def test_post_detection_with_list(monkeypatch):
@@ -148,9 +166,12 @@ def test_filetype_filter_drops_posts_without_a_selected_type(monkeypatch):
 
     thread, kept = run_detection(monkeypatch, posts, required_filetypes={".psd"})
 
-    assert kept == ["PSD work"]
+    # The fetch records the skip and still hands both posts over, so
+    # unticking the filter can bring the text post back without a fetch.
     assert thread.filetype_skipped_count == 1
     assert thread.filtered_count == 1
+    assert sorted(kept) == ["PSD work", "Text only"]
+    assert visible_posts(thread) == ["PSD work"]
 
 
 def test_filetype_filter_treats_jpeg_as_jpg(monkeypatch):
@@ -200,12 +221,13 @@ def test_a_dropped_post_is_booked_under_one_filter_only(monkeypatch):
         date_after=date(2024, 1, 1),
     )
 
-    assert kept == []
     # Two filters match, but the post is only one skipped post: keyword
     # wins because it is checked first, and the buckets add up to 1.
     assert thread.filtered_count == 1
     assert thread.keyword_skipped_count == 1
     assert thread.date_skipped_count == 0
+    assert kept == ["art bundle"]
+    assert visible_posts(thread) == []
 
 
 def test_filetype_filter_is_inert_without_selected_types(monkeypatch):
@@ -230,3 +252,39 @@ def test_filetype_filter_keeps_posts_with_nothing_to_compare(monkeypatch):
 
     assert kept == ["Words only"]
     assert thread.filetype_skipped_count == 0
+
+
+def test_relaxing_a_filter_brings_posts_back_without_another_fetch(monkeypatch):
+    posts = [
+        {
+            "id": "p7",
+            "title": "art bundle",
+            "file": {"path": "/m/1.png", "name": "a.png"},
+        },
+        {
+            "id": "p8",
+            "title": "plain post",
+            "file": {"path": "/m/2.png", "name": "b.png"},
+        },
+    ]
+
+    thread, kept = run_detection(monkeypatch, posts, skip_keywords=["art"])
+
+    assert sorted(kept) == ["art bundle", "plain post"]
+    assert visible_posts(thread) == ["plain post"]
+
+    # Same facts, relaxed filters. No second detection run: this is what makes
+    # clearing a filter instant instead of a refetch.
+    relaxed = cd.FilterThread(
+        thread.finished.emit.call_args[0][0],
+        {},
+        "",
+        post_search_index=thread.post_search_index,
+        post_filters=cd.PostFilters(),
+    )
+    relaxed.finished = SimpleNamespace(emit=MagicMock())
+    relaxed.run()
+
+    shown = [title for title, _, _, _ in relaxed.finished.emit.call_args[0][0]]
+
+    assert sorted(shown) == ["art bundle", "plain post"]

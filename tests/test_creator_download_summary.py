@@ -51,10 +51,12 @@ def test_summary_and_retry_are_visible_from_the_start(qtbot, tmp_path):
 
     # The stat block is populated at startup (zeros), never blank.
     assert "Downloaded: 0" in tab.creator_download_summary_label.text()
-    skip_text = tab.creator_skip_summary_label.text()
-    assert "Skipped: 0" in skip_text
-    assert "Post keywords 0" in skip_text
-    assert "Archived images 0" in skip_text
+    posts_text = tab.creator_skip_summary_label.text()
+    assert "Skipped Posts: 0" in posts_text
+    assert "Post keywords 0" in posts_text
+    files_text = tab.creator_skip_files_label.text()
+    assert "Skipped Files: 0" in files_text
+    assert "Archived images 0" in files_text
 
     # Retry is always on screen, just greyed out until there is work for it.
     assert tab.creator_retry_failed_btn.isVisibleTo(tab) is True
@@ -82,12 +84,15 @@ def test_skip_breakdown_names_every_filter(qtbot, tmp_path):
     tab._update_download_summary(0, 0, refresh_skips=True)
 
     text = tab.creator_skip_summary_label.text()
-    assert "Skipped: 15" in text
+    assert "Skipped Posts: 8" in text  # posts only: 2 + 5 + 1
     assert "Post keywords 2" in text
     assert "Date 5" in text
     assert "File count 1" in text
-    assert "File keywords 4" in text
-    assert "Archived images 3" in text
+
+    files_text = tab.creator_skip_files_label.text()
+    assert "Skipped Files: 7" in files_text  # 4 + 3
+    assert "File keywords 4" in files_text
+    assert "Archived images 3" in files_text
 
 
 def test_every_filter_is_listed_even_at_zero(qtbot, tmp_path):
@@ -97,14 +102,19 @@ def test_every_filter_is_listed_even_at_zero(qtbot, tmp_path):
     tab._update_download_summary(0, 0, refresh_skips=True)
 
     text = tab.creator_skip_summary_label.text()
-    assert "Skipped: 1" in text
+    assert "Skipped Posts: 1" in text
     assert "Date 1" in text
     assert "Post keywords 0" in text
-    assert "File keywords 0" in text
-    assert "Archived images 0" in text
+    assert "File keywords" not in text
 
-    tooltip = tab.creator_skip_summary_label.toolTip()
-    assert tooltip == "No keyword skips"
+    files_text = tab.creator_skip_files_label.text()
+    assert "Skipped Files: 0" in files_text
+    assert "File keywords 0" in files_text
+    assert "Archived images 0" in files_text
+
+    assert tab.creator_skip_summary_label.toolTip() == "No keyword skips"
+    # The file row always says when its numbers move.
+    assert "download runs" in tab.creator_skip_files_label.toolTip()
 
 
 def test_skip_tooltip_lists_keywords_with_counts(qtbot, tmp_path):
@@ -114,14 +124,19 @@ def test_skip_tooltip_lists_keywords_with_counts(qtbot, tmp_path):
 
     tab._update_download_summary(0, 0, refresh_skips=True)
 
-    tooltip = tab.creator_skip_summary_label.toolTip()
-    lines = tooltip.splitlines()
+    lines = tab.creator_skip_summary_label.toolTip().splitlines()
     assert lines[0] == "Posts skipped by keyword:"
     # Most frequent first.
     assert lines[1] == "  AlienComic: 5"
     assert lines[2] == "  sketch: 2"
-    assert "Files skipped by keyword:" in lines
-    assert "  JP: 3" in lines
+
+    file_lines = tab.creator_skip_files_label.toolTip().splitlines()
+    # The keyword part reads exactly like the posts row, note last.
+    assert file_lines[0] == "Files skipped by keyword:"
+    assert "  JP: 3" in file_lines
+    assert file_lines[-1] == (
+        "Archived images are counted when a download runs, not from the list."
+    )
 
 
 def test_failed_counter_turns_red_only_after_a_failure(qtbot, tmp_path):
@@ -218,7 +233,7 @@ def test_post_filter_counters_feed_the_summary(qtbot, tmp_path):
     assert "Post keywords 3" in text
     assert "Date 7" in text
     assert "File count 2" in text
-    assert "Skipped: 12" in text
+    assert "Skipped Posts: 12" in text
 
 
 def test_new_run_keeps_post_skips_but_clears_run_stats(qtbot, tmp_path):
@@ -273,7 +288,7 @@ def test_refresh_ui_resets_the_summary_and_retry(qtbot, tmp_path):
 
     # The block stays populated (zeros) instead of going blank.
     assert "Downloaded: 0" in tab.creator_download_summary_label.text()
-    assert "Skipped: 0" in tab.creator_skip_summary_label.text()
+    assert "Skipped Posts: 0" in tab.creator_skip_summary_label.text()
     assert tab.creator_retry_failed_btn.isVisibleTo(tab) is True
     assert tab.creator_retry_failed_btn.isEnabled() is False
     assert tab._last_run_failed_files == {}
@@ -329,3 +344,51 @@ def test_failed_counter_falls_back_to_the_last_run_map(qtbot, tmp_path):
     tab._update_download_summary(0, 2)
 
     assert "Failed: 2 files (1 post)" in tab.creator_download_summary_label.text()
+
+
+def test_progress_and_summary_sit_in_their_own_group(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+
+    for widget in (
+        tab.creator_file_progress,
+        tab.creator_overall_progress,
+        tab.creator_download_summary_label,
+        tab.creator_skip_summary_label,
+        tab.creator_skip_files_label,
+    ):
+        assert tab.run_summary_group.isAncestorOf(widget)
+
+    for button in (
+        tab.creator_download_btn,
+        tab.creator_cancel_btn,
+        tab.creator_retry_failed_btn,
+    ):
+        assert not tab.run_summary_group.isAncestorOf(button)
+
+    assert tab.run_summary_group.title() == "Run Summary"
+
+
+def test_skip_rows_colour_reflects_the_state(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+
+    # Nothing loaded yet: white, the resting state.
+    assert "white" in tab.creator_skip_summary_label.styleSheet()
+    assert "white" in tab.creator_skip_files_label.styleSheet()
+
+    # A loaded list with nothing skipped: sand.
+    tab.all_detected_posts = [("A post", ("1", None))]
+    tab._skip_summary_cache = None
+    tab._update_download_summary(0, 0, refresh_skips=True)
+    assert "#E5C07B" in tab.creator_skip_summary_label.styleSheet()
+
+    # Something skipped: green, while the file row keeps its own state.
+    tab._post_skip_stats = {
+        "keywords": 1,
+        "date": 0,
+        "file_count": 0,
+        "filetypes": 0,
+    }
+    tab._skip_summary_cache = None
+    tab._update_download_summary(0, 0, refresh_skips=True)
+    assert "#7BD88F" in tab.creator_skip_summary_label.styleSheet()
+    assert "#E5C07B" in tab.creator_skip_files_label.styleSheet()

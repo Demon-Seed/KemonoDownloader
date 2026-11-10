@@ -9,7 +9,7 @@ import re
 import threading
 import time
 from datetime import datetime
-from typing import Optional
+from typing import NamedTuple, Optional
 from urllib.parse import parse_qs, urlparse
 
 import qtawesome as qta
@@ -229,9 +229,20 @@ def analyze_post(post):
     - ``extensions``: sorted lower-case extensions of every file found, so
       callers can ask which types a post actually holds
     - ``extension_counts``: extension -> how many files of that type it holds
+    - ``filenames_list``: the same names, one per file, for per-file
+      keyword matching
+    - ``tag_list``: the post's tags one by one, for per-tag matching
+    - ``description_glued``: lower-case body text with the separators
+      BeautifulSoup injects between inline tags removed ("" when that
+      rendering adds nothing)
+    - ``published``: the post's own publish date as a ``datetime.date``,
+      or None when it cannot be read
 
     Extension names that are the same type are folded (see
     :func:`normalize_extension`), so a ``.jpeg`` file is counted as ``.jpg``.
+
+    These are the facts every post filter reads. They live in the tab's
+    post index so a filter change can be applied without fetching again.
 
     The HTML body is parsed once, so callers needing several of these values
     should cache the returned dict instead of calling this again.
@@ -243,6 +254,10 @@ def analyze_post(post):
         "file_count": 0,
         "has_compressed": False,
         "extensions": [],
+        "filenames_list": [],
+        "tag_list": [],
+        "description_glued": "",
+        "published": None,
     }
     if not isinstance(post, dict):
         return analysis
@@ -290,7 +305,11 @@ def analyze_post(post):
         except Exception:
             soup = None
         if soup is not None:
-            analysis["description"] = soup.get_text(" ").lower()
+            space_joined = soup.get_text(" ")
+            analysis["description"] = space_joined.lower()
+            tag_glued = _tag_glued_text(soup)
+            if tag_glued and tag_glued != space_joined:
+                analysis["description_glued"] = tag_glued.lower()
             seen_images = set()
             for img in soup.select("img[src]"):
                 src = str(img.get("src") or "").strip()
@@ -311,8 +330,12 @@ def analyze_post(post):
     analysis["has_compressed"] = has_compressed
     analysis["extensions"] = sorted(extension_counts)
     analysis["extension_counts"] = extension_counts
+    tag_list = parse_post_tags(post.get("tags"))
     analysis["filenames"] = " ".join(name for name, _ in names).lower()
-    analysis["tags"] = " ".join(parse_post_tags(post.get("tags"))).lower()
+    analysis["filenames_list"] = [name for name, _ in names]
+    analysis["tags"] = " ".join(tag_list).lower()
+    analysis["tag_list"] = tag_list
+    analysis["published"] = get_post_published_date(post)
     return analysis
 
 
@@ -342,6 +365,159 @@ def post_matches_search(
         if scope in scopes and needle in str(entry.get(scope) or ""):
             return True
     return False
+
+
+class PostFilters(NamedTuple):
+    """The Creator tab's post-level filters, as one immutable value.
+
+    Built from the Filters box for the live pass and from the detection
+    thread's options while fetching; both feed :func:`post_skip_reason`, so
+    the list can never disagree with what a fetch would produce.
+    """
+
+    skip_keywords: tuple = ()
+    skip_scopes: frozenset = frozenset({"title"})
+    date_after: object = None
+    date_before: object = None
+    file_count_min: object = None
+    file_count_max: object = None
+    keep_compressed: bool = False
+    required_filetypes: frozenset = frozenset()
+
+
+def keyword_skip_reason(post_title, facts, filters):
+    """Return the skip keyword that drops this post, or "".
+
+    Scopes are the ticked combination of title, filenames, description and
+    tags; the post is dropped when a keyword matches as a whole word in ANY
+    enabled scope. The tag-glued description is only consulted after the
+    space-joined rendering misses, which is how the fetch has always
+    behaved.
+    """
+    keywords = filters.skip_keywords or ()
+    if not keywords:
+        return ""
+    # An empty set means no scope is ticked, so no post is dropped by
+    # keyword; only a missing value falls back to the title.
+    scopes = filters.skip_scopes
+    if scopes is None:
+        scopes = frozenset({"title"})
+    if "title" in scopes and post_title:
+        matched = _first_matching_keyword(keywords, post_title)
+        if matched:
+            return matched
+    if "filenames" in scopes:
+        for name in facts.get("filenames_list") or ():
+            matched = _first_matching_keyword(keywords, name)
+            if matched:
+                return matched
+    if "description" in scopes:
+        for text in (facts.get("description"), facts.get("description_glued")):
+            if not text:
+                continue
+            matched = _first_matching_keyword(keywords, text)
+            if matched:
+                return matched
+    if "tags" in scopes:
+        for tag in facts.get("tag_list") or ():
+            matched = _first_matching_keyword(keywords, tag)
+            if matched:
+                return matched
+    return ""
+
+
+def keyword_needed_rejoin(keyword, facts, filters):
+    """True when *keyword* only matches the tag-glued description.
+
+    Used purely so the fetch log keeps saying when an extra match came from
+    re-joining inline markup.
+    """
+    scopes = filters.skip_scopes
+    if scopes is None:
+        scopes = frozenset({"title"})
+    if "description" not in scopes:
+        return False
+    glued = facts.get("description_glued")
+    if not glued or not _first_matching_keyword([keyword], glued):
+        return False
+    return not _first_matching_keyword([keyword], facts.get("description"))
+
+
+def date_out_of_range(facts, filters):
+    """True when the post's own publish date falls outside the range.
+
+    A post whose date we could not read is kept: dropping it would hide
+    content for a reason the user never asked for.
+    """
+    if not filters.date_after and not filters.date_before:
+        return False
+    published = facts.get("published")
+    if published is None:
+        return False
+    if filters.date_after and published < filters.date_after:
+        return True
+    if filters.date_before and published > filters.date_before:
+        return True
+    return False
+
+
+def file_count_out_of_range(facts, filters):
+    """True when the post's file count falls outside the range.
+
+    "Keep Archives" lets a post holding a ZIP/7Z/RAR bypass the range
+    entirely, so archive posts are never filtered out.
+    """
+    if not filters.file_count_min and not filters.file_count_max:
+        return False
+    if filters.keep_compressed and facts.get("has_compressed"):
+        return False
+    count = facts.get("file_count", 0)
+    if filters.file_count_min and count < filters.file_count_min:
+        return True
+    if filters.file_count_max and count > filters.file_count_max:
+        return True
+    return False
+
+
+def filetypes_out_of_scope(facts, filters):
+    """True when the post holds none of the required filetypes.
+
+    One file of a required type anywhere in the post keeps it, and a post
+    with nothing readable to compare is kept rather than dropped.
+    """
+    required = set(filters.required_filetypes or ())
+    if not required:
+        return False
+    extensions = set(facts.get("extensions") or [])
+    if not extensions:
+        return False
+    return not extensions & required
+
+
+def post_skip_reason(post_title, facts, filters):
+    """Return ``(reason, keyword)`` for the first filter that drops a post.
+
+    ``reason`` is "keywords", "date", "file_count", "filetypes" or
+    None; ``keyword`` names the skip keyword when the reason is
+    "keywords". The order matches the Filters box, so a post caught by two
+    filters is booked once, under the first one.
+
+    *facts* is the post's entry in the tab's post index (see
+    :func:`analyze_post`). A post with no entry is kept: emptying the list
+    because the details are unavailable would hide posts for no reason.
+    """
+    if not isinstance(facts, dict):
+        return None, ""
+    keyword = keyword_skip_reason(post_title, facts, filters)
+    if keyword:
+        return "keywords", keyword
+    if date_out_of_range(facts, filters):
+        return "date", ""
+    if file_count_out_of_range(facts, filters):
+        return "file_count", ""
+    if filetypes_out_of_scope(facts, filters):
+        return "filetypes", ""
+    return None, ""
 
 
 def resolve_creator_url(raw_url):
@@ -852,6 +1028,7 @@ class PostDetectionThread(QThread):
         required_filetypes=None,
         post_search_index=None,
         found_extensions=None,
+        post_filters=None,
     ):
         super().__init__()
         self.url = url
@@ -897,6 +1074,20 @@ class PostDetectionThread(QThread):
         # the Creator tab can show the types this creator actually has. Like
         # the search index it is only filled when the caller passes a dict.
         self.found_extensions = found_extensions
+        # One immutable value describing every post-level filter. The tab
+        # passes the same shape to its live filter pass, so both apply
+        # exactly the same rules; the individual options above stay as the
+        # readable spelling for callers that only set one of them.
+        self.post_filters = post_filters or PostFilters(
+            skip_keywords=tuple(self.skip_keywords),
+            skip_scopes=frozenset(self.skip_keywords_scopes),
+            date_after=self.date_after,
+            date_before=self.date_before,
+            file_count_min=self.file_count_min,
+            file_count_max=self.file_count_max,
+            keep_compressed=self.file_count_keep_compressed,
+            required_filetypes=frozenset(self.required_filetypes),
+        )
         self._skipped_count = 0
         self._keyword_skipped_count = 0
         self._date_skipped_count = 0
@@ -904,7 +1095,6 @@ class PostDetectionThread(QThread):
         self._filetype_skipped_count = 0
         # keyword -> number of posts it dropped, for the skip tooltip.
         self.keyword_skip_counts = {}
-        self._parsed_dates = {}  # post_id -> parsed datetime.date (cache, avoids re-parsing)
         # post_id -> analyze_post() result, so a post's HTML body is parsed at
         # most once per detection run even when several filters need it.
         self._analysis_cache = {}
@@ -933,257 +1123,6 @@ class PostDetectionThread(QThread):
             self.found_extensions[ext] = (
                 self.found_extensions.get(ext, 0) + int(amount or 0)
             )
-
-    def _post_file_count_out_of_range(self, post):
-        """Return True if *post* should be skipped because its file count falls
-        outside the configured [file_count_min, file_count_max] range.
-
-        Counts the post's main file, attachments and content images. Posts
-        whose count comes from data we cannot read are kept, and with "Keep
-        Archives" enabled any post holding a compressed archive is kept
-        regardless of its count.
-        """
-        if not self.file_count_min and not self.file_count_max:
-            return False
-        analysis = self._analyze(post)
-        if self.file_count_keep_compressed and analysis.get("has_compressed"):
-            return False
-        count = analysis.get("file_count", 0)
-        if self.file_count_min and count < self.file_count_min:
-            return True
-        if self.file_count_max and count > self.file_count_max:
-            return True
-        return False
-
-    def _post_date_out_of_range(self, post):
-        """Return True if *post* should be skipped because its publish date
-        falls outside the configured [date_after, date_before] range."""
-        if not self.date_after and not self.date_before:
-            return False
-        post_id = post.get("id")
-        if post_id in self._parsed_dates:
-            post_date = self._parsed_dates[post_id]
-        else:
-            post_date = get_post_published_date(post)
-        if post_date is None:
-            # Unknown date: don't silently drop it from results.
-            return False
-        if self.date_after and post_date < self.date_after:
-            return True
-        if self.date_before and post_date > self.date_before:
-            return True
-        return False
-
-    def _post_holds_no_required_filetype(self, post):
-        """Return True if *post* holds none of the required filetypes.
-
-        Backs the Filters box option "Filter posts with no selected
-        filetypes": the File Extensions grid decides which files come out
-        of a post, this decides whether the post is listed at all. One file
-        of a required type anywhere in the post keeps it, and posts with
-        nothing readable to compare are kept rather than dropped. Extension
-        aliases are already folded by :func:`analyze_post`, so a plain
-        intersection decides it.
-        """
-        if not self.required_filetypes:
-            return False
-        extensions = set(self._analyze(post).get("extensions") or [])
-        if not extensions:
-            return False
-        return not extensions & self.required_filetypes
-
-    def _gather_post_filenames(self, post):
-        """Collect candidate filenames for a post: the main file and any
-        attachments. Prefers the original 'name' field, falling back to the
-        basename of 'path' if 'name' is missing."""
-        filenames = []
-        try:
-            file_info = post.get("file")
-            if isinstance(file_info, dict):
-                name = file_info.get("name") or os.path.basename(
-                    file_info.get("path", "")
-                )
-                if name:
-                    filenames.append(name)
-        except Exception:
-            pass
-        try:
-            attachments = post.get("attachments")
-            if isinstance(attachments, list):
-                for attachment in attachments:
-                    if not isinstance(attachment, dict):
-                        continue
-                    name = attachment.get("name") or os.path.basename(
-                        attachment.get("path", "")
-                    )
-                    if name:
-                        filenames.append(name)
-        except Exception:
-            pass
-        return filenames
-
-    def _gather_post_description_texts(self, post):
-        """Return the post's description as candidate plain-text renderings.
-
-        The first candidate is the space-joined string that keyword matching
-        has always used, so every match that exists today is preserved. The
-        second re-joins inline tags (see :func:`_tag_glued_text`) and is only
-        consulted when the first one misses, which recovers keywords that are
-        visible in the rendered post but were split by markup boundaries.
-        """
-        try:
-            raw_html = post.get("content")
-            if not raw_html:
-                return ()
-            soup = BeautifulSoup(raw_html, "html.parser")
-            space_joined = soup.get_text(" ")
-            tag_glued = _tag_glued_text(soup)
-        except Exception:
-            return ()
-        if tag_glued and tag_glued != space_joined:
-            return (space_joined, tag_glued)
-        return (space_joined,)
-
-    def _gather_post_description(self, post):
-        """Return the post's description/content as plain text (HTML
-        stripped), or an empty string if it has none."""
-        texts = self._gather_post_description_texts(post)
-        return texts[0] if texts else ""
-
-    def _gather_post_tags(self, post):
-        """Collect the post's tags as a list of strings, tolerating:
-        - A PostgreSQL array string: "{tag1,tag2,tag3}" (Kemono/Coomer style)
-        - A comma-separated string: "tag1, tag2, tag3"
-        - A semicolon-separated string: "tag1; tag2; tag3"
-        - A list of plain strings: ["tag1", "tag2"]
-        - A list of dictionaries with a 'name', 'tag', 'label', or
-          'value' key: [{"id": 1, "name": "AlienComic"}, ...]
-        - A dict mapping tag names to truthy/falsy values.
-        Falls back to str() conversion for any other element type.
-        """
-        try:
-            tags = post.get("tags")
-            if not tags:
-                # Debug: distinguish between "field is None" vs "field
-                # is missing entirely" so we can tell whether the API
-                # listing endpoint includes tags at all.
-                post_id = post.get("id", "unknown")
-                if "tags" in post:
-                    self.log.emit(
-                        translate(
-                            "log_debug",
-                            f"[TAG-DEBUG] Post {post_id}: 'tags' field is "
-                            f"null/empty (value={tags!r})",
-                        ),
-                        "DEBUG",
-                    )
-                else:
-                    self.log.emit(
-                        translate(
-                            "log_debug",
-                            f"[TAG-DEBUG] Post {post_id}: no 'tags' field "
-                            f"in API response (available keys: "
-                            f"{list(post.keys())})",
-                        ),
-                        "DEBUG",
-                    )
-                return []
-
-            # Debug: log raw tags value + type so format issues are
-            # immediately visible.
-            post_id = post.get("id", "unknown")
-            self.log.emit(
-                translate(
-                    "log_debug",
-                    f"[TAG-DEBUG] Post {post_id}: raw tags type="
-                    f"{type(tags).__name__}, value={tags!r}",
-                ),
-                "DEBUG",
-            )
-
-            # Parsing (and every tolerated format) lives in parse_post_tags so
-            # the search index and this keyword matcher can never disagree.
-            return parse_post_tags(tags)
-        except Exception:
-            pass
-        return []
-
-    def _title_matches_skip_keyword(self, title, post=None):
-        """Return the skip-keyword that excludes this post, or "" for none.
-
-        Scopes are the enabled combination of title, filenames, description
-        and tags. *post* is the raw post dict, needed to inspect
-        filenames/description/tags; scopes that need it are skipped if *post*
-        is omitted. Returning the keyword (instead of a bool) lets the caller
-        count how many skips each keyword caused.
-        """
-        if not self.skip_keywords:
-            return ""
-
-        scopes = self.skip_keywords_scopes
-
-        if "title" in scopes and title:
-            matched = _first_matching_keyword(self.skip_keywords, title)
-            if matched:
-                return matched
-
-        if post is None:
-            return ""
-
-        if "filenames" in scopes:
-            for fname in self._gather_post_filenames(post):
-                matched = _first_matching_keyword(self.skip_keywords, fname)
-                if matched:
-                    return matched
-
-        if "description" in scopes:
-            # The space-joined rendering is checked first, so every post that
-            # matches today still matches. Only when it misses do we retry with
-            # the tag-glued rendering, which recovers keywords that are visible
-            # in the post but were split by inline markup. A hit on that second
-            # rendering is logged so the extra matches stay auditable.
-            for index, description in enumerate(
-                self._gather_post_description_texts(post)
-            ):
-                if not description:
-                    continue
-                matched = _first_matching_keyword(self.skip_keywords, description)
-                if not matched:
-                    continue
-                if index:
-                    self.log.emit(
-                        translate(
-                            "log_debug",
-                            translate("skip_keyword_matched_after_rejoin", matched),
-                        ),
-                        "DEBUG",
-                    )
-                return matched
-
-        if "tags" in scopes:
-            gathered_tags = self._gather_post_tags(post)
-            if gathered_tags:
-                self.log.emit(
-                    translate(
-                        "log_debug",
-                        f"[TAG-DEBUG] Checking {len(gathered_tags)} tags against "
-                        f"keywords {self.skip_keywords}: {gathered_tags}",
-                    ),
-                    "DEBUG",
-                )
-            for tag in gathered_tags:
-                matched = _first_matching_keyword(self.skip_keywords, tag)
-                if matched:
-                    self.log.emit(
-                        translate(
-                            "log_debug",
-                            f"[TAG-DEBUG] SKIP MATCH: keyword matched tag '{tag}'",
-                        ),
-                        "DEBUG",
-                    )
-                    return matched
-
-        return ""
 
     def stop(self):
         self.is_running = False
@@ -1556,31 +1495,28 @@ class PostDetectionThread(QThread):
                 self.post_titles_map[(service, creator_id, post_id)] = (
                     sanitize_filename(title)
                 )
-                # Store the post's own publish date (not the import date).
-                # Cache the parsed date object too so the range-filter pass
-                # below doesn't need to re-parse it.
-                parsed_date = get_post_published_date(post)
-                self._parsed_dates[post_id] = parsed_date
+                # One analysis per post carries the publish date, the search
+                # text and every fact a post filter needs, so the tab can
+                # re-apply filters later without fetching the posts again.
+                analysis = self._analyze(post)
+                parsed_date = analysis.get("published")
                 self.post_dates_map[post_id] = (
                     parsed_date.strftime("%Y-%m-%d") if parsed_date else "Unknown date"
                 )
-                # Feed the Creator tab's "Search by" scopes. The index holds
-                # lower-case text only, so filtering a keystroke stays a cheap
-                # substring test instead of re-parsing HTML every time.
-                analysis = None
-                if (
-                    self.post_search_index is not None
-                    or self.found_extensions is not None
-                ):
-                    analysis = self._analyze(post)
-                if analysis is not None and self.post_search_index is not None:
+                if self.post_search_index is not None:
                     self.post_search_index[post_id] = {
                         "filenames": analysis["filenames"],
                         "description": analysis["description"],
                         "tags": analysis["tags"],
+                        "filenames_list": analysis.get("filenames_list") or [],
+                        "tag_list": analysis.get("tag_list") or [],
+                        "description_glued": analysis.get("description_glued") or "",
+                        "file_count": analysis.get("file_count", 0),
+                        "has_compressed": bool(analysis.get("has_compressed")),
+                        "extensions": analysis.get("extensions") or [],
+                        "published": parsed_date,
                     }
-                if analysis is not None:
-                    self._record_found_extensions(analysis)
+                self._record_found_extensions(analysis)
 
             if not posts_data:
                 self.log.emit(
@@ -1598,29 +1534,37 @@ class PostDetectionThread(QThread):
                 if not post_id:
                     continue
                 title = post.get("title", f"Post {post_id}")
-                matched_keyword = self._title_matches_skip_keyword(title, post)
-                keyword_match = bool(matched_keyword)
-                date_out = self._post_date_out_of_range(post)
-                file_count_out = self._post_file_count_out_of_range(post)
-                filetypes_out = self._post_holds_no_required_filetype(post)
+                facts = self._analyze(post)
+                reason, keyword = post_skip_reason(title, facts, self.post_filters)
 
-                # A dropped post is booked under the first filter that caught
-                # it, so the per-filter numbers stay mutually exclusive and
-                # still add up to the number of skipped posts.
-                if keyword_match:
+                # The post is booked under the first filter that caught it,
+                # so the per-filter numbers stay mutually exclusive and add
+                # up to the number of skipped posts. It is still listed: the
+                # tab keeps the whole fetched list so a filter change can
+                # bring it straight back without another fetch.
+                if reason == "keywords":
                     self._keyword_skipped_count += 1
-                    self.keyword_skip_counts[matched_keyword] = (
-                        self.keyword_skip_counts.get(matched_keyword, 0) + 1
+                    self.keyword_skip_counts[keyword] = (
+                        self.keyword_skip_counts.get(keyword, 0) + 1
                     )
-                elif date_out:
+                    if keyword_needed_rejoin(keyword, facts, self.post_filters):
+                        self.log.emit(
+                            translate(
+                                "log_debug",
+                                translate(
+                                    "skip_keyword_matched_after_rejoin", keyword
+                                ),
+                            ),
+                            "DEBUG",
+                        )
+                elif reason == "date":
                     self._date_skipped_count += 1
-                elif file_count_out:
+                elif reason == "file_count":
                     self._file_count_skipped_count += 1
-                elif filetypes_out:
+                elif reason == "filetypes":
                     self._filetype_skipped_count += 1
-                if keyword_match or date_out or file_count_out or filetypes_out:
+                if reason is not None:
                     self._skipped_count += 1
-                    continue
                 thumbnail_url = None
                 if "file" in post and post["file"] and "path" in post["file"]:
                     if (
@@ -1749,6 +1693,14 @@ class PostPopulationThread(QThread):
 
 
 class FilterThread(QThread):
+    """Apply the search bar and the post filters to the loaded post list.
+
+    This is the one place that decides what the Creator tab lists: the fetch
+    no longer drops posts, so re-running this pass is all a filter change
+    costs. The rules themselves live in :func:`post_skip_reason`, shared with
+    the fetch, so the list always matches what a fetch would have produced.
+    """
+
     finished = pyqtSignal(list)
 
     def __init__(
@@ -1758,37 +1710,93 @@ class FilterThread(QThread):
         search_text,
         search_scopes=None,
         post_search_index=None,
+        post_filters=None,
+        creator_url=None,
+        file_skip_keywords=None,
     ):
         super().__init__()
         self.all_detected_posts = all_detected_posts
+        # Which creator this pass belongs to, so a pass that finishes after
+        # the view moved on can be thrown away instead of painted.
+        self.creator_url = creator_url
         self.checked_urls = checked_urls.copy()
         self.search_text = (search_text or "").lower()
         # Scopes the search bar looks in: any of "title", "filenames",
         # "description", "tags". An empty set falls back to the title.
         self.search_scopes = set(search_scopes) if search_scopes else {"title"}
-        # post_id -> lower-case searchable text, built while detecting posts.
+        # post_id -> facts about that post, built while detecting posts.
         self.post_search_index = (
             post_search_index if post_search_index is not None else {}
         )
+        self.post_filters = post_filters if post_filters is not None else PostFilters()
+        # Same attribute names the detection thread publishes, so the run
+        # summary can read whichever of the two produced the numbers.
+        self.keyword_skipped_count = 0
+        self.date_skipped_count = 0
+        self.file_count_skipped_count = 0
+        self.filetype_skipped_count = 0
+        self.filtered_count = 0
+        self.keyword_skip_counts = {}
+        # Posts with no facts entry: their filters cannot be applied.
+        self.facts_missing_count = 0
+        # File-keyword skips follow the listed posts, using the names stored
+        # with each post, so the file row moves with the list too.
+        self.file_skip_keywords = list(file_skip_keywords or ())
+        self.file_keyword_skipped_count = 0
+        self.file_keyword_skip_counts = {}
         self.is_running = True
 
     def stop(self):
         self.is_running = False
+
+    def _count_skip(self, reason, keyword):
+        """Book one skipped post under the filter that caught it."""
+        self.filtered_count += 1
+        if reason == "keywords":
+            self.keyword_skipped_count += 1
+            self.keyword_skip_counts[keyword] = (
+                self.keyword_skip_counts.get(keyword, 0) + 1
+            )
+        elif reason == "date":
+            self.date_skipped_count += 1
+        elif reason == "file_count":
+            self.file_count_skipped_count += 1
+        elif reason == "filetypes":
+            self.filetype_skipped_count += 1
 
     def run(self):
         if not self.is_running:
             return
         filtered_items = []
         for post_title, (post_id, thumbnail_url) in self.all_detected_posts:
-            if self.is_running and post_matches_search(
+            if not self.is_running:
+                break
+            facts = self.post_search_index.get(post_id)
+            if facts is None:
+                self.facts_missing_count += 1
+            reason, keyword = post_skip_reason(post_title, facts, self.post_filters)
+            if reason is not None:
+                self._count_skip(reason, keyword)
+                continue
+            if not post_matches_search(
                 post_title,
                 post_id,
                 self.search_text,
                 self.search_scopes,
                 self.post_search_index,
             ):
-                is_checked = self.checked_urls.get(post_id, False)
-                filtered_items.append((post_title, post_id, thumbnail_url, is_checked))
+                continue
+            if self.file_skip_keywords:
+                for name in (facts or {}).get("filenames_list") or ():
+                    matched = _first_matching_keyword(self.file_skip_keywords, name)
+                    if not matched:
+                        continue
+                    self.file_keyword_skipped_count += 1
+                    self.file_keyword_skip_counts[matched] = (
+                        self.file_keyword_skip_counts.get(matched, 0) + 1
+                    )
+            is_checked = self.checked_urls.get(post_id, False)
+            filtered_items.append((post_title, post_id, thumbnail_url, is_checked))
         self.finished.emit(filtered_items)
 
 
@@ -4056,7 +4064,14 @@ class CreatorDownloaderTab(QWidget):
         self.creator_options_group.setLayout(creator_options_layout)
         left_layout.addWidget(self.creator_options_group)
 
-        # Progress layout
+        # Progress and the run summary share one box, so everything above the
+        # buttons reads as a single section.
+        self.run_summary_group = QGroupBox()
+        self.run_summary_group.setStyleSheet(
+            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+        )
+        run_summary_layout = QVBoxLayout()
+
         creator_progress_layout = QVBoxLayout()
         self.creator_file_progress_label = QLabel()
         creator_progress_layout.addWidget(self.creator_file_progress_label)
@@ -4074,20 +4089,31 @@ class CreatorDownloaderTab(QWidget):
         )
         self.creator_overall_progress.setRange(0, 100)
         creator_progress_layout.addWidget(self.creator_overall_progress)
-        left_layout.addLayout(creator_progress_layout)
+        run_summary_layout.addLayout(creator_progress_layout)
 
         # Run summary: what the last run did, kept out of the log so it stays
         # visible while the log panel is minimised.
         self.creator_download_summary_label = QLabel()
         self.creator_download_summary_label.setTextFormat(Qt.TextFormat.RichText)
         self.creator_download_summary_label.setStyleSheet("color: white;")
-        left_layout.addWidget(self.creator_download_summary_label)
+        run_summary_layout.addWidget(self.creator_download_summary_label)
 
         self.creator_skip_summary_label = QLabel()
         self.creator_skip_summary_label.setTextFormat(Qt.TextFormat.RichText)
-        self.creator_skip_summary_label.setStyleSheet("color: #E5C07B;")
+        self.creator_skip_summary_label.setStyleSheet("color: white;")
         self.creator_skip_summary_label.setWordWrap(True)
-        left_layout.addWidget(self.creator_skip_summary_label)
+        run_summary_layout.addWidget(self.creator_skip_summary_label)
+
+        # File-level filters: keyword skips follow the loaded list, the archive
+        # rule is only decided when a download runs.
+        self.creator_skip_files_label = QLabel()
+        self.creator_skip_files_label.setTextFormat(Qt.TextFormat.RichText)
+        self.creator_skip_files_label.setStyleSheet("color: white;")
+        self.creator_skip_files_label.setWordWrap(True)
+        run_summary_layout.addWidget(self.creator_skip_files_label)
+
+        self.run_summary_group.setLayout(run_summary_layout)
+        left_layout.addWidget(self.run_summary_group)
 
         # Buttons layout
         creator_btn_layout = QHBoxLayout()
@@ -4424,6 +4450,13 @@ class CreatorDownloaderTab(QWidget):
 
         post_list_layout.addLayout(checkbox_layout)
 
+        # Explains an empty list that is empty because of the filters, not
+        # because the creator has nothing.
+        self.creator_post_empty_label = QLabel()
+        self.creator_post_empty_label.setStyleSheet("color: #8FA6C8;")
+        self.creator_post_empty_label.setVisible(False)
+        post_list_layout.addWidget(self.creator_post_empty_label)
+
         self.creator_post_list = QListWidget()
         self.creator_post_list.setStyleSheet("background: #2A3B5A; border-radius: 5px;")
         self.creator_post_list.setSelectionMode(
@@ -4567,6 +4600,9 @@ class CreatorDownloaderTab(QWidget):
         # "on" filter starts empty instead of showing every type.
         self._render_creator_ext_checks()
 
+        # Connect the live filters last: every widget they read now exists.
+        self._connect_live_filters()
+
     def update_ui_text(self):
         self.creator_multi_url_input.setPlaceholderText(
             translate("multi_url_placeholder_creator")
@@ -4581,6 +4617,10 @@ class CreatorDownloaderTab(QWidget):
         self.creator_ext_empty_label.setText(
             translate("supported_filetypes_not_present")
         )
+        self.creator_post_empty_label.setText(
+            translate("no_posts_match_filters")
+        )
+        self.run_summary_group.setTitle(translate("run_summary"))
         self.post_list_group.setTitle(translate("posts_to_download"))
         self.filters_group.setTitle(translate("filters_group_title"))
 
@@ -5048,6 +5088,18 @@ class CreatorDownloaderTab(QWidget):
         self.post_dates_map = {}  # Clear previous creator's post dates
         self.post_search_index = {}  # Clear previous creator's search index
         self._reset_found_extensions()
+        # The skip breakdown describes one creator's posts, so start it at
+        # zero instead of showing the previous creator's numbers until the
+        # first filter pass of the new one lands.
+        self._post_skip_stats = {
+            "keywords": 0,
+            "date": 0,
+            "file_count": 0,
+            "filetypes": 0,
+        }
+        self._post_keyword_skip_counts = {}
+        self._skip_summary_cache = None
+        self._update_download_summary(refresh_skips=True)
         self.current_page = 1  # Reset pagination
         self.total_pages = 1
 
@@ -5059,6 +5111,9 @@ class CreatorDownloaderTab(QWidget):
 
         self.creator_post_list.clear()
         self.post_widget_cache.clear()
+        empty_label = getattr(self, "creator_post_empty_label", None)
+        if empty_label is not None:
+            empty_label.setVisible(False)
         self.update_pagination_controls()  # Reset pagination UI
 
         # Reset queue status to allow refetching
@@ -5086,79 +5141,24 @@ class CreatorDownloaderTab(QWidget):
         # Disable UI elements during fetching
         self.set_fetching_ui_state(True)
 
-        # Read skip-keywords and scope directly from the inline UI widgets.
-        # Scope is a set of independently-toggled checkboxes now — a post is
-        # skipped if the keyword matches in ANY enabled scope.
-        raw_keywords = self.skip_keywords_edit.text().strip()
-        skip_keywords = [kw.strip() for kw in raw_keywords.split(",") if kw.strip()] if raw_keywords else []
-        skip_keywords_scopes = {
-            scope for scope, checkbox in self.skip_scope_checkboxes.items()
-            if checkbox.isChecked()
-        }
-
-        date_after = parse_filter_date(self.date_from_edit.text())
-        date_before = parse_filter_date(self.date_to_edit.text())
-        if self.date_from_edit.text().strip() and date_after is None:
+        # Read the Filters box once. The same value goes to the fetch and to
+        # every live pass, so what you see can never drift from what a fetch
+        # would have produced.
+        post_filters, filter_warnings = self._post_filters_from_widgets()
+        for key in filter_warnings:
             self.append_log_to_console(
-                translate(
-                    "log_warning",
-                    translate("invalid_date_from_ignored"),
-                ),
+                translate("log_warning", translate(key)),
                 "WARNING",
             )
-        if self.date_to_edit.text().strip() and date_before is None:
-            self.append_log_to_console(
-                translate(
-                    "log_warning",
-                    translate("invalid_date_to_ignored"),
-                ),
-                "WARNING",
-            )
-        if date_after and date_before and date_after > date_before:
-            date_after, date_before = date_before, date_after
-
-        file_count_min = parse_filter_count(self.file_count_from_edit.text())
-        file_count_max = parse_filter_count(self.file_count_to_edit.text())
-        if self.file_count_from_edit.text().strip() and file_count_min is None:
-            self.append_log_to_console(
-                translate(
-                    "log_warning",
-                    translate("invalid_file_count_ignored"),
-                ),
-                "WARNING",
-            )
-        if self.file_count_to_edit.text().strip() and file_count_max is None:
-            self.append_log_to_console(
-                translate(
-                    "log_warning",
-                    translate("invalid_file_count_ignored"),
-                ),
-                "WARNING",
-            )
-        if (
-            file_count_min is not None
-            and file_count_max is not None
-            and file_count_min > file_count_max
-        ):
-            file_count_min, file_count_max = file_count_max, file_count_min
 
         self.post_detection_thread = PostDetectionThread(
             url,
             self.post_titles_map,
             self._create_thread_settings(),
-            skip_keywords=skip_keywords,
-            skip_keywords_scopes=skip_keywords_scopes,
             post_dates_map=self.post_dates_map,
-            date_after=date_after,
-            date_before=date_before,
-            file_count_min=file_count_min,
-            file_count_max=file_count_max,
-            file_count_keep_compressed=(
-                self.file_count_keep_compressed_check.isChecked()
-            ),
-            required_filetypes=self._required_filetypes(),
             post_search_index=self.post_search_index,
             found_extensions=self._found_type_counts,
+            post_filters=post_filters,
         )
         self.post_detection_thread.finished.connect(self.on_post_detection_finished)
         self.post_detection_thread.posts_batch.connect(self.on_posts_batch_received)
@@ -5223,9 +5223,18 @@ class CreatorDownloaderTab(QWidget):
         """Filter and add a batch of posts to the filtered cache incrementally"""
         search_text = self.creator_search_input.text().lower()
         search_scopes = self._selected_search_scopes()
+        post_filters, warnings = self._post_filters_from_widgets()
+        self._log_filter_warnings(warnings)
         filtered_batch = []
 
         for post_title, (post_id, thumbnail_url) in batch_posts:
+            # Batches now carry every fetched post, so the filters have to
+            # be applied here too; otherwise a filtered post would show up
+            # until the next full pass.
+            facts = self.post_search_index.get(post_id)
+            reason, _keyword = post_skip_reason(post_title, facts, post_filters)
+            if reason is not None:
+                continue
             if post_matches_search(
                 post_title,
                 post_id,
@@ -5424,8 +5433,20 @@ class CreatorDownloaderTab(QWidget):
             self.current_page += 1
             self.display_current_page()
 
+    def _update_post_list_empty_state(self):
+        """Show why the post list is empty, or hide the hint.
+
+        Only when there are posts to show: a creator with no posts at all
+        is a different situation and keeps the plain empty list.
+        """
+        label = getattr(self, "creator_post_empty_label", None)
+        if label is None:
+            return
+        label.setVisible(bool(self.all_detected_posts) and not self.filtered_posts)
+
     def display_current_page(self):
         """Display the current page of posts"""
+        self._update_post_list_empty_state()
         self.creator_post_list.clear()
         self.post_widget_cache.clear()
 
@@ -5677,8 +5698,22 @@ class CreatorDownloaderTab(QWidget):
         ]
         for post_id in matching:
             self.checked_urls[post_id] = True
-        self.posts_to_download = matching
         self._sync_filtered_posts_checked()
+        visible_ids = {
+            post_id for _title, post_id, _thumb, _checked in self.filtered_posts
+        }
+        hidden = [post_id for post_id in matching if post_id not in visible_ids]
+        if hidden:
+            self.append_log_to_console(
+                translate(
+                    "log_warning",
+                    translate("queued_post_hidden_by_filters", len(hidden)),
+                ),
+                "WARNING",
+            )
+        # The tick stays, but a hidden post is not downloaded: the shared
+        # recompute above would say that again, so let this warning stand.
+        self.update_checked_posts(announce_hidden=False)
         self._goto_page_for_post_ids(requested_post_ids)
         return matching
 
@@ -5754,12 +5789,7 @@ class CreatorDownloaderTab(QWidget):
             self.creator_download_finished()
             return
 
-        raw_file_keywords = self.file_skip_keywords_edit.text().strip()
-        file_skip_keywords = (
-            [kw.strip() for kw in raw_file_keywords.split(",") if kw.strip()]
-            if raw_file_keywords
-            else []
-        )
+        file_skip_keywords = self._file_skip_keywords_from_widgets()
 
         self.file_preparation_thread = FilePreparationThread(
             post_ids,
@@ -6527,7 +6557,13 @@ class CreatorDownloaderTab(QWidget):
             "DEBUG",
         )
 
-    def update_checked_posts(self):
+    def update_checked_posts(self, announce_hidden=True):
+        """Work out which posts the Download button acts on.
+
+        Only posts that are ticked AND currently listed count, so a filter
+        that hides a post also keeps it out of the download. The tick is left
+        alone, so clearing the filter brings the post back still ticked.
+        """
         self.posts_to_download = []
         seen_ids = set()
         if not self.current_creator_url:
@@ -6536,29 +6572,26 @@ class CreatorDownloaderTab(QWidget):
                 "WARNING",
             )
             return
-        current_creator_posts = {
-            post_id
-            for _, (post_id, _) in self.all_files_map.get(self.current_creator_url, [])
+        visible_ids = {
+            post_id for _title, post_id, _thumb, _checked in self.filtered_posts
         }
-        for post_id, is_checked in self.checked_urls.items():
-            if (
-                is_checked
-                and post_id in current_creator_posts
-                and post_id not in seen_ids
-            ):
+        ticked_ids = [
+            post_id
+            for post_id, is_checked in self.checked_urls.items()
+            if is_checked
+        ]
+        for post_id in ticked_ids:
+            if post_id in visible_ids and post_id not in seen_ids:
                 self.posts_to_download.append(post_id)
                 seen_ids.add(post_id)
-        if not self.posts_to_download and current_creator_posts:
+        hidden = [post_id for post_id in ticked_ids if post_id not in visible_ids]
+        if hidden and announce_hidden:
             self.append_log_to_console(
                 translate(
-                    "log_warning",
-                    translate(
-                        "no_posts_selected_for_creator",
-                        self.current_creator_url,
-                        self.checked_urls,
-                    ),
+                    "log_info",
+                    translate("ticked_posts_hidden_by_filters", len(hidden)),
                 ),
-                "WARNING",
+                "INFO",
             )
         self.creator_post_count_label.setText(
             translate("posts_count", len(self.posts_to_download))
@@ -6587,8 +6620,8 @@ class CreatorDownloaderTab(QWidget):
             # Remember it so the change is not lost, then re-run below.
             self._filter_refresh_pending = True
             self.append_log_to_console(
-                translate("log_warning", translate("filtering_already_in_progress")),
-                "WARNING",
+                translate("log_debug", translate("filtering_already_in_progress")),
+                "DEBUG",
             )
             return
         # This pass will pick up the current search text and scopes, so any
@@ -6596,12 +6629,17 @@ class CreatorDownloaderTab(QWidget):
         self._filter_refresh_pending = False
         self.background_task_label.setText(translate("filtering_posts"))
         self.background_task_progress.setRange(0, 0)
+        post_filters, warnings = self._post_filters_from_widgets()
+        self._log_filter_warnings(warnings)
         self.filter_thread = FilterThread(
             self.all_detected_posts,
             self.checked_urls,
             self.creator_search_input.text(),
             search_scopes=self._selected_search_scopes(),
             post_search_index=self.post_search_index,
+            post_filters=post_filters,
+            creator_url=self.current_creator_url,
+            file_skip_keywords=self._file_skip_keywords_from_widgets(),
         )
         self.filter_thread.finished.connect(self.on_filter_finished)
         self.filter_thread.finished.connect(self.cleanup_filter_thread)
@@ -6609,6 +6647,17 @@ class CreatorDownloaderTab(QWidget):
         self.filter_thread.start()
 
     def on_filter_finished(self, filtered_items):
+        # A pass started for one creator can land after the user has moved to
+        # another; showing it would paint the previous creator's rows into a
+        # list that was just cleared for someone else.
+        thread = getattr(self, "filter_thread", None)
+        pass_creator = getattr(thread, "creator_url", None)
+        if pass_creator is not None and pass_creator != self.current_creator_url:
+            self.append_log_to_console(
+                translate("log_debug", translate("discarded_stale_filter_pass")),
+                "DEBUG",
+            )
+            return
         # Store filtered posts for pagination
         self.filtered_posts = filtered_items
         self.total_pages = max(
@@ -6646,9 +6695,19 @@ class CreatorDownloaderTab(QWidget):
         )
         # Surface which post filters dropped how many posts, next to the
         # progress bars instead of only in the log.
+        # File-keyword skips are counted by the pass over the listed posts, so
+        # they follow the list just like the post-level numbers do.
+        if thread is not None and hasattr(thread, "file_keyword_skipped_count"):
+            self._file_skip_count = thread.file_keyword_skipped_count
+            self._file_keyword_skip_counts = dict(thread.file_keyword_skip_counts)
+
+        # The filter pass owns the numbers now: they describe the list as it
+        # is filtered right now, not as it was filtered during the fetch.
         self._refresh_skip_summary_from_filter(
-            getattr(self, "_last_detection_thread", None)
+            getattr(self, "filter_thread", None)
+            or getattr(self, "_last_detection_thread", None)
         )
+        self._log_facts_missing()
 
         # Emit skip-keywords summary INFO lines LAST — after all detection,
         # population, and filtering logs are done — so they appear at the
@@ -6659,7 +6718,8 @@ class CreatorDownloaderTab(QWidget):
             if detection_thread is not None:
                 filtered_count = getattr(detection_thread, "filtered_count", 0)
                 total_detected = getattr(detection_thread, "total_detected", 0)
-                skip_kws = getattr(detection_thread, "skip_keywords", [])
+                filters_used = getattr(detection_thread, "post_filters", None)
+                skip_kws = list(getattr(filters_used, "skip_keywords", ()) or ())
                 keyword_skipped_count = getattr(
                     detection_thread, "keyword_skipped_count", filtered_count
                 )
@@ -7078,7 +7138,13 @@ class CreatorDownloaderTab(QWidget):
     # ------------------------------------------------------------------
 
     def _skip_breakdown(self):
-        """Return ``[(label, count), ...]`` for every skip counter we track."""
+        """Return ``[(label, count), ...]`` for the post-level filters.
+
+        The order mirrors the Filters box top to bottom, so the block reads as
+        a count for each filter in the order they are set. These follow the
+        loaded list live; the file-level counters live in
+        :meth:`_file_skip_breakdown`.
+        """
         stats = getattr(self, "_post_skip_stats", {})
         return [
             (
@@ -7097,16 +7163,19 @@ class CreatorDownloaderTab(QWidget):
                 translate("summary_skip_post_filetypes", stats.get("filetypes", 0)),
                 stats.get("filetypes", 0),
             ),
-            (
-                translate("summary_skip_files", getattr(self, "_file_skip_count", 0)),
-                getattr(self, "_file_skip_count", 0),
-            ),
-            (
-                translate(
-                    "summary_skip_images", getattr(self, "_images_skipped_count", 0)
-                ),
-                getattr(self, "_images_skipped_count", 0),
-            ),
+        ]
+
+    def _file_skip_breakdown(self):
+        """Return ``[(label, count), ...]`` for the file-level filters.
+
+        These count files, not posts, and are only decided when a download
+        prepares them, so they move on a run rather than on a list change.
+        """
+        file_skips = getattr(self, "_file_skip_count", 0)
+        images = getattr(self, "_images_skipped_count", 0)
+        return [
+            (translate("summary_skip_files", file_skips), file_skips),
+            (translate("summary_skip_images", images), images),
         ]
 
     @staticmethod
@@ -7116,6 +7185,127 @@ class CreatorDownloaderTab(QWidget):
             counts.items(), key=lambda item: (-item[1], item[0].lower())
         )
         return [f"  {keyword}: {count}" for keyword, count in ordered]
+
+    def _schedule_filter_refresh(self):
+        """Re-run the filter pass once a filter edit settles.
+
+        Text fields change on every keystroke and each pass walks every post,
+        so the timer is restarted rather than firing once per character. A
+        fetch in progress owns the list and runs its own pass at the end.
+        """
+        thread = getattr(self, "post_detection_thread", None)
+        if thread is not None and thread.isRunning():
+            return
+        if not self.all_detected_posts:
+            # Nothing is loaded yet, so there is nothing to filter; the
+            # fetch runs its own pass as soon as it finishes.
+            return
+        self._filter_debounce.start()
+
+    def _connect_live_filters(self):
+        """Make the Filters box re-filter the loaded list as it changes.
+
+        Every post filter reads the facts stored during the fetch, so a change
+        costs a filter pass instead of another fetch. Text fields are
+        debounced; checkboxes and dates apply straight away.
+        """
+        self._filter_debounce = QTimer(self)
+        self._filter_debounce.setSingleShot(True)
+        self._filter_debounce.setInterval(350)
+        self._filter_debounce.timeout.connect(self.filter_items)
+
+        for editor in (
+            self.skip_keywords_edit,
+            self.date_from_edit,
+            self.date_to_edit,
+            self.file_count_from_edit,
+            self.file_count_to_edit,
+        ):
+            editor.textChanged.connect(self._schedule_filter_refresh)
+
+        for checkbox in self.skip_scope_checkboxes.values():
+            checkbox.stateChanged.connect(self.filter_items)
+        self.file_count_keep_compressed_check.stateChanged.connect(self.filter_items)
+        self.filter_no_selected_filetypes_check.stateChanged.connect(self.filter_items)
+
+    def _log_filter_warnings(self, warnings):
+        """Say once when a filter entry cannot be read.
+
+        The fetch has always warned about these; a live pass used to drop
+        them, so a bogus date or count silently filtered nothing. Repeats
+        are suppressed until the entry parses again.
+        """
+        previous = getattr(self, "_live_filter_warnings", set())
+        for key in warnings:
+            if key in previous:
+                continue
+            self.append_log_to_console(
+                translate("log_warning", translate(key)),
+                "WARNING",
+            )
+        self._live_filter_warnings = set(warnings)
+
+    def _file_skip_keywords_from_widgets(self):
+        """Return the parsed "Skip Files Containing" keywords."""
+        raw = self.file_skip_keywords_edit.text().strip()
+        if not raw:
+            return []
+        return [kw.strip() for kw in raw.split(",") if kw.strip()]
+
+    def _post_filters_from_widgets(self):
+        """Return ``(PostFilters, warnings)`` for the current Filters box.
+
+        *warnings* holds the translation keys of entries that could not be
+        read (a half-typed date, a non-numeric file count). The fetch logs
+        them; a live pass stays quiet, because a bound that is still being
+        typed should not nag on every keystroke.
+        """
+        raw_keywords = self.skip_keywords_edit.text().strip()
+        if raw_keywords:
+            skip_keywords = [
+                kw.strip() for kw in raw_keywords.split(",") if kw.strip()
+            ]
+        else:
+            skip_keywords = []
+
+        warnings = []
+        date_after = parse_filter_date(self.date_from_edit.text())
+        if self.date_from_edit.text().strip() and date_after is None:
+            warnings.append("invalid_date_from_ignored")
+        date_before = parse_filter_date(self.date_to_edit.text())
+        if self.date_to_edit.text().strip() and date_before is None:
+            warnings.append("invalid_date_to_ignored")
+        if date_after and date_before and date_after > date_before:
+            date_after, date_before = date_before, date_after
+
+        file_count_min = parse_filter_count(self.file_count_from_edit.text())
+        if self.file_count_from_edit.text().strip() and file_count_min is None:
+            warnings.append("invalid_file_count_ignored")
+        file_count_max = parse_filter_count(self.file_count_to_edit.text())
+        if self.file_count_to_edit.text().strip() and file_count_max is None:
+            warnings.append("invalid_file_count_ignored")
+        if (
+            file_count_min is not None
+            and file_count_max is not None
+            and file_count_min > file_count_max
+        ):
+            file_count_min, file_count_max = file_count_max, file_count_min
+
+        filters = PostFilters(
+            skip_keywords=tuple(skip_keywords),
+            skip_scopes=frozenset(
+                scope
+                for scope, checkbox in self.skip_scope_checkboxes.items()
+                if checkbox.isChecked()
+            ),
+            date_after=date_after,
+            date_before=date_before,
+            file_count_min=file_count_min,
+            file_count_max=file_count_max,
+            keep_compressed=self.file_count_keep_compressed_check.isChecked(),
+            required_filetypes=frozenset(self._required_filetypes() or ()),
+        )
+        return filters, warnings
 
     def _required_filetypes(self):
         """Return the filetypes the post filter must find, or None.
@@ -7202,15 +7392,43 @@ class CreatorDownloaderTab(QWidget):
                 layout.addWidget(empty_label, 0, 0, 1, 5)
 
     def _skip_tooltip(self):
-        """Tooltip text listing how many skips each keyword caused."""
+        """Tooltip listing how many posts each skip keyword dropped."""
         lines = []
         if self._post_keyword_skip_counts:
             lines.append(translate("skip_tooltip_post_keywords"))
             lines.extend(self._keyword_skip_lines(self._post_keyword_skip_counts))
-        if self._file_keyword_skip_counts:
-            lines.append(translate("skip_tooltip_file_keywords"))
-            lines.extend(self._keyword_skip_lines(self._file_keyword_skip_counts))
         return "\n".join(lines) if lines else translate("skip_tooltip_no_keywords")
+
+    def _file_skip_tooltip(self):
+        """Tooltip for the file row: keyword counts, then what is per-run.
+
+        The keyword part mirrors the posts tooltip, including the "no skips"
+        line, so both rows read the same way.
+        """
+        if self._file_keyword_skip_counts:
+            lines = [translate("skip_tooltip_file_keywords")]
+            lines.extend(self._keyword_skip_lines(self._file_keyword_skip_counts))
+        else:
+            lines = [translate("skip_tooltip_no_keywords")]
+        lines.append(translate("skip_tooltip_files_note"))
+        return "\n".join(lines)
+
+    def _skip_line(self, total_key, breakdown):
+        """Render one summary row, with the colour it deserves."""
+        total = sum(count for _label, count in breakdown)
+        parts = [translate(total_key, total)]
+        parts.append(" · ".join(label for label, _count in breakdown))
+        return " &nbsp; ".join(parts), self._skip_colour(total)
+
+    def _skip_colour(self, total):
+        """Green once something was skipped, sand when nothing was, else white.
+
+        White is the resting state: there is no list yet, so nothing has been
+        determined.
+        """
+        if not self.all_detected_posts:
+            return "white"
+        return "#7BD88F" if total else "#E5C07B"
 
     def _failed_post_count(self):
         """How many distinct posts the run's failed files belong to."""
@@ -7267,24 +7485,29 @@ class CreatorDownloaderTab(QWidget):
         )
 
         if refresh_skips or self._skip_summary_cache is None:
-            breakdown = self._skip_breakdown()
-            total_skipped = sum(count for _, count in breakdown)
-            parts = [
-                "<span style='color:#E5C07B'>{}</span>".format(
-                    translate("summary_skipped_total", total_skipped)
+            # Always list every filter, zeros included, so each row is
+            # readable even before anything has been skipped.
+            self._skip_summary_cache = {
+                "posts": self._skip_line(
+                    "summary_skipped_posts", self._skip_breakdown()
                 )
-            ]
-            # Always list every filter, zeros included, so the breakdown is
-            # present and readable even before anything has been skipped.
-            parts.append(" · ".join(label for label, _ in breakdown))
-            self._skip_summary_cache = (
-                " &nbsp; ".join(parts),
-                self._skip_tooltip(),
-            )
+                + (self._skip_tooltip(),),
+                "files": self._skip_line(
+                    "summary_skipped_files", self._file_skip_breakdown()
+                )
+                + (self._file_skip_tooltip(),),
+            }
 
-        text, tooltip = self._skip_summary_cache
-        self.creator_skip_summary_label.setText(text)
-        self.creator_skip_summary_label.setToolTip(tooltip)
+        for label, key in (
+            (self.creator_skip_summary_label, "posts"),
+            (self.creator_skip_files_label, "files"),
+        ):
+            text, colour, tip = self._skip_summary_cache[key]
+            label.setText(text)
+            label.setToolTip(tip)
+            sheet = f"color: {colour};"
+            if label.styleSheet() != sheet:
+                label.setStyleSheet(sheet)
 
     def _reset_download_summary(self, keep_post_stats=False):
         """Reset the run stats and forget the last run's failures."""
@@ -7364,6 +7587,26 @@ class CreatorDownloaderTab(QWidget):
             getattr(detection_thread, "keyword_skip_counts", {}) or {}
         )
         self._update_download_summary(refresh_skips=True)
+
+    def _log_facts_missing(self):
+        """Say when some posts have no stored details to filter on.
+
+        That only happens when a failed fetch fell back to the in-memory list,
+        which never held post payloads. Those posts are kept rather than
+        dropped, so say it once per change instead of quietly listing
+        everything.
+        """
+        thread = getattr(self, "filter_thread", None)
+        missing = getattr(thread, "facts_missing_count", 0) if thread else 0
+        if missing and missing != getattr(self, "_last_facts_missing", 0):
+            self.append_log_to_console(
+                translate(
+                    "log_info",
+                    translate("posts_without_details_not_filtered", missing),
+                ),
+                "INFO",
+            )
+        self._last_facts_missing = missing
 
     def retry_failed_downloads(self):
         """Re-download only the files that failed in the last run."""

@@ -72,6 +72,14 @@ def test_parse_filter_count_rejects_junk_and_negatives():
 # ---------------------------------------------------------------------------
 
 
+def _over_range(post=None, **bounds):
+    """Ask the shared file-count rule about a post."""
+    return cd.file_count_out_of_range(
+        cd.analyze_post(post if post is not None else _post()),
+        cd.PostFilters(**bounds),
+    )
+
+
 def test_analyze_post_counts_every_file():
     analysis = cd.analyze_post(_post())
 
@@ -128,6 +136,8 @@ def _run_detection(monkeypatch, posts, **kwargs):
 
     monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: Session())
 
+    # The facts have to exist for the live filter pass to work on them.
+    kwargs.setdefault("post_search_index", {})
     thread = _thread(**kwargs)
     thread.posts_batch = _signal()
     thread.finished = _signal()
@@ -141,17 +151,37 @@ def _detected_ids(thread):
     return [post_id for _, (post_id, _) in thread.finished.emit.call_args[0][0]]
 
 
+def _visible_ids(thread):
+    """Run the live filter pass over what the fetch kept."""
+    filter_thread = cd.FilterThread(
+        thread.finished.emit.call_args[0][0],
+        {},
+        "",
+        post_search_index=thread.post_search_index or {},
+        post_filters=thread.post_filters,
+    )
+    filter_thread.finished = _signal()
+    filter_thread.run()
+    return [
+        post_id
+        for _, post_id, _, _ in filter_thread.finished.emit.call_args[0][0]
+    ]
+
+
 def test_detection_applies_the_minimum_count(monkeypatch):
     thread = _run_detection(monkeypatch, POSTS, file_count_min=3)
 
-    assert _detected_ids(thread) == ["big"]
+    # The fetch keeps every post and records what its filters dropped; the
+    # filter pass is what decides the list.
     assert thread.file_count_skipped_count == 2
+    assert sorted(_detected_ids(thread)) == ["archive", "big", "small"]
+    assert _visible_ids(thread) == ["big"]
 
 
 def test_detection_applies_the_maximum_count(monkeypatch):
     thread = _run_detection(monkeypatch, POSTS, file_count_max=1)
 
-    assert sorted(_detected_ids(thread)) == ["archive", "small"]
+    assert sorted(_visible_ids(thread)) == ["archive", "small"]
 
 
 def test_detection_keeps_archives_when_asked(monkeypatch):
@@ -159,13 +189,13 @@ def test_detection_keeps_archives_when_asked(monkeypatch):
         monkeypatch, POSTS, file_count_min=3, file_count_keep_compressed=True
     )
 
-    assert sorted(_detected_ids(thread)) == ["archive", "big"]
+    assert sorted(_visible_ids(thread)) == ["archive", "big"]
 
 
 def test_detection_without_bounds_keeps_everything(monkeypatch):
     thread = _run_detection(monkeypatch, POSTS)
 
-    assert len(_detected_ids(thread)) == 3
+    assert sorted(_visible_ids(thread)) == ["archive", "big", "small"]
     assert thread.file_count_skipped_count == 0
 
 
@@ -207,40 +237,34 @@ def test_analyze_post_tolerates_odd_posts():
 
 
 # ---------------------------------------------------------------------------
-# _post_file_count_out_of_range
+# file_count_out_of_range (the rule the fetch and the live pass share)
 # ---------------------------------------------------------------------------
 
 
 def test_no_bounds_never_filters():
-    assert not _thread()._post_file_count_out_of_range(_post())
+    assert not _over_range()
 
 
 def test_minimum_bound_is_inclusive():
-    assert not _thread(file_count_min=5)._post_file_count_out_of_range(_post())
-    assert _thread(file_count_min=6)._post_file_count_out_of_range(_post())
+    assert not _over_range(file_count_min=5)
+    assert _over_range(file_count_min=6)
 
 
 def test_maximum_bound_is_inclusive():
-    assert not _thread(file_count_max=5)._post_file_count_out_of_range(_post())
-    assert _thread(file_count_max=4)._post_file_count_out_of_range(_post())
+    assert not _over_range(file_count_max=5)
+    assert _over_range(file_count_max=4)
 
 
 def test_both_bounds_form_a_range():
-    assert _thread(file_count_min=6, file_count_max=9)._post_file_count_out_of_range(
-        _post()
-    )
+    assert _over_range(file_count_min=6, file_count_max=9)
 
 
 def test_keep_archives_bypasses_the_filter():
     archive_post = _post(file={"name": "pack.zip", "path": "/m/pack.zip"})
 
-    assert _thread(file_count_min=9)._post_file_count_out_of_range(archive_post)
-    assert not _thread(
-        file_count_min=9, file_count_keep_compressed=True
-    )._post_file_count_out_of_range(archive_post)
+    assert _over_range(archive_post, file_count_min=9)
+    assert not _over_range(archive_post, file_count_min=9, keep_compressed=True)
 
 
 def test_keep_archives_still_filters_posts_without_archives():
-    assert _thread(
-        file_count_min=9, file_count_keep_compressed=True
-    )._post_file_count_out_of_range(_post())
+    assert _over_range(file_count_min=9, keep_compressed=True)

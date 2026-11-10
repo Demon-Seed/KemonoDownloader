@@ -251,7 +251,7 @@ def test_file_count_help_dialog_explains_the_filter(qtbot, tmp_path, monkeypatch
 
     assert captured["title"] == tab.file_count_help_btn.toolTip()
     assert "Keep Archives" in captured["text"]
-    assert "eye icon" in captured["text"]
+    assert "straight away" in captured["text"]
 
 
 # ---------------------------------------------------------------------------
@@ -316,9 +316,10 @@ def test_fetch_passes_file_count_bounds_and_swaps_them(qtbot, tmp_path, monkeypa
     tab.check_creator_from_queue("https://kemono.cr/patreon/user/1")
 
     kwargs = instances[-1].kwargs
-    assert kwargs["file_count_min"] == 4
-    assert kwargs["file_count_max"] == 9
-    assert kwargs["file_count_keep_compressed"] is True
+    filters = kwargs["post_filters"]
+    assert filters.file_count_min == 4
+    assert filters.file_count_max == 9
+    assert filters.keep_compressed is True
     assert kwargs["post_search_index"] is tab.post_search_index
 
 
@@ -336,8 +337,8 @@ def test_fetch_rejects_junk_file_counts(qtbot, tmp_path, monkeypatch):
     tab.check_creator_from_queue("https://kemono.cr/patreon/user/1")
 
     kwargs = instances[-1].kwargs
-    assert kwargs["file_count_min"] is None
-    assert kwargs["file_count_max"] is None
+    assert kwargs["post_filters"].file_count_min is None
+    assert kwargs["post_filters"].file_count_max is None
     assert any(level == "WARNING" for _, level in messages)
 
 

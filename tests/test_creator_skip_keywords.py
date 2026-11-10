@@ -52,9 +52,15 @@ def _make_thread(keywords, scopes, messages=None):
     return thread
 
 
+def _match(thread, title, post=None):
+    """Ask the shared keyword rule the way the fetch does."""
+    facts = cd.analyze_post(post) if post is not None else {}
+    return cd.keyword_skip_reason(title, facts, thread.post_filters)
+
+
 def _skip(keywords, scopes, post, title="Some post", messages=None):
     thread = _make_thread(keywords, scopes, messages)
-    return thread._title_matches_skip_keyword(title, post)
+    return _match(thread, title, post)
 
 
 # ---------------------------------------------------------------------------
@@ -63,38 +69,33 @@ def _skip(keywords, scopes, post, title="Some post", messages=None):
 
 
 def test_candidates_keep_first_rendering_first():
-    thread = _make_thread(["x"], {"description"})
-    texts = thread._gather_post_description_texts(
-        {"content": "<p>Alien <b>Comic</b></p>"}
-    )
+    analysis = cd.analyze_post({"content": "<p>Alien <b>Comic</b></p>"})
 
-    assert texts[0] == "Alien  Comic"  # unchanged legacy rendering
-    assert len(texts) == 2
-    assert texts[1].strip() == "Alien Comic"  # inline tag re-joined
+    assert analysis["description"] == "alien  comic"  # legacy rendering
+    assert analysis["description_glued"].strip() == "alien comic"
 
 
 def test_candidates_single_entry_when_renderings_agree():
-    thread = _make_thread(["x"], {"description"})
+    analysis = cd.analyze_post({"content": "plain text"})
 
-    assert thread._gather_post_description_texts({"content": "plain text"}) == (
-        "plain text",
-    )
+    assert analysis["description"] == "plain text"
+    assert analysis["description_glued"] == ""
 
 
 @pytest.mark.parametrize("content", [None, "", {}, 123, []])
 def test_candidates_tolerate_missing_or_odd_content(content):
-    thread = _make_thread(["x"], {"description"})
+    analysis = cd.analyze_post({"content": content})
 
-    assert thread._gather_post_description_texts({"content": content}) == ()
+    assert analysis["description"] == ""
+    assert analysis["description_glued"] == ""
 
 
-def test_gather_post_description_still_returns_space_joined_text():
-    thread = _make_thread(["x"], {"description"})
-    post = {"content": "<p>Alien <b>Comic</b></p>"}
+def test_description_facts_keep_author_whitespace():
+    analysis = cd.analyze_post({"content": "<p>Alien <b>Comic</b></p>"})
 
-    assert thread._gather_post_description(post) == "Alien  Comic"
-    assert thread._gather_post_description({}) == ""
-    assert thread._gather_post_description({"content": 123}) == ""
+    assert analysis["description"] == "alien  comic"
+    assert cd.analyze_post({})["description"] == ""
+    assert cd.analyze_post({"content": 123})["description"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -117,25 +118,23 @@ def test_gather_post_description_still_returns_space_joined_text():
         ("Alien test Comic", "<p>Alien <b>test</b> Comic</p>"),
     ],
 )
-def test_rejoined_rendering_recovers_visible_keywords(keyword, content):
+def test_rejoined_rendering_recovers_visible_keywords(monkeypatch, keyword, content):
     messages = []
 
-    assert _skip([keyword], {"description"}, {"content": content}, messages=messages)
+    thread = _run_detection(monkeypatch, keyword, content, messages)
 
+    assert thread.keyword_skipped_count == 1
     rejoin_logs = [m for m in messages if "[SKIP-KEYWORD]" in m[0]]
     assert len(rejoin_logs) == 1
     assert rejoin_logs[0][1] == "DEBUG"
     assert keyword in rejoin_logs[0][0]
 
 
-def test_rejoined_hit_logs_the_matching_keyword():
+def test_rejoined_hit_logs_the_matching_keyword(monkeypatch):
     messages = []
 
-    assert _skip(
-        ["no-such-word", "AlienComic"],
-        {"description"},
-        {"content": "<p><b>Alien</b>Comic</p>"},
-        messages=messages,
+    _run_detection(
+        monkeypatch, ["no-such-word", "AlienComic"], "<p><b>Alien</b>Comic</p>", messages
     )
 
     logged = [m for m, _level in messages if "[SKIP-KEYWORD]" in m]
@@ -143,17 +142,15 @@ def test_rejoined_hit_logs_the_matching_keyword():
     assert "no-such-word" not in logged[0]
 
 
-def test_old_rendering_hit_does_not_emit_the_rejoin_log():
+def test_old_rendering_hit_does_not_emit_the_rejoin_log(monkeypatch):
     messages = []
 
     # The legacy rendering invents a space, so "sketch" matches "Sketch Book".
-    assert _skip(
-        ["sketch"],
-        {"description"},
-        {"content": "<p><b>Sketch</b>Book</p>"},
-        messages=messages,
+    thread = _run_detection(
+        monkeypatch, "sketch", "<p><b>Sketch</b>Book</p>", messages
     )
 
+    assert thread.keyword_skipped_count == 1
     assert not [m for m, _level in messages if "[SKIP-KEYWORD]" in m]
 
 
@@ -247,7 +244,7 @@ def test_first_matching_keyword_helper():
 # ---------------------------------------------------------------------------
 
 
-def _run_detection(monkeypatch, keyword, content):
+def _run_detection(monkeypatch, keyword, content, messages=None):
     posts = [{"id": "1", "title": "Test post", "content": content}]
     text = json.dumps(posts)
     resp = Resp(text.encode("utf-8"), text=text)
@@ -258,21 +255,23 @@ def _run_detection(monkeypatch, keyword, content):
 
     monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: Session())
 
-    thread = _make_thread([keyword], {"description"})
+    keywords = [keyword] if isinstance(keyword, str) else list(keyword)
+    thread = _make_thread(keywords, {"description"}, messages)
     thread.posts_batch = _signal()
     thread.finished = _signal()
     thread.run()
     return thread
 
 
-def test_run_drops_post_matched_only_after_rejoining(monkeypatch):
+def test_run_books_post_matched_only_after_rejoining(monkeypatch):
     thread = _run_detection(monkeypatch, "AlienComic", "<p><b>Alien</b>Comic</p>")
 
-    thread.posts_batch.emit.assert_not_called()
+    # The fetch counts the skip but still hands the post over, so clearing
+    # the keyword later can bring it back without another fetch.
     assert thread.keyword_skipped_count == 1
     assert thread.filtered_count == 1
     assert thread.total_detected == 1
-    assert thread.finished.emit.call_args[0][0] == []
+    assert len(thread.finished.emit.call_args[0][0]) == 1
 
 
 def test_run_keeps_post_when_description_does_not_match(monkeypatch):
@@ -284,10 +283,9 @@ def test_run_keeps_post_when_description_does_not_match(monkeypatch):
     assert len(thread.finished.emit.call_args[0][0]) == 1
 
 
-def test_run_still_drops_post_matched_by_the_old_rendering(monkeypatch):
+def test_run_books_post_matched_by_the_old_rendering(monkeypatch):
     thread = _run_detection(monkeypatch, "sketch", "<p><b>Sketch</b>Book</p>")
 
-    thread.posts_batch.emit.assert_not_called()
     assert thread.keyword_skipped_count == 1
 
 
@@ -343,6 +341,6 @@ def test_run_counts_skips_per_keyword(monkeypatch):
 def test_matcher_returns_the_keyword_that_matched():
     thread = _make_thread(["Alien", "Sketch"], {"title"})
 
-    assert thread._title_matches_skip_keyword("Alien Comic") == "Alien"
-    assert thread._title_matches_skip_keyword("Sketch Dump") == "Sketch"
-    assert thread._title_matches_skip_keyword("Unrelated") == ""
+    assert _match(thread, "Alien Comic") == "Alien"
+    assert _match(thread, "Sketch Dump") == "Sketch"
+    assert _match(thread, "Unrelated") == ""

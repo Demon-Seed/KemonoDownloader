@@ -56,12 +56,17 @@ class FakeFilterThread:
         search_text,
         search_scopes=None,
         post_search_index=None,
+        post_filters=None,
+        creator_url=None,
+        file_skip_keywords=None,
     ):
         self.all_detected_posts = all_detected_posts
+        self.creator_url = creator_url
         self.checked_urls = checked_urls
         self.search_text = search_text
         self.search_scopes = search_scopes
         self.post_search_index = post_search_index
+        self.post_filters = post_filters
         self.finished = FinishedSignal()
         self.log = FinishedSignal()
 

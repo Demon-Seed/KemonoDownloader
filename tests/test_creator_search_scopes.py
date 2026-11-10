@@ -199,8 +199,10 @@ def test_detection_builds_the_search_index(monkeypatch):
 def test_detection_leaves_no_index_when_none_was_passed(monkeypatch):
     thread = _run_detection(monkeypatch, [DETECTED_POST])
 
+    # Facts are always built now (the post filters need them) but no index
+    # is written when the caller did not ask for one.
     assert thread.post_search_index is None
-    assert thread._analysis_cache == {}
+    assert thread._analysis_cache
 
 
 def test_indexed_post_is_findable_by_every_new_scope(monkeypatch):
