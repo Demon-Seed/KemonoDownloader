@@ -198,6 +198,20 @@ def test_analyze_post_counts_files_of_the_same_type():
     }
 
 
+def test_analyze_post_folds_jpeg_into_jpg():
+    post = {
+        "id": "3",
+        "file": {"name": "cover.jpeg", "path": "/data/ab/cd/hash.jpeg"},
+        "attachments": [{"name": "extra.JPEG"}],
+        "content": "<p><img src='https://file.test/data/aa/bb/hash.jpeg'></p>",
+    }
+
+    analysis = cd.analyze_post(post)
+
+    assert analysis["extensions"] == [".jpg"]
+    assert analysis["extension_counts"] == {".jpg": 3}
+
+
 def test_detection_tally_sums_file_counts():
     found = {}
     thread = cd.PostDetectionThread(
@@ -331,6 +345,35 @@ def test_filecount_mode_also_shows_no_boxes_without_a_creator(qtbot, tmp_path):
     assert not tab.creator_ext_empty_label.isHidden()
 
 
+def test_jpeg_files_keep_the_jpg_box_visible(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+    tab._parent.settings_tab.found_filetypes_mode = "on_with_count"
+
+    # The tally is fed by analyze_post, so .jpeg files land under .jpg
+    # instead of naming a type the grid has no box for.
+    found = {}
+    thread = cd.PostDetectionThread(
+        "https://kemono.cr/patreon/user/1",
+        {},
+        SimpleNamespace(),
+        found_extensions=found,
+    )
+    thread._record_found_extensions(
+        cd.analyze_post(
+            {
+                "id": "1",
+                "attachments": [{"name": "a.jpeg"}, {"name": "b.JPEG"}],
+            }
+        )
+    )
+    tab._found_type_counts = found
+
+    tab._refresh_show_only_found_filetypes()
+
+    assert _visible_extensions(tab) == [".jpg"]
+    assert tab.creator_ext_checks[".jpg"].text() == "JPG (2)"
+
+
 def test_disabled_mode_shows_every_box_without_a_creator(qtbot, tmp_path):
     tab = make_tab(qtbot, tmp_path)
 
@@ -414,3 +457,87 @@ def test_detection_receives_the_shared_type_tally(qtbot, tmp_path, monkeypatch):
 
     thread = FakeDetectionThread.instances[-1]
     assert thread.kwargs["found_extensions"] is tab._found_type_counts
+
+
+# ---------------------------------------------------------------------------
+# Filter posts with no selected filetypes
+# ---------------------------------------------------------------------------
+
+
+def test_the_filetype_filter_checkbox_lives_in_the_filters_box(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+    check = tab.filter_no_selected_filetypes_check
+
+    assert tab.filters_group.isAncestorOf(check)
+    assert check.text() == "Filter posts with no selected filetypes"
+    assert check.isChecked() is False
+
+
+def test_required_filetypes_needs_the_box_and_a_ticked_type(
+    qtbot, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(cd, "FilterThread", FakeFilterThread)
+    tab = make_tab(qtbot, tmp_path)
+    tab.creator_ext_checks[".psd"].setChecked(True)
+
+    # A ticked type on its own changes nothing while the box is clear.
+    assert tab._required_filetypes() is None
+
+    tab.filter_no_selected_filetypes_check.setChecked(True)
+
+    assert tab._required_filetypes() == {".psd"}
+
+
+def test_required_filetypes_is_none_when_nothing_is_ticked(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+
+    tab.filter_no_selected_filetypes_check.setChecked(True)
+
+    # Nothing ticked means there is no type to require, not "drop every post".
+    assert tab._required_filetypes() is None
+
+
+def test_detection_receives_the_required_filetypes(qtbot, tmp_path, monkeypatch):
+    FakeDetectionThread.instances = []
+    monkeypatch.setattr(cd, "FilterThread", FakeFilterThread)
+    monkeypatch.setattr(cd, "PostDetectionThread", FakeDetectionThread)
+    tab = make_tab(qtbot, tmp_path)
+    tab.creator_ext_checks[".psd"].setChecked(True)
+    tab.filter_no_selected_filetypes_check.setChecked(True)
+
+    tab.check_creator_from_queue("https://kemono.cr/patreon/user/1")
+
+    thread = FakeDetectionThread.instances[-1]
+    assert thread.kwargs["required_filetypes"] == {".psd"}
+
+
+def test_the_skip_breakdown_reports_filetype_skips(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+    tab._post_skip_stats = {
+        "keywords": 0,
+        "date": 0,
+        "file_count": 0,
+        "filetypes": 4,
+    }
+
+    rows = [row for row in tab._skip_breakdown() if row[0].startswith("Filetypes")]
+
+    assert rows == [("Filetypes 4", 4)]
+
+
+def test_the_help_button_explains_the_filetype_filter(qtbot, tmp_path, monkeypatch):
+    tab = make_tab(qtbot, tmp_path)
+    shown = {}
+
+    def fake_information(parent, title, text):
+        shown["title"] = title
+        shown["text"] = text
+
+    monkeypatch.setattr(cd.QMessageBox, "information", fake_information)
+
+    tab.filter_no_selected_filetypes_help_btn.click()
+
+    assert shown["title"] == "Filter Posts With No Selected Filetypes Help"
+    assert "File Extensions" in shown["text"]
+    # One short paragraph, not a spec sheet.
+    assert "\n" not in shown["text"]

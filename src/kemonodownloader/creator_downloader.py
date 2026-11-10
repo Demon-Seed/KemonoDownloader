@@ -139,6 +139,17 @@ def file_extension(name_or_path):
     return os.path.splitext(path.strip())[1].lower()
 
 
+def normalize_extension(ext):
+    """Return the filetype an extension is counted, listed and filtered as.
+
+    ``.jpeg`` files are ordinary JPEGs under a second name, so they count
+    as ``.jpg`` everywhere the app tallies, displays or filters a filetype.
+    Only the type is folded; the file keeps its real name on disk.
+    """
+    ext = str(ext or "").strip().lower()
+    return ".jpg" if ext == ".jpeg" else ext
+
+
 def parse_filter_count(text):
     """Parse a user-entered file-count bound ("3", " 12 ").
 
@@ -219,6 +230,9 @@ def analyze_post(post):
       callers can ask which types a post actually holds
     - ``extension_counts``: extension -> how many files of that type it holds
 
+    Extension names that are the same type are folded (see
+    :func:`normalize_extension`), so a ``.jpeg`` file is counted as ``.jpg``.
+
     The HTML body is parsed once, so callers needing several of these values
     should cache the returned dict instead of calling this again.
     """
@@ -262,6 +276,7 @@ def analyze_post(post):
     # first. These counts back the "On (With filecount)" extension labels.
     extension_counts = {}
     for _, ext in names:
+        ext = normalize_extension(ext)
         if ext:
             extension_counts[ext] = extension_counts.get(ext, 0) + 1
 
@@ -286,6 +301,7 @@ def analyze_post(post):
                 image_ext = file_extension(src)
                 if image_ext in COMPRESSED_EXTENSIONS:
                     has_compressed = True
+                image_ext = normalize_extension(image_ext)
                 if image_ext:
                     extension_counts[image_ext] = (
                         extension_counts.get(image_ext, 0) + 1
@@ -833,6 +849,7 @@ class PostDetectionThread(QThread):
         file_count_min=None,
         file_count_max=None,
         file_count_keep_compressed=False,
+        required_filetypes=None,
         post_search_index=None,
         found_extensions=None,
     ):
@@ -865,6 +882,13 @@ class PostDetectionThread(QThread):
         self.file_count_min = file_count_min
         self.file_count_max = file_count_max
         self.file_count_keep_compressed = file_count_keep_compressed
+        # Optional set of extensions a post must hold at least one file of.
+        # An empty set leaves the filter off: with nothing ticked in the
+        # grid there is no type to require, so the right answer to "no
+        # selected filetypes" is to change nothing, not to drop every post.
+        self.required_filetypes = {
+            normalize_extension(ext) for ext in (required_filetypes or ()) if ext
+        }
         # Optional shared dict (post_id -> lower-case searchable text) that
         # feeds the Creator tab's "Search by" scopes. Only filled when the
         # caller passes a dict, so plain detection runs stay cost-free.
@@ -877,6 +901,7 @@ class PostDetectionThread(QThread):
         self._keyword_skipped_count = 0
         self._date_skipped_count = 0
         self._file_count_skipped_count = 0
+        self._filetype_skipped_count = 0
         # keyword -> number of posts it dropped, for the skip tooltip.
         self.keyword_skip_counts = {}
         self._parsed_dates = {}  # post_id -> parsed datetime.date (cache, avoids re-parsing)
@@ -948,6 +973,24 @@ class PostDetectionThread(QThread):
         if self.date_before and post_date > self.date_before:
             return True
         return False
+
+    def _post_holds_no_required_filetype(self, post):
+        """Return True if *post* holds none of the required filetypes.
+
+        Backs the Filters box option "Filter posts with no selected
+        filetypes": the File Extensions grid decides which files come out
+        of a post, this decides whether the post is listed at all. One file
+        of a required type anywhere in the post keeps it, and posts with
+        nothing readable to compare are kept rather than dropped. Extension
+        aliases are already folded by :func:`analyze_post`, so a plain
+        intersection decides it.
+        """
+        if not self.required_filetypes:
+            return False
+        extensions = set(self._analyze(post).get("extensions") or [])
+        if not extensions:
+            return False
+        return not extensions & self.required_filetypes
 
     def _gather_post_filenames(self, post):
         """Collect candidate filenames for a post: the main file and any
@@ -1559,17 +1602,23 @@ class PostDetectionThread(QThread):
                 keyword_match = bool(matched_keyword)
                 date_out = self._post_date_out_of_range(post)
                 file_count_out = self._post_file_count_out_of_range(post)
+                filetypes_out = self._post_holds_no_required_filetype(post)
 
+                # A dropped post is booked under the first filter that caught
+                # it, so the per-filter numbers stay mutually exclusive and
+                # still add up to the number of skipped posts.
                 if keyword_match:
                     self._keyword_skipped_count += 1
                     self.keyword_skip_counts[matched_keyword] = (
                         self.keyword_skip_counts.get(matched_keyword, 0) + 1
                     )
-                if date_out:
+                elif date_out:
                     self._date_skipped_count += 1
-                if file_count_out:
+                elif file_count_out:
                     self._file_count_skipped_count += 1
-                if keyword_match or date_out or file_count_out:
+                elif filetypes_out:
+                    self._filetype_skipped_count += 1
+                if keyword_match or date_out or file_count_out or filetypes_out:
                     self._skipped_count += 1
                     continue
                 thumbnail_url = None
@@ -1648,6 +1697,7 @@ class PostDetectionThread(QThread):
             self.date_skipped_count = self._date_skipped_count
             self.keyword_skipped_count = self._keyword_skipped_count
             self.file_count_skipped_count = self._file_count_skipped_count
+            self.filetype_skipped_count = self._filetype_skipped_count
             self.total_detected = len(all_posts)
             self.finished.emit(all_processed_posts)
 
@@ -3700,7 +3750,12 @@ class CreatorDownloaderTab(QWidget):
         self._images_skipped_count = 0
         # Latest per-filter skip counters, surfaced in the run summary block
         # under the progress bars instead of being buried in the log.
-        self._post_skip_stats = {"keywords": 0, "date": 0, "file_count": 0}
+        self._post_skip_stats = {
+            "keywords": 0,
+            "date": 0,
+            "file_count": 0,
+            "filetypes": 0,
+        }
         # Per-keyword skip counts (post level and file level) for the tooltip.
         self._post_keyword_skip_counts = {}
         self._file_keyword_skip_counts = {}
@@ -3956,7 +4011,7 @@ class CreatorDownloaderTab(QWidget):
         creator_ext_layout.setHorizontalSpacing(20)
         creator_ext_layout.setVerticalSpacing(10)
         self.creator_ext_checks = {
-            ".jpg": QCheckBox("JPG/JPEG"),
+            ".jpg": QCheckBox("JPG"),
             ".png": QCheckBox("PNG"),
             ".zip": QCheckBox("ZIP"),
             ".mp4": QCheckBox("MP4"),
@@ -4278,6 +4333,32 @@ class CreatorDownloaderTab(QWidget):
 
         filters_layout.addLayout(file_count_layout)
 
+        # The post-level partner of the File Extensions grid: the grid
+        # decides which files come out of a post, this decides whether a
+        # post holding none of those types is listed at all.
+        filetype_filter_layout = QHBoxLayout()
+        filetype_filter_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.filter_no_selected_filetypes_check = QCheckBox()
+        self.filter_no_selected_filetypes_check.setChecked(False)
+        self.filter_no_selected_filetypes_check.setStyleSheet("color: white;")
+        filetype_filter_layout.addWidget(self.filter_no_selected_filetypes_check)
+
+        self.filter_no_selected_filetypes_help_btn = QPushButton(
+            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+        )
+        self.filter_no_selected_filetypes_help_btn.setFixedSize(26, 26)
+        self.filter_no_selected_filetypes_help_btn.setStyleSheet(
+            "background: #4A5B7A; border-radius: 5px;"
+        )
+        self.filter_no_selected_filetypes_help_btn.clicked.connect(
+            self.show_filter_no_selected_filetypes_help
+        )
+        filetype_filter_layout.addWidget(self.filter_no_selected_filetypes_help_btn)
+        filetype_filter_layout.addStretch()
+
+        filters_layout.addLayout(filetype_filter_layout)
+
         self.filters_group.setLayout(filters_layout)
         right_layout.addWidget(self.filters_group)
 
@@ -4571,6 +4652,10 @@ class CreatorDownloaderTab(QWidget):
         if hasattr(self, "file_count_keep_compressed_check"):
             self.file_count_keep_compressed_check.setText(
                 translate("file_count_keep_compressed")
+            )
+        if hasattr(self, "filter_no_selected_filetypes_check"):
+            self.filter_no_selected_filetypes_check.setText(
+                translate("filter_no_selected_filetypes")
             )
         if hasattr(self, "search_scope_label"):
             self.search_scope_label.setText(translate("search_scope"))
@@ -5071,6 +5156,7 @@ class CreatorDownloaderTab(QWidget):
             file_count_keep_compressed=(
                 self.file_count_keep_compressed_check.isChecked()
             ),
+            required_filetypes=self._required_filetypes(),
             post_search_index=self.post_search_index,
             found_extensions=self._found_type_counts,
         )
@@ -6315,6 +6401,14 @@ class CreatorDownloaderTab(QWidget):
             translate("file_count_help_text"),
         )
 
+    def show_filter_no_selected_filetypes_help(self):
+        """Show help text explaining the filetype post filter."""
+        QMessageBox.information(
+            self,
+            translate("filter_no_selected_filetypes_help_title"),
+            translate("filter_no_selected_filetypes_help_text"),
+        )
+
     def expand_logs(self):
         """Open the full logs window"""
         if not hasattr(self, "logs_window") or not self.logs_window.isVisible():
@@ -6614,6 +6708,20 @@ class CreatorDownloaderTab(QWidget):
                             translate(
                                 "posts_skipped_by_file_count_filter",
                                 file_count_skipped_count,
+                            ),
+                        ),
+                        "INFO",
+                    )
+                filetype_skipped_count = getattr(
+                    detection_thread, "filetype_skipped_count", 0
+                )
+                if filetype_skipped_count:
+                    self.append_log_to_console(
+                        translate(
+                            "log_info",
+                            translate(
+                                "posts_skipped_by_filetypes_filter",
+                                filetype_skipped_count,
                             ),
                         ),
                         "INFO",
@@ -6986,6 +7094,10 @@ class CreatorDownloaderTab(QWidget):
                 stats.get("file_count", 0),
             ),
             (
+                translate("summary_skip_post_filetypes", stats.get("filetypes", 0)),
+                stats.get("filetypes", 0),
+            ),
+            (
                 translate("summary_skip_files", getattr(self, "_file_skip_count", 0)),
                 getattr(self, "_file_skip_count", 0),
             ),
@@ -7004,6 +7116,25 @@ class CreatorDownloaderTab(QWidget):
             counts.items(), key=lambda item: (-item[1], item[0].lower())
         )
         return [f"  {keyword}: {count}" for keyword, count in ordered]
+
+    def _required_filetypes(self):
+        """Return the filetypes the post filter must find, or None.
+
+        Backs "Filter posts with no selected filetypes": the ticked
+        extension boxes become the types a post has to hold at least one
+        file of. The filter is off while the box is clear, and inert when
+        it is ticked with nothing selected — there is no type to require
+        then, so dropping every post would be the wrong answer.
+        """
+        checkbox = getattr(self, "filter_no_selected_filetypes_check", None)
+        if checkbox is None or not checkbox.isChecked():
+            return None
+        selected = {
+            ext.lower()
+            for ext, box in getattr(self, "creator_ext_checks", {}).items()
+            if box.isChecked()
+        }
+        return selected or None
 
     def _reset_found_extensions(self):
         """Forget the file types collected for the previous creator.
@@ -7167,7 +7298,12 @@ class CreatorDownloaderTab(QWidget):
         if not keep_post_stats:
             # A new download keeps the post-filter skip counts: they describe
             # the post list, not the run.
-            self._post_skip_stats = {"keywords": 0, "date": 0, "file_count": 0}
+            self._post_skip_stats = {
+                "keywords": 0,
+                "date": 0,
+                "file_count": 0,
+                "filetypes": 0,
+            }
             self._post_keyword_skip_counts = {}
         self._file_keyword_skip_counts = {}
 
@@ -7222,6 +7358,7 @@ class CreatorDownloaderTab(QWidget):
             "keywords": getattr(detection_thread, "keyword_skipped_count", 0),
             "date": getattr(detection_thread, "date_skipped_count", 0),
             "file_count": getattr(detection_thread, "file_count_skipped_count", 0),
+            "filetypes": getattr(detection_thread, "filetype_skipped_count", 0),
         }
         self._post_keyword_skip_counts = dict(
             getattr(detection_thread, "keyword_skip_counts", {}) or {}
