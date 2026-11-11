@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import kemonodownloader.creator_downloader as cd
 
 
-def _make_thread(tmp_path, settings, auto_rename=False):
+def _make_thread(tmp_path, settings):
     other_dir = str(tmp_path / "other")
     os.makedirs(other_dir, exist_ok=True)
     t = cd.CreatorDownloadThread(
@@ -17,7 +17,6 @@ def _make_thread(tmp_path, settings, auto_rename=False):
         console=SimpleNamespace(),
         other_files_dir=other_dir,
         post_titles_map={("kemono", "42", "1"): "Title 1"},
-        auto_rename_enabled=auto_rename,
         settings=settings,
         max_concurrent=1,
         download_text=False,
@@ -30,6 +29,9 @@ def test_generate_filename_single_folder(tmp_path):
     settings = SimpleNamespace(
         settings_tab=SimpleNamespace(
             get_creator_filename_template=lambda: "{post_id}_{orig_name}_{file_index}",
+            get_creator_filename_template_shared=lambda: (
+                "{post_id}_{orig_name}_{file_index}"
+            ),
             get_creator_folder_strategy=lambda: "single_folder",
         )
     )
@@ -49,6 +51,7 @@ def test_generate_filename_by_file_type(tmp_path):
     settings = SimpleNamespace(
         settings_tab=SimpleNamespace(
             get_creator_filename_template=lambda: "{post_id}_{orig_name}",
+            get_creator_filename_template_shared=lambda: "{post_id}_{orig_name}",
             get_creator_folder_strategy=lambda: "by_file_type",
         )
     )
@@ -63,15 +66,16 @@ def test_generate_filename_by_file_type(tmp_path):
     assert filename == "1_f.jpg"
 
 
-def test_auto_rename_prefix_increments(tmp_path):
+def test_shared_template_number_increments(tmp_path):
     settings = SimpleNamespace(
         settings_tab=SimpleNamespace(
             get_creator_filename_template=lambda: "{orig_name}",
-            get_creator_folder_strategy=lambda: "per_post",
+            get_creator_filename_template_shared=lambda: "{file_number}_{orig_name}",
+            get_creator_folder_strategy=lambda: "single_folder",
         )
     )
 
-    t = _make_thread(tmp_path, settings, auto_rename=True)
+    t = _make_thread(tmp_path, settings)
     file_url = "https://kemono.cr/files/pic.png"
     _, filename1 = t.generate_filename_and_folder(
         file_url, str(tmp_path / "base"), 0, 2, "1", "Title 1", page_number=1
@@ -80,8 +84,8 @@ def test_auto_rename_prefix_increments(tmp_path):
         file_url, str(tmp_path / "base"), 1, 2, "1", "Title 1", page_number=2
     )
 
-    assert filename1.startswith("1_")
-    assert filename2.startswith("2_")
+    assert filename1 == "1_pic.png"
+    assert filename2 == "2_pic.png"
 
 
 def test_template_error_fallback(tmp_path):

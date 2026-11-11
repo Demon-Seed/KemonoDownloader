@@ -39,7 +39,6 @@ def test_generate_filename_respects_existing_creator_folder(tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -75,7 +74,6 @@ def test_run_handles_makedirs_oserror(monkeypatch, tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )

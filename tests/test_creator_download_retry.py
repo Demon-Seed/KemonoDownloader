@@ -24,7 +24,6 @@ def test_download_size_mismatch_deletion_raises(monkeypatch, tmp_path):
         console=SimpleNamespace(),
         other_files_dir=other_dir,
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=settings,
         max_concurrent=1,
         download_text=False,

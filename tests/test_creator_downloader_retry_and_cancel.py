@@ -57,7 +57,6 @@ def test_download_file_retries_records_failure(monkeypatch, tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -93,7 +92,6 @@ def test_run_returns_immediately_when_stopped(tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )

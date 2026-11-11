@@ -42,7 +42,6 @@ def test_generate_filename_and_folder_strategies(tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -74,7 +73,7 @@ def test_generate_filename_and_folder_strategies(tmp_path):
     assert os.path.basename(target_folder_bt) == "png"
 
 
-def test_auto_rename_prefix_increments(tmp_path):
+def test_post_template_prefix_increments(tmp_path):
     download_folder = str(tmp_path / "out2")
     other_files_dir = str(tmp_path / "other2")
     os.makedirs(download_folder, exist_ok=True)
@@ -95,7 +94,6 @@ def test_auto_rename_prefix_increments(tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=True,
         settings=settings,
         download_text=False,
     )
@@ -133,21 +131,16 @@ def test_template_error_fallback(tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
     thread.creator_name = "Carol"
 
-    target_folder, filename = thread.generate_filename_and_folder(
+    _target_folder, filename = thread.generate_filename_and_folder(
         file_url, download_folder, 0, 1, "1", "MyPost", page_number=1
     )
-    # Fallback uses post_id and original name
-    assert (
-        filename.startswith("1_")
-        or "1_" in filename
-        or filename.startswith("1_") is False
-    )
+    # Fallback is post id + original name, with nothing else mixed in.
+    assert filename == "1_name.ext"
 
 
 def test_download_text_sync_writes_description(monkeypatch, tmp_path):
@@ -171,7 +164,6 @@ def test_download_text_sync_writes_description(monkeypatch, tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )

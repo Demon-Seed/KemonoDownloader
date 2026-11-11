@@ -24,7 +24,6 @@ def test_get_domain_config_from_files_choice(tmp_path):
         None,
         str(tmp_path),
         {},
-        False,
         ThreadSettings(1, 1, 1, 1, 1, settings_tab=SimpleNamespace()),
     )
     dom = t._get_domain_config_from_files()
@@ -41,7 +40,6 @@ def test_get_domain_config_from_files_choice(tmp_path):
         None,
         str(tmp_path),
         {},
-        False,
         ThreadSettings(1, 1, 1, 1, 1, settings_tab=SimpleNamespace()),
     )
     dom2 = t2._get_domain_config_from_files()
@@ -61,7 +59,6 @@ def test_build_post_files_map_filters(tmp_path):
         None,
         str(tmp_path),
         {},
-        False,
         ThreadSettings(1, 1, 1, 1, 1, settings_tab=SimpleNamespace()),
     )
     pfm = t.post_files_map
@@ -85,7 +82,6 @@ def test_fetch_creator_and_post_info_populates(monkeypatch, tmp_path):
         None,
         str(tmp_path),
         {},
-        False,
         settings,
     )
 
@@ -134,7 +130,6 @@ def test_download_post_text_if_needed_writes_desc(monkeypatch, tmp_path):
         None,
         str(tmp_path),
         {},
-        False,
         settings,
     )
 
@@ -175,7 +170,6 @@ def test_download_file_no_content_length_and_store(monkeypatch, tmp_path):
         None,
         str(tmp_path / "other"),
         {("svc", "cid", post_id): "P"},
-        False,
         settings,
     )
 
@@ -234,7 +228,6 @@ def test_download_file_request_exception_records_failure(monkeypatch, tmp_path):
         None,
         str(tmp_path / "other"),
         {},
-        False,
         settings,
     )
 
@@ -276,7 +269,6 @@ def test_run_full_download_cycle(monkeypatch, tmp_path):
         None,
         str(tmp_path / "other"),
         {("svc", "cid", post_id): "PostTitle"},
-        False,
         settings,
         max_concurrent=2,
         download_text=False,

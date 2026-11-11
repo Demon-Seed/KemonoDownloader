@@ -89,7 +89,6 @@ def test_creator_download_thread_run_no_files(monkeypatch, tmp_path):
     dummy.console = None
     dummy.other_files_dir = str(tmp_path)
     dummy.post_titles_map = {}
-    dummy.auto_rename_enabled = False
     dummy.settings = SimpleNamespace(settings_tab=None, file_download_max_retries=1)
     dummy.max_concurrent = 2
     dummy.is_running = True
@@ -167,13 +166,12 @@ def test_get_desc_folder_for_post_strategies(tmp_path):
         console,
         other_files_dir,
         post_titles_map,
-        auto_rename_enabled=False,
         settings=DummySettings(s_tab),
         max_concurrent=1,
     )
     creator_folder = os.path.normpath(str(tmp_path / "creator"))
     res = thread.get_desc_folder_for_post(creator_folder, "1", "Title")
-    assert res.endswith(os.path.join("creator", "txt")) or res.endswith("txt")
+    assert os.path.basename(res) == "txt"
 
     # single_folder -> return creator_folder
     s_tab2 = DummySettingsTab("single_folder")
@@ -187,7 +185,6 @@ def test_get_desc_folder_for_post_strategies(tmp_path):
         console,
         other_files_dir,
         post_titles_map,
-        auto_rename_enabled=False,
         settings=DummySettings(s_tab2),
         max_concurrent=1,
     )
@@ -211,7 +208,6 @@ def test_check_post_completion_emits_post_completed():
         console=None,
         other_files_dir=str(os.getcwd()),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=DummySettings(),
         max_concurrent=1,
     )
@@ -239,7 +235,6 @@ def test_download_post_text_if_needed_calls_once(tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=DummySettings(),
         max_concurrent=1,
     )
@@ -419,7 +414,6 @@ def test_download_file_short_circuit_with_hash(tmp_path):
         None,
         other_dir,
         {},
-        False,
         settings,
         max_concurrent=1,
         download_text=False,
@@ -603,7 +597,6 @@ def test_download_text_sync_writes_file(monkeypatch, tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=SimpleNamespace(settings_tab=None),
         max_concurrent=1,
         download_text=False,

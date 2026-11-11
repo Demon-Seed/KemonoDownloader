@@ -64,7 +64,6 @@ def test_fetch_creator_and_post_info_populates(monkeypatch, tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -118,7 +117,6 @@ def test_creator_name_is_retried_before_falling_back(monkeypatch, tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=make_settings(),
         download_text=False,
     )
@@ -162,7 +160,6 @@ def test_creator_name_falls_back_after_the_last_attempt(monkeypatch, tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=make_settings(),
         download_text=False,
     )

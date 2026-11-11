@@ -130,12 +130,10 @@ def test_creator_download_thread_generate_filename_and_folder_and_counters(tmp_p
         console,
         str(tmp_path / "other"),
         post_titles_map,
-        False,
         settings,
         settings.simultaneous_downloads,
     )
 
-    # Without auto-rename prefix
     target_folder, filename = thread.generate_filename_and_folder(
         file_url,
         str(tmp_path),
@@ -147,22 +145,11 @@ def test_creator_download_thread_generate_filename_and_folder_and_counters(tmp_p
     )
     assert filename.endswith(".jpg")
     assert creator_id in target_folder
+    # The default post-folder template numbers the file inside its post, so a
+    # post's files read in order with no hidden prefix on top.
+    assert filename.startswith("1_")
 
-    # With auto-rename enabled the page number (detection order) prefixes the
-    # filename. This post has its own folder, so the prefix is not padded and
-    # carries no post-order component.
-    thread.auto_rename_enabled = True
-    target_folder2, filename2 = thread.generate_filename_and_folder(
-        file_url,
-        str(tmp_path),
-        0,
-        1,
-        post_id,
-        post_titles_map[(service, creator_id, post_id)],
-        1,
-    )
-    assert filename2.startswith("1_")
-    # A later page keeps its own prefix rather than a running per-thread counter.
+    # A later page keeps its own number rather than a running per-thread counter.
     _, filename3 = thread.generate_filename_and_folder(
         file_url,
         str(tmp_path),
@@ -189,7 +176,6 @@ def test_get_desc_folder_for_post_respects_strategy(tmp_path):
         console,
         str(tmp_path / "other"),
         {},
-        False,
         settings,
         settings.simultaneous_downloads,
     )
@@ -212,9 +198,7 @@ def test_get_desc_folder_for_post_respects_strategy(tmp_path):
     )
     thread.settings.settings_tab = fake_settings_tab
     out3 = thread.get_desc_folder_for_post(str(tmp_path / "creator"), "1", "My Title")
-    assert out3.endswith(os.path.join("creator", "txt")) or out3.endswith(
-        os.path.join("creator", "txt")
-    )
+    assert os.path.basename(out3) == "txt"
 
 
 def test__download_text_sync_writes_description(monkeypatch, tmp_path):
@@ -246,7 +230,6 @@ def test__download_text_sync_writes_description(monkeypatch, tmp_path):
         console,
         str(tmp_path / "other"),
         {},
-        False,
         settings,
         settings.simultaneous_downloads,
     )

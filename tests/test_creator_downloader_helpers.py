@@ -31,7 +31,7 @@ def test_sanitize_filename_basic():
     assert not out.startswith(".")
 
 
-def _make_thread(tmp_path, template=None, strategy="per_post", auto_rename=False):
+def _make_thread(tmp_path, template=None, strategy="per_post"):
     files = ["https://kemono.cr/files/abc.png"]
     files_map = {files[0]: "1"}
     post_titles = {("kemono", "123", "1"): "PostTitle"}
@@ -46,7 +46,6 @@ def _make_thread(tmp_path, template=None, strategy="per_post", auto_rename=False
         None,
         str(tmp_path),
         post_titles,
-        auto_rename,
         settings,
     )
     t.creator_name = "CreatorName"
@@ -59,12 +58,13 @@ def test_generate_filename_default(tmp_path):
         t.files_to_download[0], str(tmp_path), 0, 1, "1", "PostTitle", page_number=1
     )
     assert final_filename.endswith(".png")
-    assert "1_" in final_filename or "PostTitle" in target_folder
+    # Default post-folder template numbers the file and names the post folder
+    assert final_filename.startswith("1_")
+    assert "PostTitle" in target_folder
 
 
-def test_generate_filename_auto_rename(tmp_path):
-    t = _make_thread(tmp_path, auto_rename=True)
-    t.auto_rename_enabled = True
+def test_post_template_number_increments(tmp_path):
+    t = _make_thread(tmp_path)
     f1 = t.generate_filename_and_folder(
         t.files_to_download[0], str(tmp_path), 0, 2, "1", "PostTitle", page_number=1
     )[1]
@@ -193,7 +193,6 @@ def test_fetch_creator_and_post_info_success(monkeypatch, tmp_path):
         None,
         str(tmp_path),
         {},
-        False,
         settings,
     )
     # Provide domain config used to build URLs

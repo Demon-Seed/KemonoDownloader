@@ -4,12 +4,16 @@ from kemonodownloader import creator_downloader as cd
 
 
 class DummySettingsTab:
-    def __init__(self, template=None, strategy=None):
+    def __init__(self, template=None, strategy=None, shared=None):
         self._template = template
         self._strategy = strategy
+        self._shared = shared
 
     def get_creator_filename_template(self):
         return self._template
+
+    def get_creator_filename_template_shared(self):
+        return self._shared
 
     def get_creator_folder_strategy(self):
         return self._strategy
@@ -67,7 +71,6 @@ def test_generate_filename_and_folder(tmp_path):
         console,
         other_files_dir,
         post_titles_map,
-        auto_rename_enabled=False,
         settings=settings,
         max_concurrent=1,
     )
@@ -78,7 +81,7 @@ def test_generate_filename_and_folder(tmp_path):
     assert "123_Creator Name" in target_folder
     assert filename.endswith(".jpg")
 
-    # test auto_rename increments prefix
+    # A shared folder needs the shared template: same post, two pages.
     thread2 = cd.CreatorDownloadThread(
         service,
         creator_id,
@@ -89,8 +92,13 @@ def test_generate_filename_and_folder(tmp_path):
         console,
         other_files_dir,
         post_titles_map,
-        auto_rename_enabled=True,
-        settings=settings,
+        settings=DummySettings(
+            DummySettingsTab(
+                template="{post_id}_{orig_name}",
+                strategy="single_folder",
+                shared="{post_id}_{file_number}_{orig_name}",
+            )
+        ),
         max_concurrent=1,
     )
     thread2.creator_name = "Creator Name"
@@ -100,7 +108,8 @@ def test_generate_filename_and_folder(tmp_path):
     tf2, fn2 = thread2.generate_filename_and_folder(
         files_to_download[0], download_folder, 1, 1, "1", "Post Title", page_number=2
     )
-    assert fn1 != fn2
+    assert fn1 == "1_1_orig_name.jpg"
+    assert fn2 == "1_2_orig_name.jpg"
 
 
 def test_generate_folder_strategies(tmp_path):
@@ -128,7 +137,6 @@ def test_generate_folder_strategies(tmp_path):
         console,
         other_files_dir,
         post_titles_map,
-        auto_rename_enabled=False,
         settings=settings,
         max_concurrent=1,
     )
@@ -157,7 +165,6 @@ def test_generate_folder_strategies(tmp_path):
         console,
         other_files_dir,
         post_titles_map,
-        auto_rename_enabled=False,
         settings=settings2,
         max_concurrent=1,
     )
@@ -274,7 +281,6 @@ def test_creator_fetch_creator_and_post_info_and_download_text(tmp_path, monkeyp
         console,
         other_files_dir,
         post_titles_map,
-        auto_rename_enabled=False,
         settings=DummySettings(),
         max_concurrent=1,
     )
@@ -351,7 +357,6 @@ def test_creator_download_thread_uses_hash_db_entry(tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=DummySettings(),
         max_concurrent=1,
     )
@@ -399,7 +404,6 @@ def test_creator_run_no_files_emits_finished(tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=DummySettings(),
         max_concurrent=1,
     )
@@ -516,7 +520,6 @@ def test_download_file_size_mismatch_deletes_incomplete_and_marks_failed(
         console=console,
         other_files_dir=other_files_dir,
         post_titles_map=post_titles_map,
-        auto_rename_enabled=False,
         settings=DummySettings(),
         max_concurrent=1,
     )
@@ -595,7 +598,6 @@ def test_download_file_retries_and_succeeds(monkeypatch, tmp_path):
         console=console,
         other_files_dir=other_files_dir,
         post_titles_map=post_titles_map,
-        auto_rename_enabled=False,
         settings=DummySettings(),
         max_concurrent=1,
     )

@@ -37,7 +37,6 @@ def make_thread(tmp_path, settings=None):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=settings
         or SimpleNamespace(settings_tab=None, file_download_max_retries=1),
         max_concurrent=1,

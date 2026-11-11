@@ -60,7 +60,6 @@ class TestCreatorDownloader:
             console=MagicMock(),
             other_files_dir="/tmp",
             post_titles_map={},
-            auto_rename_enabled=False,
             settings=MagicMock(),
         )
         assert thread.creator_id == "123"
@@ -96,7 +95,6 @@ class TestCreatorDownloader:
             console=MagicMock(),
             other_files_dir="/tmp",
             post_titles_map={},
-            auto_rename_enabled=False,
             settings=MagicMock(),
         )
         # Connect signals to verify error handling
@@ -296,7 +294,6 @@ def download_thread(qapp, monkeypatch):
         files_to_download=["https://kemono.cr/f1.jpg"],
         files_to_posts_map={"https://kemono.cr/f1.jpg": "post1"},
         post_titles_map={},
-        auto_rename_enabled=False,
         other_files_dir="/tmp/other",
         console=MagicMock(),
         settings=settings,

@@ -4,9 +4,10 @@ from types import SimpleNamespace
 from kemonodownloader.creator_downloader import CreatorDownloadThread, ThreadSettings
 
 
-def make_settings(template=None, strategy="per_post"):
+def make_settings(template=None, strategy="per_post", shared=None):
     settings_tab = SimpleNamespace(
         get_creator_filename_template=lambda: template,
+        get_creator_filename_template_shared=lambda: shared,
         get_creator_folder_strategy=lambda: strategy,
     )
     return ThreadSettings(
@@ -19,7 +20,7 @@ def make_settings(template=None, strategy="per_post"):
     )
 
 
-def make_thread(file_url, tmp_path, settings, auto_rename=False):
+def make_thread(file_url, tmp_path, settings):
     thread = CreatorDownloadThread(
         service="svc",
         creator_id="creator123",
@@ -30,7 +31,6 @@ def make_thread(file_url, tmp_path, settings, auto_rename=False):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={("svc", "creator123", "1"): "My Post"},
-        auto_rename_enabled=auto_rename,
         settings=settings,
         download_text=False,
     )
@@ -43,7 +43,7 @@ def make_thread(file_url, tmp_path, settings, auto_rename=False):
 def test_generate_filename_default(tmp_path):
     file_url = "https://kemono.cr/files/image.png"
     settings = make_settings()
-    thread = make_thread(file_url, tmp_path, settings, auto_rename=False)
+    thread = make_thread(file_url, tmp_path, settings)
 
     target_folder, filename = thread.generate_filename_and_folder(
         file_url, str(tmp_path), 0, 1, "1", "My Post", page_number=1
@@ -51,26 +51,27 @@ def test_generate_filename_default(tmp_path):
 
     expected_folder = os.path.join(str(tmp_path), "creator123_Alice", "1_My_Post")
     assert target_folder == expected_folder
-    assert filename == "1_image.png"
+    # Post-folder default: {file_number}_{post_id}_{orig_name}
+    assert filename == "1_1_image.png"
 
 
-def test_generate_filename_auto_rename(tmp_path):
+def test_generate_filename_shared_template_is_used_for_shared_folders(tmp_path):
     file_url = "https://kemono.cr/files/image.png"
-    settings = make_settings()
-    thread = make_thread(file_url, tmp_path, settings, auto_rename=True)
+    settings = make_settings(strategy="single_folder", shared="{post_id}_{orig_name}")
+    thread = make_thread(file_url, tmp_path, settings)
 
-    target_folder, filename = thread.generate_filename_and_folder(
+    _target_folder, filename = thread.generate_filename_and_folder(
         file_url, str(tmp_path), 0, 1, "1", "My Post", page_number=1
     )
 
-    # Auto-rename prefix should be applied (counter starts at 1)
-    assert filename == "1_1_image.png"
+    # The shared template wins in a pooled folder, not the post-folder one.
+    assert filename == "1_image.png"
 
 
 def test_generate_filename_single_folder_strategy(tmp_path):
     file_url = "https://kemono.cr/files/image.png"
     settings = make_settings(strategy="single_folder")
-    thread = make_thread(file_url, tmp_path, settings, auto_rename=False)
+    thread = make_thread(file_url, tmp_path, settings)
 
     target_folder, filename = thread.generate_filename_and_folder(
         file_url, str(tmp_path), 0, 1, "1", "My Post", page_number=1
@@ -78,16 +79,16 @@ def test_generate_filename_single_folder_strategy(tmp_path):
 
     expected_folder = os.path.join(str(tmp_path), "creator123_Alice")
     assert target_folder == expected_folder
-    assert filename == "1_image.png"
+    assert filename == "1_1_image.png"
 
 
 def test_generate_filename_bad_template_falls_back(tmp_path):
     file_url = "https://kemono.cr/files/image.png"
     # Template references nonexistent keys and will raise during format
     settings = make_settings(template="{nonexistent}")
-    thread = make_thread(file_url, tmp_path, settings, auto_rename=False)
+    thread = make_thread(file_url, tmp_path, settings)
 
-    target_folder, filename = thread.generate_filename_and_folder(
+    _target_folder, filename = thread.generate_filename_and_folder(
         file_url, str(tmp_path), 0, 1, "1", "My Post", page_number=1
     )
 

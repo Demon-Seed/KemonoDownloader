@@ -125,7 +125,6 @@ def test_generate_filename_and_folder_variants(qapp, tmp_path):
         object(),
         str(tmp_path),
         post_titles_map,
-        True,
         Settings(),
         1,
     )
@@ -291,7 +290,6 @@ def test_download_text_sync_writes_file(monkeypatch, qapp, tmp_path):
         object(),
         download_folder,
         {},
-        True,
         Settings(),
         1,
     )
@@ -325,7 +323,6 @@ def test_creator_download_thread_run_no_files(qapp, tmp_path):
         object(),
         download_folder,
         {},
-        True,
         Settings(),
         1,
     )
@@ -352,7 +349,6 @@ def test_check_post_completion_emits(qapp):
         object(),
         "/tmp",
         {},
-        True,
         Settings(),
         1,
     )
@@ -392,7 +388,6 @@ def test_check_post_completion_emits(qapp):
             object(),
             str(tmp_path),
             {("svc", "creator", "1"): "Title"},
-            True,
             Settings(),
             1,
         )

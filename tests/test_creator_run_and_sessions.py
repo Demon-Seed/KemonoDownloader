@@ -21,7 +21,6 @@ def test_check_post_completion_emits(tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -54,7 +53,6 @@ def test_creator_run_executes_download_loop(tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )

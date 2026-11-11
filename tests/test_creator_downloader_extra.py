@@ -29,14 +29,12 @@ def test_generate_filename_and_folder_variants(tmp_path):
     dummy.creator_id = "42"
     dummy.post_titles_map = {("fanbox", "42", "101"): "My Post"}
     dummy.creator_name = "Creator"
-    dummy.auto_rename_enabled = True
     dummy.post_files_map = {}
     dummy.skip_folder_enabled = False
     dummy.skip_folder_threshold = 1
     dummy.force_folder_for_compressed = False
     dummy.COMPRESSED_EXTENSIONS = (".zip", ".7z", ".rar")
     dummy.get_post_folder_name = lambda pid, title, cf: f"{pid}_{title}"
-    dummy.get_post_order = lambda pid: 1
     # Default settings (no template)
     dummy.settings = make_settings(None, "per_post")
 
@@ -183,7 +181,6 @@ def test_download_file_skips_when_hash_matches(tmp_path, monkeypatch):
     dummy.creator_id = "42"
     dummy.post_titles_map = {("fanbox", "42", "101"): "Title"}
     dummy.creator_name = "Creator"
-    dummy.auto_rename_enabled = False
     dummy.post_file_counters_lock = None
     dummy.post_file_counters = {}
     dummy.settings = SimpleNamespace(settings_tab=None, file_download_max_retries=1)
@@ -370,13 +367,12 @@ def test_creator_generate_filename_and_desc_folder(tmp_path, monkeypatch):
         None,
         other_dir,
         post_titles,
-        True,
         settings,
         max_concurrent=1,
         download_text=False,
     )
 
-    # First call should apply auto-rename prefix when enabled
+    # The default template numbers the file inside its post
     folder, filename = thread.generate_filename_and_folder(
         "https://kemono.cr/media/pic.png?f=pic.png",
         str(tmp_path),
@@ -389,7 +385,7 @@ def test_creator_generate_filename_and_desc_folder(tmp_path, monkeypatch):
     # Folder should be <download_root>/<creator_folder>/<post_folder>
     assert os.path.basename(folder) == "1_Cool_Post"
     creator_folder = os.path.basename(os.path.dirname(folder))
-    assert creator_folder.startswith("42_") or creator_folder == "42_Unknown_Creator"
+    assert creator_folder.startswith("42_")
 
     # Desc folder for per_post
     desc = thread.get_desc_folder_for_post(str(tmp_path), "1", "Cool Post")
@@ -424,7 +420,6 @@ def test_download_text_sync_writes_file(tmp_path, monkeypatch):
         None,
         other_dir,
         {},
-        False,
         settings,
         max_concurrent=1,
         download_text=False,
@@ -467,7 +462,6 @@ def test_generate_filename_strategies_and_download_text_dup(tmp_path, monkeypatc
         None,
         other_dir,
         post_titles,
-        False,
         settings_single,
         max_concurrent=1,
         download_text=False,
@@ -492,7 +486,6 @@ def test_generate_filename_strategies_and_download_text_dup(tmp_path, monkeypatc
         None,
         other_dir,
         post_titles,
-        False,
         settings_bytype,
         max_concurrent=1,
         download_text=False,
@@ -526,7 +519,6 @@ def test_generate_filename_strategies_and_download_text_dup(tmp_path, monkeypatc
         None,
         other_dir,
         post_titles,
-        False,
         settings_single,
         max_concurrent=1,
         download_text=True,
@@ -574,7 +566,6 @@ def test_fetch_creator_and_post_info_populates_titles(tmp_path, monkeypatch):
         None,
         other_dir,
         {},
-        False,
         settings,
         max_concurrent=1,
         download_text=False,
@@ -637,7 +628,7 @@ def test_get_session_thread_local_and_socks(monkeypatch):
 # duplicate sanitize_filename test removed to avoid redefinition
 
 
-def test_generate_filename_and_folder_and_auto_rename(tmp_path, qapp, monkeypatch):
+def test_generate_filename_and_folder_uses_the_default_templates(tmp_path, qapp, monkeypatch):
     # Monkeypatch HashDB to avoid filesystem DB interactions
     class DummyHashDB:
         def __init__(self, other_files_dir):
@@ -665,7 +656,6 @@ def test_generate_filename_and_folder_and_auto_rename(tmp_path, qapp, monkeypatc
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=True,
         settings=None,
         max_concurrent=1,
         download_text=False,
@@ -675,7 +665,7 @@ def test_generate_filename_and_folder_and_auto_rename(tmp_path, qapp, monkeypatc
         file_url, str(tmp_path), 0, 1, "42", "My Title", page_number=1
     )
 
-    # Filename should include auto-rename prefix and post id/orig name
+    # Filename should carry the file number and post id from the template
     assert filename.endswith(".jpg")
     assert filename.startswith("1_")
 
@@ -686,8 +676,8 @@ def test_generate_filename_and_folder_and_auto_rename(tmp_path, qapp, monkeypatc
     # to a Post_{post_id} title — assert that fallback is used.
     assert os.path.join("42_Post_42") in target_folder
 
-    # second call increments auto-rename counter
-    target2, filename2 = th.generate_filename_and_folder(
+    # second call moves to the post's next file number
+    _target2, filename2 = th.generate_filename_and_folder(
         file_url, str(tmp_path), 1, 1, "42", "My Title", page_number=2
     )
     assert filename2.startswith("2_")
@@ -722,7 +712,6 @@ def test_get_desc_folder_for_post_respects_strategy(tmp_path, qapp, monkeypatch)
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=Settings("per_post"),
         max_concurrent=1,
         download_text=False,
@@ -742,7 +731,6 @@ def test_get_desc_folder_for_post_respects_strategy(tmp_path, qapp, monkeypatch)
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=Settings("by_file_type"),
         max_concurrent=1,
         download_text=False,
@@ -760,7 +748,6 @@ def test_get_desc_folder_for_post_respects_strategy(tmp_path, qapp, monkeypatch)
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=Settings("single_folder"),
         max_concurrent=1,
         download_text=False,

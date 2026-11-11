@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from kemonodownloader import creator_downloader as cd
 
 
-def make_thread(tmp_path, template=None, strategy=None, auto_rename=True):
+def make_thread(tmp_path, template=None, strategy=None):
     download_folder = str(tmp_path / "dl")
     other_files = str(tmp_path / "other")
     os.makedirs(download_folder, exist_ok=True)
@@ -47,7 +47,6 @@ def make_thread(tmp_path, template=None, strategy=None, auto_rename=True):
         None,
         other_files,
         post_titles_map,
-        auto_rename,
         settings,
         1,
         download_text=False,
@@ -56,9 +55,9 @@ def make_thread(tmp_path, template=None, strategy=None, auto_rename=True):
 
 
 def test_generate_filename_and_folder_default(tmp_path):
-    thread = make_thread(tmp_path, template=None, strategy=None, auto_rename=True)
+    thread = make_thread(tmp_path, template=None, strategy=None)
 
-    # First file: should apply auto-rename prefix 1_
+    # First file: the default template numbers it 1_
     target_folder, filename = thread.generate_filename_and_folder(
         thread.files_to_download[0], str(tmp_path / "dl"), 0, 2, "p1", "My Post", page_number=1
     )
@@ -308,7 +307,7 @@ def test_cancellation_thread_signals_stop_and_finishes():
 
 def test_generate_filename_template_fallback(tmp_path):
     thread = make_thread(
-        tmp_path, template="{post_id:{bad}}", strategy=None, auto_rename=False
+        tmp_path, template="{post_id:{bad}}", strategy=None
     )
     logs = []
     thread.log = SimpleNamespace(emit=lambda msg, level: logs.append((msg, level)))
@@ -320,7 +319,7 @@ def test_generate_filename_template_fallback(tmp_path):
 
 
 def test_fetch_creator_and_post_info_success(monkeypatch, tmp_path):
-    thread = make_thread(tmp_path, template=None, strategy=None, auto_rename=False)
+    thread = make_thread(tmp_path, template=None, strategy=None)
     # Ensure per-post titles are fetched by clearing map and using selected_posts
     thread.post_titles_map = {}
     thread.selected_posts = ["p1"]

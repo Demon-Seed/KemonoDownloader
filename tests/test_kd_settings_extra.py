@@ -236,7 +236,7 @@ def test_handle_tor_output_and_error(qapp, monkeypatch):
     st.tor_process = FakeProcOut()
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     st.handle_tor_output()
-    assert "running" in st.tor_status_label.text().lower() or st.tor_status_label.text()
+    assert "running" in st.tor_status_label.text().lower()
 
     # Now test error handling
     class FakeProcErr:

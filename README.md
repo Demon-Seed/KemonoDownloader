@@ -24,6 +24,7 @@
     * Option to download posts with and archive file to a subfolder regardless of 'Skip Post Folder' value.<br>
 * Multi-URL input: paste one creator or post URL per line to add several to the queue at once.<br>
   * Pasted post links are normalized to their creator, and only the linked posts are auto-selected.<br>
+* 'Data Directory' setting: keeps the app's own working files (thumbnail cache, databases) out of the Save Directory.<br>
 
 # Changes:<br>
 * Creator Downloader is now the first tab and defaults on launch.<br>
@@ -33,7 +34,21 @@
 * Changed retry timer from flat 1sec to an exponential (1,2,4,8 etc. capping at 30sec) to avoid hammering the API for no reason.<br>
 * Double-click a post in the list to preview its thumbnail, replacing the eye button.<br>
 * 'Rename & Sort by File order' behaviour changed: when posts share a folder, each post now keeps its own order prefix so its files stay together.<br>
+* Filters now re-apply to the loaded post list as you change them, with no refetch needed.<br>
+* Download progress moved into its own 'Run Summary' group, with separate 'Skipped Posts' and 'Skipped Files' counter rows.<br>
+* Downloads are written as `.part` and renamed when finished, so a cancelled or failed download leaves nothing behind.<br>
+
+# TODO:<br>
+* Save feature that saves current 'Creator Downloader' configuration.
+* 'Image' 'Video' bulk filetype presets.
+* Button that brings you inside the downloaded creator folder for a completed batch.
+
+# Known Bugs:<br>
+* Newer settings missing from 'confirm applied settings' prompt.
 
 # Support OG DEV:<br>
-**Developed by VoxDroid** | **Fork by Claude & GLM 5.2 Lol**<br>
+**Developed by VoxDroid** | **Fork by Deepseek Flash lol**<br>
 [GitHub](https://github.com/VoxDroid) | [Ko-fi](https://ko-fi.com/izeno)
+
+# AI Written Rundown:<br>
+**Just incase I missed something above, the program is**

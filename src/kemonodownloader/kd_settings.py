@@ -74,8 +74,17 @@ class SettingsTab(QWidget):
             "proxy_type": "tor",  # "custom", "tor"
             "custom_proxy_url": "",
             "tor_path": "",
-            # Creator downloader filename/folder customization
-            "creator_filename_template": "{post_id}_{orig_name}",
+            # Creator downloader filename/folder customization. Two filename
+            # templates replace the old "Rename & Sort" prefix: one for files
+            # inside a post's own folder, one for files pooled in a folder
+            # shared with other posts (single creator folder, filetype
+            # subfolders, or a post whose folder was skipped). The defaults
+            # reproduce the old auto-rename output.
+            "creator_filename_template": "{file_number}_{post_id}_{orig_name}",
+            "creator_filename_template_shared": "{post_id}_{file_number}_{orig_name}",
+            # Safety net for templates that drop the placeholders that keep
+            # names apart: never overwrite a file that is already there.
+            "creator_unique_filenames": True,
             "creator_folder_strategy": "per_post",  # per_post|single_folder|by_file_type
             "creator_folder_name_template": "{post_id}_{post_title}",
             # Font setting
@@ -179,9 +188,22 @@ class SettingsTab(QWidget):
         settings_dict["creator_filename_template"] = self.qsettings.value(
             "creator_filename_template",
             self.default_settings.get(
-                "creator_filename_template", "{post_id}_{orig_name}"
+                "creator_filename_template", "{file_number}_{post_id}_{orig_name}"
             ),
             type=str,
+        )
+        settings_dict["creator_filename_template_shared"] = self.qsettings.value(
+            "creator_filename_template_shared",
+            self.default_settings.get(
+                "creator_filename_template_shared",
+                "{post_id}_{file_number}_{orig_name}",
+            ),
+            type=str,
+        )
+        settings_dict["creator_unique_filenames"] = self.qsettings.value(
+            "creator_unique_filenames",
+            self.default_settings.get("creator_unique_filenames", True),
+            type=bool,
         )
         settings_dict["creator_folder_strategy"] = self.qsettings.value(
             "creator_folder_strategy",
@@ -236,7 +258,20 @@ class SettingsTab(QWidget):
         # Creator downloader settings
         self.qsettings.setValue(
             "creator_filename_template",
-            self.settings.get("creator_filename_template", "{post_id}_{orig_name}"),
+            self.settings.get(
+                "creator_filename_template", "{file_number}_{post_id}_{orig_name}"
+            ),
+        )
+        self.qsettings.setValue(
+            "creator_filename_template_shared",
+            self.settings.get(
+                "creator_filename_template_shared",
+                "{post_id}_{file_number}_{orig_name}",
+            ),
+        )
+        self.qsettings.setValue(
+            "creator_unique_filenames",
+            bool(self.settings.get("creator_unique_filenames", True)),
         )
         self.qsettings.setValue(
             "creator_folder_strategy",
@@ -415,59 +450,38 @@ class SettingsTab(QWidget):
         self.creator_custom_label = QLabel()
         creator_custom_layout.addWidget(self.creator_custom_label, 0, 0)
 
-        # Filename template combo (preset selections + editable custom)
-        self.creator_filename_combo = QComboBox()
-        self.creator_filename_combo.setEditable(True)
-        # Preset templates (label_key, template_string)
+        # Filename templates: one for files inside a post's own folder, one for
+        # files that land in a folder shared with other posts. They replace the
+        # old "Rename & Sort" prefix, which was prepended behind the user's
+        # back; the defaults reproduce that output.
         self._template_presets = [
+            ("tmpl_filenumber_postid_orig", "{file_number}_{post_id}_{orig_name}"),
+            ("tmpl_filenumber_orig", "{file_number}_{orig_name}"),
+            ("tmpl_postdate_filenumber_orig", "{post_date}_{file_number}_{orig_name}"),
             ("tmpl_postid_orig", "{post_id}_{orig_name}"),
             ("tmpl_posttitle_postid_orig", "{post_title}-{post_id}-{orig_name}"),
-            ("tmpl_postid_posttitle", "{post_id}_{post_title}"),
+        ]
+        # Shared-folder presets all carry the post's own identity: without it,
+        # two posts' first files would both be "{file_number}_name" and one
+        # would silently overwrite the other.
+        self._shared_template_presets = [
+            ("tmpl_postid_filenumber_orig", "{post_id}_{file_number}_{orig_name}"),
+            ("tmpl_postdate_filenumber_orig", "{post_date}_{file_number}_{orig_name}"),
+            (
+                "tmpl_postid_filenumber_posttitle",
+                "{post_id}_{file_number}_{post_title}",
+            ),
             ("tmpl_index_posttitle", "{file_index}_{post_title}_{orig_name}"),
         ]
-        for label_key, tpl in self._template_presets:
-            self.creator_filename_combo.addItem(translate(label_key), tpl)
-        # Add a custom option at the end
-        self.creator_filename_combo.addItem(
-            translate("tmpl_custom"), "{post_id}_{orig_name}"
-        )
-        # Set current or custom text
-        current_tpl = self.temp_settings.get(
-            "creator_filename_template", "{post_id}_{orig_name}"
-        )
-        found_index = None
-        for i in range(self.creator_filename_combo.count()):
-            if self.creator_filename_combo.itemData(i) == current_tpl:
-                found_index = i
-                break
-        if found_index is not None:
-            self.creator_filename_combo.setCurrentIndex(found_index)
-        else:
-            # Use custom editable text
-            self.creator_filename_combo.setCurrentIndex(
-                self.creator_filename_combo.count() - 1
-            )
-            self.creator_filename_combo.setEditText(current_tpl)
 
-        self.creator_filename_combo.setStyleSheet("padding: 5px; border-radius: 5px;")
-        # Connect both change events
-        self.creator_filename_combo.currentIndexChanged.connect(
-            lambda idx: self.update_temp_setting(
-                "creator_filename_template",
-                (
-                    self.creator_filename_combo.itemData(idx)
-                    if idx < self.creator_filename_combo.count() - 1
-                    else self.creator_filename_combo.currentText()
-                ),
-            )
-        )
-        # Update temp setting when editing text
-        self.creator_filename_combo.lineEdit().textChanged.connect(
-            lambda text: self.update_temp_setting("creator_filename_template", text)
+        self.creator_filename_combo = self._build_template_combo(
+            self._template_presets,
+            "creator_filename_template",
+            "{file_number}_{post_id}_{orig_name}",
         )
         creator_custom_layout.addWidget(self.creator_filename_combo, 0, 1)
 
-        # Help button for template variables
+        # Help button for template variables (covers both template rows)
         self.creator_template_help_btn = QPushButton("?")
         self.creator_template_help_btn.setStyleSheet(
             "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
@@ -475,8 +489,43 @@ class SettingsTab(QWidget):
         self.creator_template_help_btn.clicked.connect(self.show_template_help)
         creator_custom_layout.addWidget(self.creator_template_help_btn, 0, 2)
 
+        self.creator_shared_template_label = QLabel()
+        creator_custom_layout.addWidget(self.creator_shared_template_label, 1, 0)
+
+        self.creator_shared_filename_combo = self._build_template_combo(
+            self._shared_template_presets,
+            "creator_filename_template_shared",
+            "{post_id}_{file_number}_{orig_name}",
+        )
+        creator_custom_layout.addWidget(self.creator_shared_filename_combo, 1, 1)
+
+        self.creator_shared_template_help_btn = QPushButton("?")
+        self.creator_shared_template_help_btn.setStyleSheet(
+            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+        )
+        self.creator_shared_template_help_btn.clicked.connect(
+            self.show_template_help
+        )
+        creator_custom_layout.addWidget(self.creator_shared_template_help_btn, 1, 2)
+
+        # Safety net for templates that drop the placeholders keeping names
+        # apart: never overwrite a file that is already there.
+        self.creator_unique_filenames_check = QCheckBox()
+        self.creator_unique_filenames_check.setStyleSheet("color: white;")
+        self.creator_unique_filenames_check.setChecked(
+            bool(self.temp_settings.get("creator_unique_filenames", True))
+        )
+        self.creator_unique_filenames_check.toggled.connect(
+            lambda checked: self.update_temp_setting(
+                "creator_unique_filenames", bool(checked)
+            )
+        )
+        creator_custom_layout.addWidget(
+            self.creator_unique_filenames_check, 2, 0, 1, 3
+        )
+
         self.creator_folder_name_label = QLabel(translate("folder_name_template"))
-        creator_custom_layout.addWidget(self.creator_folder_name_label, 1, 0)
+        creator_custom_layout.addWidget(self.creator_folder_name_label, 3, 0)
 
         # Folder name template combo (preset selections + editable custom)
         self.creator_folder_name_combo = QComboBox()
@@ -522,7 +571,7 @@ class SettingsTab(QWidget):
         self.creator_folder_name_combo.lineEdit().textChanged.connect(
             lambda text: self.update_temp_setting("creator_folder_name_template", text)
         )
-        creator_custom_layout.addWidget(self.creator_folder_name_combo, 1, 1)
+        creator_custom_layout.addWidget(self.creator_folder_name_combo, 3, 1)
 
         self.creator_folder_name_help_btn = QPushButton("?")
         self.creator_folder_name_help_btn.setStyleSheet(
@@ -531,10 +580,10 @@ class SettingsTab(QWidget):
         self.creator_folder_name_help_btn.clicked.connect(
             self.show_folder_name_template_help
         )
-        creator_custom_layout.addWidget(self.creator_folder_name_help_btn, 1, 2)
+        creator_custom_layout.addWidget(self.creator_folder_name_help_btn, 3, 2)
 
         self.creator_folder_strategy_label = QLabel()
-        creator_custom_layout.addWidget(self.creator_folder_strategy_label, 2, 0)
+        creator_custom_layout.addWidget(self.creator_folder_strategy_label, 4, 0)
 
         self.creator_folder_strategy_combo = QComboBox()
         self.creator_folder_strategy_combo.addItem(
@@ -561,14 +610,14 @@ class SettingsTab(QWidget):
                 self.creator_folder_strategy_combo.itemData(idx),
             )
         )
-        creator_custom_layout.addWidget(self.creator_folder_strategy_combo, 2, 1)
+        creator_custom_layout.addWidget(self.creator_folder_strategy_combo, 4, 1)
 
         # Limit the Creator tab extension boxes to the filetypes a creator
         # really has: off, on, or on with a per-type filecount beside each box.
         self.show_only_found_filetypes_label = QLabel()
         self.show_only_found_filetypes_label.setStyleSheet("color: white;")
         creator_custom_layout.addWidget(
-            self.show_only_found_filetypes_label, 3, 0
+            self.show_only_found_filetypes_label, 5, 0
         )
 
         self.show_only_found_filetypes_combo = QComboBox()
@@ -597,7 +646,7 @@ class SettingsTab(QWidget):
             )
         )
         creator_custom_layout.addWidget(
-            self.show_only_found_filetypes_combo, 3, 1, 1, 2
+            self.show_only_found_filetypes_combo, 5, 1, 1, 2
         )
 
         self.creator_custom_group.setLayout(creator_custom_layout)
@@ -1160,6 +1209,67 @@ class SettingsTab(QWidget):
     def update_temp_setting(self, key, value):
         self.temp_settings[key] = value
 
+    def _build_template_combo(self, presets, setting_key, default_template):
+        """Build an editable preset combo bound to *setting_key*.
+
+        The presets are shown as their own template text, and the last entry is
+        an editable "Custom..." row, so any template the user types is kept
+        verbatim and written straight into the setting.
+        """
+        combo = QComboBox()
+        combo.setEditable(True)
+        for label_key, template in presets:
+            combo.addItem(translate(label_key), template)
+        combo.addItem(translate("tmpl_custom"), default_template)
+
+        current = self.temp_settings.get(setting_key, default_template)
+        preset_index = None
+        for index in range(combo.count() - 1):
+            if combo.itemData(index) == current:
+                preset_index = index
+                break
+        if preset_index is not None:
+            combo.setCurrentIndex(preset_index)
+        else:
+            combo.setCurrentIndex(combo.count() - 1)
+            combo.setEditText(current)
+
+        combo.setStyleSheet("padding: 5px; border-radius: 5px;")
+        combo.currentIndexChanged.connect(
+            lambda index: self.update_temp_setting(
+                setting_key,
+                (
+                    combo.itemData(index)
+                    if index < combo.count() - 1
+                    else combo.currentText()
+                ),
+            )
+        )
+        combo.lineEdit().textChanged.connect(
+            lambda text: self.update_temp_setting(setting_key, text)
+        )
+        return combo
+
+    def _refresh_template_combo(self, combo, presets, setting_key, default_template):
+        """Re-label *combo*'s presets (language change) keeping the value."""
+        current = self.temp_settings.get(setting_key, default_template)
+        combo.blockSignals(True)
+        combo.clear()
+        for label_key, template in presets:
+            combo.addItem(translate(label_key), template)
+        combo.addItem(translate("tmpl_custom"), default_template)
+        preset_index = None
+        for index in range(combo.count() - 1):
+            if combo.itemData(index) == current:
+                preset_index = index
+                break
+        if preset_index is not None:
+            combo.setCurrentIndex(preset_index)
+        else:
+            combo.setCurrentIndex(combo.count() - 1)
+            combo.setEditText("" if current is None else str(current))
+        combo.blockSignals(False)
+
     def update_simultaneous_downloads(self, value):
         self.temp_settings["simultaneous_downloads"] = value
         self.download_slider.blockSignals(True)
@@ -1180,7 +1290,10 @@ class SettingsTab(QWidget):
 
         # Prepare display values for template and folder strategy
         filename_template_display = self.temp_settings.get(
-            "creator_filename_template", "{post_id}_{orig_name}"
+            "creator_filename_template", "{file_number}_{post_id}_{orig_name}"
+        )
+        shared_filename_template_display = self.temp_settings.get(
+            "creator_filename_template_shared", "{post_id}_{file_number}_{orig_name}"
         )
         folder_name_template_display = self.temp_settings.get(
             "creator_folder_name_template", "{post_id}_{post_title}"
@@ -1210,9 +1323,10 @@ class SettingsTab(QWidget):
                 proxy_status,
                 proxy_type_name,
                 filename_template_display,
+                shared_filename_template_display,
+                folder_name_template_display,
                 folder_strategy_display,
                 self.temp_settings.get("font", "JetBrains Mono"),
-                folder_name_template_display,
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -1281,7 +1395,10 @@ class SettingsTab(QWidget):
 
         # Show applied message including creator filename template and folder strategy
         filename_template_display = self.settings.get(
-            "creator_filename_template", "{post_id}_{orig_name}"
+            "creator_filename_template", "{file_number}_{post_id}_{orig_name}"
+        )
+        shared_filename_template_display = self.settings.get(
+            "creator_filename_template_shared", "{post_id}_{file_number}_{orig_name}"
         )
         folder_name_template_display = self.settings.get(
             "creator_folder_name_template", "{post_id}_{post_title}"
@@ -1309,9 +1426,10 @@ class SettingsTab(QWidget):
                 proxy_status,
                 proxy_type_name,
                 filename_template_display,
+                shared_filename_template_display,
+                folder_name_template_display,
                 folder_strategy_display,
                 self.settings.get("font", "JetBrains Mono"),
-                folder_name_template_display,
             ),
         )
 
@@ -1438,44 +1556,33 @@ class SettingsTab(QWidget):
         # Creator downloader customization texts
         self.creator_custom_group.setTitle(translate("creator_downloader_settings"))
         self.creator_custom_label.setText(translate("filename_template"))
+        if hasattr(self, "creator_shared_template_label"):
+            self.creator_shared_template_label.setText(
+                translate("filename_template_shared")
+            )
         self.creator_folder_name_label.setText(
             translate("folder_name_template")
         )
         self.creator_folder_strategy_label.setText(translate("folder_strategy"))
+        if hasattr(self, "creator_unique_filenames_check"):
+            self.creator_unique_filenames_check.setText(translate("unique_filenames"))
+            self.creator_unique_filenames_check.setToolTip(
+                translate("unique_filenames_tooltip")
+            )
         # Update template presets display (support language change)
         try:
-            current_text = (
-                self.creator_filename_combo.currentText()
-                if hasattr(self, "creator_filename_combo")
-                else ""
+            self._refresh_template_combo(
+                self.creator_filename_combo,
+                self._template_presets,
+                "creator_filename_template",
+                "{file_number}_{post_id}_{orig_name}",
             )
-            # Clear and re-add with translated labels but preserve data values
-            if hasattr(self, "creator_filename_combo"):
-                self.creator_filename_combo.blockSignals(True)
-                self.creator_filename_combo.clear()
-                for label_key, tpl in self._template_presets:
-                    self.creator_filename_combo.addItem(translate(label_key), tpl)
-                self.creator_filename_combo.addItem(
-                    translate("tmpl_custom"), "{post_id}_{orig_name}"
-                )
-                # Restore selection
-                found_index = None
-                for i in range(self.creator_filename_combo.count()):
-                    if self.creator_filename_combo.itemData(
-                        i
-                    ) == self.temp_settings.get(
-                        "creator_filename_template", "{post_id}_{orig_name}"
-                    ):
-                        found_index = i
-                        break
-                if found_index is not None:
-                    self.creator_filename_combo.setCurrentIndex(found_index)
-                else:
-                    self.creator_filename_combo.setCurrentIndex(
-                        self.creator_filename_combo.count() - 1
-                    )
-                    self.creator_filename_combo.setEditText(current_text)
-                self.creator_filename_combo.blockSignals(False)
+            self._refresh_template_combo(
+                self.creator_shared_filename_combo,
+                self._shared_template_presets,
+                "creator_filename_template_shared",
+                "{post_id}_{file_number}_{orig_name}",
+            )
         except Exception:
             pass
 
@@ -1544,6 +1651,10 @@ class SettingsTab(QWidget):
             self.creator_template_help_btn.setToolTip(
                 translate("filename_template_help_title")
             )
+        if hasattr(self, "creator_shared_template_help_btn"):
+            self.creator_shared_template_help_btn.setToolTip(
+                translate("filename_template_help_title")
+            )
         if hasattr(self, "creator_folder_name_help_btn"):
             self.creator_folder_name_help_btn.setToolTip(
                 translate("folder_name_template_help_title")
@@ -1600,7 +1711,21 @@ class SettingsTab(QWidget):
         return mode if mode in SHOW_ONLY_FILETYPE_MODES else "off"
 
     def get_creator_filename_template(self):
-        return self.settings.get("creator_filename_template", "{post_id}_{orig_name}")
+        """Template for files that land in a folder of their own (post folder)."""
+        return self.settings.get(
+            "creator_filename_template", "{file_number}_{post_id}_{orig_name}"
+        )
+
+    def get_creator_filename_template_shared(self):
+        """Template for files pooled in a folder shared with other posts."""
+        return self.settings.get(
+            "creator_filename_template_shared",
+            "{post_id}_{file_number}_{orig_name}",
+        )
+
+    def get_creator_unique_filenames(self):
+        """True when a taken filename should get a _1/_2 suffix, not be replaced."""
+        return bool(self.settings.get("creator_unique_filenames", True))
 
     def get_creator_folder_strategy(self):
         return self.settings.get("creator_folder_strategy", "per_post")

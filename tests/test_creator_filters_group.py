@@ -752,7 +752,7 @@ def test_a_junk_bound_warns_once_per_episode(qtbot, tmp_path, monkeypatch):
 
     warnings = [message for message, level in messages if level == "WARNING"]
     assert len(warnings) == 1
-    assert "not a valid file count" in warnings[0].lower() or "count" in warnings[0].lower()
+    assert "invalid 'file count' value ignored" in warnings[0].lower()
 
     # Fixing the entry re-arms the warning for the next time it goes wrong.
     tab.file_count_from_edit.setText("4")

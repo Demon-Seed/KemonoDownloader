@@ -26,7 +26,6 @@ def test_fetch_creator_and_post_info_profile_failure_logs(monkeypatch, tmp_path)
         console,
         str(tmp_path / "other"),
         post_titles_map,
-        False,
         settings,
         settings.simultaneous_downloads,
     )
@@ -84,7 +83,6 @@ def test_download_worker_exception_is_logged(monkeypatch, tmp_path):
         console,
         str(tmp_path / "other"),
         {},
-        False,
         settings,
         settings.simultaneous_downloads,
     )
@@ -136,7 +134,6 @@ def test_run_handles_creator_folder_oserror(monkeypatch, tmp_path):
         console,
         str(tmp_path / "other"),
         {},
-        False,
         settings,
         settings.simultaneous_downloads,
     )
@@ -187,7 +184,6 @@ def test_check_post_completion_emits(monkeypatch, tmp_path):
         console,
         str(tmp_path / "other"),
         {},
-        False,
         settings,
         settings.simultaneous_downloads,
     )

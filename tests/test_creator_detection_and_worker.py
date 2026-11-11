@@ -111,7 +111,6 @@ def test_download_worker_processes_one(tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -151,7 +150,6 @@ def test_download_text_sync_writes_file(monkeypatch, tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )

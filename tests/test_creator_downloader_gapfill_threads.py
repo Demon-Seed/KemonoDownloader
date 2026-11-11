@@ -10,14 +10,6 @@ from PyQt6.QtWidgets import QWidget
 from kemonodownloader import creator_downloader as cd
 
 
-class Recorder:
-    def __init__(self):
-        self.calls = []
-
-    def emit(self, *args):
-        self.calls.append(args)
-
-
 def _clear_thread_local_sessions():
     for name in ("session", "socks_session"):
         try:
@@ -626,7 +618,6 @@ def test_download_text_sync_returns_when_description_exists(monkeypatch, tmp_pat
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=SimpleNamespace(settings_tab=None),
         max_concurrent=1,
         download_text=False,
@@ -658,7 +649,6 @@ def test_download_text_sync_exception_logs_warning(monkeypatch, tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=SimpleNamespace(settings_tab=None),
         max_concurrent=1,
         download_text=False,
@@ -1065,7 +1055,6 @@ def _make_creator_thread(tmp_path, file_url, download_text=False):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={("fanbox", "1", "p1"): "Title"},
-        auto_rename_enabled=False,
         settings=SimpleNamespace(file_download_max_retries=1, settings_tab=None),
         max_concurrent=1,
         download_text=download_text,

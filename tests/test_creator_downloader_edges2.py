@@ -26,7 +26,6 @@ def test_generate_filename_template_error_fallback():
     dummy.creator_id = "42"
     dummy.post_titles_map = {("fanbox", "42", "101"): "My Post"}
     dummy.creator_name = "Creator"
-    dummy.auto_rename_enabled = False
     dummy.post_files_map = {}
     dummy.skip_folder_enabled = False
     dummy.skip_folder_threshold = 1
@@ -40,7 +39,7 @@ def test_generate_filename_template_error_fallback():
     dummy.settings = SimpleNamespace(settings_tab=st)
     dummy._safe_emit = lambda *a, **k: None
 
-    target, filename = cd.CreatorDownloadThread.generate_filename_and_folder(
+    _, filename = cd.CreatorDownloadThread.generate_filename_and_folder(
         dummy,
         "https://kemono.cr/files/img.png?f=orig.png",
         "/tmp",
@@ -55,13 +54,12 @@ def test_generate_filename_template_error_fallback():
     assert filename.startswith("101_")
 
 
-def test_auto_rename_counter_per_post():
+def test_post_template_counter_per_post():
     dummy = SimpleNamespace()
     dummy.service = "fanbox"
     dummy.creator_id = "42"
     dummy.post_titles_map = {("fanbox", "42", "101"): "My Post"}
     dummy.creator_name = "Creator"
-    dummy.auto_rename_enabled = True
     dummy.post_files_map = {}
     dummy.skip_folder_enabled = False
     dummy.skip_folder_threshold = 1
@@ -109,7 +107,6 @@ def test_download_file_deletion_failure(monkeypatch, tmp_path):
     dummy.creator_id = "42"
     dummy.post_titles_map = {("fanbox", "42", "101"): "Title"}
     dummy.creator_name = "Creator"
-    dummy.auto_rename_enabled = False
     dummy.post_file_counters = {}
     dummy.post_file_counters_lock = threading.Lock()
     dummy.settings = SimpleNamespace(settings_tab=None, file_download_max_retries=1)
@@ -124,6 +121,8 @@ def test_download_file_deletion_failure(monkeypatch, tmp_path):
     dummy.completed_files_lock = contextlib.nullcontext()
     dummy._ssl_lock = contextlib.nullcontext()
     dummy._safe_emit = lambda signal, *args: signal.emit(*args)
+    # The filename guard is covered elsewhere; this fake only needs the hook.
+    dummy._unique_path = lambda path, entry: path
     dummy.log = SimpleNamespace(emit=lambda *a, **k: None)
     dummy.file_progress = SimpleNamespace(emit=lambda *a, **k: None)
     completed = []
@@ -215,7 +214,6 @@ def test_download_file_success(monkeypatch, tmp_path):
     dummy.creator_id = "42"
     dummy.post_titles_map = {("fanbox", "42", "101"): "Title"}
     dummy.creator_name = "Creator"
-    dummy.auto_rename_enabled = False
     dummy.post_file_counters = {}
     dummy.post_file_counters_lock = threading.Lock()
     dummy.settings = SimpleNamespace(settings_tab=None, file_download_max_retries=1)
@@ -233,6 +231,8 @@ def test_download_file_success(monkeypatch, tmp_path):
     dummy.completed_files_lock = contextlib.nullcontext()
     dummy._ssl_lock = contextlib.nullcontext()
     dummy._safe_emit = lambda signal, *args: signal.emit(*args)
+    # The filename guard is covered elsewhere; this fake only needs the hook.
+    dummy._unique_path = lambda path, entry: path
     dummy.log = SimpleNamespace(emit=lambda *a, **k: None)
     dummy.file_progress = SimpleNamespace(emit=lambda *a, **k: None)
     completed = []
@@ -297,7 +297,6 @@ def test_download_file_retry_exhaustion(monkeypatch, tmp_path):
     dummy.creator_id = "42"
     dummy.post_titles_map = {("fanbox", "42", "101"): "Title"}
     dummy.creator_name = "Creator"
-    dummy.auto_rename_enabled = False
     dummy.post_file_counters = {}
     dummy.post_file_counters_lock = threading.Lock()
     dummy.settings = SimpleNamespace(settings_tab=None, file_download_max_retries=1)
@@ -312,6 +311,8 @@ def test_download_file_retry_exhaustion(monkeypatch, tmp_path):
     dummy.completed_files_lock = contextlib.nullcontext()
     dummy._ssl_lock = contextlib.nullcontext()
     dummy._safe_emit = lambda signal, *args: signal.emit(*args)
+    # The filename guard is covered elsewhere; this fake only needs the hook.
+    dummy._unique_path = lambda path, entry: path
     dummy.log = SimpleNamespace(emit=lambda *a, **k: None)
     dummy.file_progress = SimpleNamespace(emit=lambda *a, **k: None)
     dummy.file_completed = SimpleNamespace(emit=lambda *a, **k: None)

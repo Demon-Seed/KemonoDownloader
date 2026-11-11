@@ -101,7 +101,6 @@ def test_download_text_sync_writes_file(monkeypatch, tmp_path):
         None,
         str(tmp_path),
         {},
-        False,
         settings,
     )
     # Ensure domain config has api_base and referer

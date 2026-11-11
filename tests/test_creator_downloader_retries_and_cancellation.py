@@ -114,7 +114,6 @@ def test_size_mismatch_deletes_incomplete_and_records_failure(monkeypatch, tmp_p
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -124,7 +123,7 @@ def test_size_mismatch_deletes_incomplete_and_records_failure(monkeypatch, tmp_p
     assert file_url not in thread.completed_files
     assert file_url in thread.failed_files
     msg = thread.failed_files[file_url]
-    assert "Size mismatch" in msg or "size mismatch" in msg.lower()
+    assert "size mismatch" in msg.lower()
 
     # Ensure no file artifacts remain under download_folder
     found_files = []
@@ -159,7 +158,6 @@ def test_cancellation_during_streaming_deletes_incomplete_and_records_failure(
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )

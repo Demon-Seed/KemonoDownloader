@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 from kemonodownloader.creator_downloader import (
     CheckboxToggleThread,
     FilterThread,

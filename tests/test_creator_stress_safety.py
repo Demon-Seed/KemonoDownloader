@@ -28,7 +28,6 @@ def test_stress_run_reduced_concurrency_does_not_crash(tmp_path):
         console=None,
         other_files_dir=str(tmp_path),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=DummySettings(),
         max_concurrent=2,
     )

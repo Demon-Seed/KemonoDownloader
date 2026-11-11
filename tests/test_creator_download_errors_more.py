@@ -41,7 +41,6 @@ def make_thread(tmp_path, file_url, other_dir=None, settings_retries=2):
         None,
         other,
         {},
-        False,
         settings,
         max_concurrent=1,
         download_text=False,

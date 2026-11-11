@@ -30,7 +30,6 @@ def test_creator_download_thread_run_loop(monkeypatch, tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=DummySettings(),
         max_concurrent=1,
     )

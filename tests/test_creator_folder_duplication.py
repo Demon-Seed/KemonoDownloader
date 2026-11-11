@@ -27,7 +27,6 @@ def test_creator_folder_not_duplicated():
         None,
         "/tmp/other",
         {},
-        auto_rename_enabled=False,
         settings=DummySettings(),
         max_concurrent=1,
     )

@@ -52,7 +52,6 @@ def test_request_exception_records_failure(monkeypatch, tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -80,7 +79,6 @@ def test_download_post_text_only_once(monkeypatch, tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -174,7 +172,6 @@ def test_redownload_when_hash_size_mismatch(monkeypatch, tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -200,7 +197,6 @@ def test_get_desc_folder_for_post_various_strategies(tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -241,4 +237,4 @@ def test_get_desc_folder_for_post_various_strategies(tmp_path):
         "1",
         "MyPost",
     )
-    assert d3.endswith("txt") or "txt" in d3
+    assert os.path.basename(d3) == "txt"

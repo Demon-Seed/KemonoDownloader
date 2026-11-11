@@ -2460,13 +2460,13 @@ class CreatorDownloadThread(QThread):
         console,  # accepted for compatibility; logging goes through `log`
         other_files_dir,
         post_titles_map,
-        auto_rename_enabled,
         settings,
         max_concurrent=20,
         download_text=False,
         skip_folder_enabled=False,
         skip_folder_threshold=1,
         force_folder_for_compressed=False,
+        post_dates_map=None,
     ):
         super().__init__()
         self.service = service
@@ -2483,14 +2483,14 @@ class CreatorDownloadThread(QThread):
         self.history_db = DownloadHistoryDB(self.other_files_dir)
         self.max_concurrent = max_concurrent
         self.post_files_map = self.build_post_files_map()
-        # 1-based selection order per post id; used by the auto-rename
-        # prefix so that posts sharing a folder stay contiguous.
-        self.post_order_map = self.build_post_order_map()
         self.completed_files = set()
         self.failed_files = {}  # Map file_url to error message
         self.post_titles_map = post_titles_map
+        # Publish date per post id ("YYYY-MM-DD") for {post_date} in the
+        # filename templates; the download thread only sees file URLs, so the
+        # tab hands the dates over rather than the whole post JSON.
+        self.post_dates_map = post_dates_map or {}
         self.creator_name = None
-        self.auto_rename_enabled = auto_rename_enabled
         self.skip_folder_enabled = skip_folder_enabled
         self.skip_folder_threshold = skip_folder_threshold
         self.force_folder_for_compressed = force_folder_for_compressed
@@ -2502,6 +2502,10 @@ class CreatorDownloadThread(QThread):
         # folder, and so we only need to check disk collisions once per post.
         self._post_folder_names = {}
         self._post_folder_names_lock = threading.Lock()
+        # Filenames this run has already claimed, so two files that resolve to
+        # the same name cannot both write it (the "append a number" guard).
+        self._reserved_paths = set()
+        self._reserved_paths_lock = threading.Lock()
         # Post ids already stamped after a real download in this run, so a
         # multi-file post writes one row instead of one row per file.
         self._history_lock = threading.Lock()
@@ -2536,69 +2540,6 @@ class CreatorDownloadThread(QThread):
             if post_id in post_files_map:
                 post_files_map[post_id].append(file_url)
         return post_files_map
-
-    def build_post_order_map(self):
-        """Map each post id to the block number its files share.
-
-        ``files_to_download`` is assembled by concurrent detection threads
-        (``FilePreparationThread._worker``), so the order of posts *within*
-        that flat list is not deterministic. The block number therefore comes
-        from the download database: a post is numbered once, on first sight,
-        and keeps that number for every later run. Without that, the number was
-        the post's rank in the current selection, so downloading a different
-        set renamed the same post's files and left duplicates behind.
-        """
-        ordered_ids = []
-        seen = set()
-        for post_id in self.selected_posts:
-            if post_id not in seen:
-                seen.add(post_id)
-                ordered_ids.append(post_id)
-        # Defensive: ids that reached the queue without being listed in
-        # ``selected_posts`` (e.g. files whose url is missing from
-        # ``files_to_posts_map`` default to the creator id) still need a
-        # stable slot instead of colliding with post 1.
-        for file_url in self.files_to_download:
-            post_id = self.files_to_posts_map.get(file_url)
-            if post_id is not None and post_id not in seen:
-                seen.add(post_id)
-                ordered_ids.append(post_id)
-
-        stored = self._stored_post_blocks(ordered_ids)
-        post_order_map = {}
-        for post_id in ordered_ids:
-            block = stored.get(str(post_id))
-            post_order_map[post_id] = block if block else len(post_order_map) + 1
-        return post_order_map
-
-    def _stored_post_blocks(self, post_ids):
-        """Return ``{post_id: block}`` from the database, or ``{}``.
-
-        A download run must never fail because the block table is unavailable,
-        so any database problem falls back to numbering in selection order.
-        """
-        assign = getattr(self.hash_db, "assign_post_blocks", None)
-        if assign is None:
-            return {}
-        try:
-            return assign(self.service, self.creator_id, post_ids) or {}
-        except Exception:
-            return {}
-
-    def get_post_order(self, post_id):
-        """Return the block number of *post_id*, assigning one on first sight.
-
-        Unknown ids are numbered after the highest one this run already has and
-        persisted, so they still form a single stable block.
-        """
-        order = self.post_order_map.get(post_id)
-        if order is None:
-            stored = self._stored_post_blocks([post_id])
-            order = stored.get(str(post_id)) or (
-                max(self.post_order_map.values(), default=0) + 1
-            )
-            self.post_order_map[post_id] = order
-        return order
 
     def fetch_creator_and_post_info(self):
         """Fetch creator name and retrieve post titles from post_titles_map."""
@@ -2802,8 +2743,8 @@ class CreatorDownloadThread(QThread):
         page_number
     ):
         """Generate the target folder path and filename for a given file according to
-        the creator downloader settings (filename template, folder strategy) and
-        current auto-rename state.
+        the creator downloader settings (folder strategy, and the filename
+        template for the folder the file lands in).
 
         Returns (target_folder, filename)
         """
@@ -2832,45 +2773,45 @@ class CreatorDownloadThread(QThread):
             "creator_name": sanitize_filename(self.creator_name or "Unknown_Creator"),
             "creator_id": self.creator_id,
             "file_index": file_index + 1,
+            "file_number": page_number,
             "total_files": total_files,
+            "post_file_count": len(self.post_files_map.get(post_id, [])),
+            "post_date": getattr(self, "post_dates_map", {}).get(str(post_id), ""),
+            "service": self.service,
         }
 
-        # Get settings
+        # Get settings. Two templates: files inside a post's own folder use the
+        # post-folder template, files pooled in a folder shared with other posts
+        # use the shared one. Both are ordinary user templates - nothing is
+        # prepended behind the user's back.
         template = None
+        shared_template = None
         strategy = "per_post"
         try:
             if self.settings and getattr(self.settings, "settings_tab", None):
                 st = self.settings.settings_tab
                 template = st.get_creator_filename_template()
+                # Older/mocked settings tabs have no shared getter; anything
+                # that is not a string (a bare MagicMock, say) is ignored so
+                # the numbered defaults still apply.
+                get_shared = getattr(st, "get_creator_filename_template_shared", None)
+                if callable(get_shared):
+                    shared_template = get_shared()
                 strategy = st.get_creator_folder_strategy()
         except Exception:
             # Fallback to defaults
             template = None
+            shared_template = None
             strategy = "per_post"
 
-        if not template:
-            template = "{post_id}_{orig_name}"
+        if not isinstance(template, str) or not template:
+            template = None
+        if not isinstance(shared_template, str) or not shared_template:
+            shared_template = None
 
-        # Attempt to format template with context, safely
-        try:
-            formatted = template.format(**context)
-        except Exception:
-            # Log a warning and fallback to a safe default template
-            try:
-                self._safe_emit(
-                    self.log,
-                    translate(
-                        "log_warning", translate("filename_template_error", template)
-                    ),
-                    "WARNING",
-                )
-            except Exception:
-                pass
-            formatted = f"{context['post_id']}_{context['orig_name']}"
-
-        # Determine the target folder before the filename: the auto-rename
-        # prefix depends on whether this file lands in a folder of its own
-        # or in a folder that is shared with other posts.
+        # Determine the target folder first: which template names this file
+        # depends on whether it lands in a folder of its own or in one shared
+        # with other posts.
         # Creator folder name
         creator_folder_name = (
             f"{self.creator_id}_{self.creator_name or self.creator_id}"
@@ -2909,24 +2850,36 @@ class CreatorDownloadThread(QThread):
                 )
                 target_folder = os.path.join(creator_folder, post_folder_name)
 
-        # Apply auto-rename prefix if enabled. The per-post page number is
-        # computed once at enqueue time (detection order), so pages stay in
-        # reading order even when downloaded concurrently.
-        # In a per-post folder the folder itself already keeps that post's
-        # files together, so the plain page number is enough. In a shared
-        # folder every post restarts counting at 1, which would interleave
-        # the posts (1_a, 1_b, 2_a, ...), so the post's selection order is
-        # prepended to keep each post a contiguous, internally ordered block
-        # (1_1_a, 1_2_a, 2_1_b, ...).
-        prefix = ""
-        if self.auto_rename_enabled:
-            if post_folder_name is not None:
-                prefix = f"{page_number}_"
-            else:
-                prefix = f"{self.get_post_order(post_id)}_{page_number}_"
+        # Pick the template for the folder this file lands in. A post folder
+        # keeps its post's files together on its own; a shared folder has to be
+        # told how to tell one post's files from another, which is what
+        # {post_id} (or {post_date}) in the shared template is for. {file_number}
+        # is the file's position inside its post, computed once at enqueue time
+        # (detection order), so pages stay in reading order even when the
+        # downloads run concurrently.
+        if post_folder_name is not None:
+            chosen = template or "{file_number}_{post_id}_{orig_name}"
+        else:
+            chosen = shared_template or "{post_id}_{file_number}_{orig_name}"
+
+        try:
+            formatted = chosen.format(**context)
+        except Exception:
+            # Log a warning and fallback to a safe default template
+            try:
+                self._safe_emit(
+                    self.log,
+                    translate(
+                        "log_warning", translate("filename_template_error", chosen)
+                    ),
+                    "WARNING",
+                )
+            except Exception:
+                pass
+            formatted = f"{context['post_id']}_{context['orig_name']}"
 
         # Build final filename and sanitize
-        filename_no_ext = sanitize_filename(prefix + formatted)
+        filename_no_ext = sanitize_filename(formatted)
         final_filename = f"{filename_no_ext}{file_ext}"
 
         return target_folder, final_filename
@@ -3028,6 +2981,59 @@ class CreatorDownloadThread(QThread):
                 "WARNING",
             )
 
+    def _unique_path(self, full_path, entry):
+        """Return the path this file should be written to.
+
+        The templates are what normally keep names apart - ``{file_number}``
+        inside a post, ``{post_id}``/``{post_date}`` in a shared folder - and
+        when they do, this changes nothing. When a template drops those
+        placeholders, two files can resolve to one name and the write would
+        silently replace the first one. With the guard on, the second file
+        takes ``name_1.ext``, then ``name_2.ext``, and so on.
+
+        The file this URL was downloaded to before is exempt: repairing a
+        damaged or truncated file must overwrite it in place rather than leave
+        a near-duplicate beside it.
+        """
+        if not self._unique_filenames_enabled():
+            return full_path
+        if entry:
+            recorded = entry.get("file_path")
+            if recorded and os.path.normcase(recorded) == os.path.normcase(full_path):
+                return full_path
+
+        directory, name = os.path.split(full_path)
+        stem, extension = os.path.splitext(name)
+        try:
+            with self._reserved_paths_lock:
+                candidate = full_path
+                counter = 1
+                while os.path.exists(candidate) or candidate in self._reserved_paths:
+                    candidate = os.path.join(directory, f"{stem}_{counter}{extension}")
+                    counter += 1
+                self._reserved_paths.add(candidate)
+            return candidate
+        except Exception:
+            # The guard is best-effort: a filesystem check must never be the
+            # reason a download fails, so fall back to the templated name.
+            return full_path
+
+    def _unique_filenames_enabled(self):
+        """Whether the "append a number when the name is taken" guard is on.
+
+        Settings tabs built before the option existed (and mocked ones) get the
+        default, which is on: the guard only ever acts where a file would
+        otherwise have been overwritten.
+        """
+        tab = getattr(self.settings, "settings_tab", None)
+        getter = getattr(tab, "get_creator_unique_filenames", None)
+        if getter is None:
+            return True
+        try:
+            return bool(getter())
+        except Exception:
+            return True
+
     def _discard_part_file(self, part_path):
         """Delete a partial transfer, logging what happened.
 
@@ -3068,17 +3074,13 @@ class CreatorDownloadThread(QThread):
         key = (self.service, self.creator_id, post_id)
         post_title = self.post_titles_map.get(key, f"Post_{post_id}")
 
-        # Generate final target folder and filename using settings and auto-rename
+        # Generate the final target folder and filename from the templates
         target_folder, filename = self.generate_filename_and_folder(
             file_url, folder, file_index, total_files, post_id, post_title,
             page_number
         )
 
         full_path = os.path.join(target_folder, filename)
-        # Transfers land here first and are renamed on success, so a cancelled
-        # or failed download can never leave a truncated file at the real name
-        # for the next run's dedup lookup to trust.
-        part_path = full_path + ".part"
         url_hash = hashlib.md5(file_url.encode()).hexdigest()
 
         entry = self.hash_db.lookup(url_hash)
@@ -3133,6 +3135,16 @@ class CreatorDownloadThread(QThread):
                             self.completed_files.add(file_url)
                         self.check_post_completion(file_url)
                         return
+
+        # Optional guard: a template without {file_number}/{post_id} can name
+        # two files alike, and the write below would silently replace the first
+        # one. The guard takes the next free name instead (and never renames a
+        # file being repaired in place).
+        full_path = self._unique_path(full_path, entry)
+        # Transfers land here first and are renamed on success, so a cancelled
+        # or failed download can never leave a truncated file at the real name
+        # for the next run's dedup lookup to trust.
+        part_path = full_path + ".part"
 
         self._safe_emit(
             self.log,
@@ -3958,9 +3970,6 @@ class CreatorDownloaderTab(QWidget):
         self._last_run_failed_files = {}
         self._last_run_files_to_posts_map = {}
         self._last_run_creator_url = None
-        # Ordered post ids of the preparation run in flight, used to number a
-        # first download's auto-rename blocks in list order.
-        self._preparation_post_order = None
         self.files_to_posts_map = {}
         os.makedirs(self.cache_dir, exist_ok=True)
         os.makedirs(self.other_files_dir, exist_ok=True)
@@ -4086,27 +4095,6 @@ class CreatorDownloaderTab(QWidget):
         creator_categories_layout.addWidget(self.creator_content_check)
         creator_categories_layout.addStretch()
         creator_options_layout.addLayout(creator_categories_layout)
-
-        # Auto rename + sort by file order checkbox, with an info button
-        # that explains the naming rules (per-post vs shared folders).
-        auto_rename_layout = QHBoxLayout()
-        auto_rename_layout.setContentsMargins(0, 0, 0, 0)
-        self.creator_auto_rename_check = QCheckBox()
-        self.creator_auto_rename_check.setChecked(True)  # Default to enabled
-        self.creator_auto_rename_check.setStyleSheet("color: white;")
-        auto_rename_layout.addWidget(self.creator_auto_rename_check)
-
-        self.creator_auto_rename_info_btn = QPushButton(
-            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
-        )
-        self.creator_auto_rename_info_btn.setFixedSize(26, 26)
-        self.creator_auto_rename_info_btn.setStyleSheet(
-            "background: #4A5B7A; border-radius: 5px;"
-        )
-        self.creator_auto_rename_info_btn.clicked.connect(self.show_auto_rename_info)
-        auto_rename_layout.addWidget(self.creator_auto_rename_info_btn)
-        auto_rename_layout.addStretch()
-        creator_options_layout.addLayout(auto_rename_layout)
 
         # Download text checkbox
         self.creator_download_text_check = QCheckBox(translate("download_text"))
@@ -4800,16 +4788,6 @@ class CreatorDownloaderTab(QWidget):
         self.creator_content_check.setText(translate("content_images"))
         self.creator_check_all.setText(translate("check_all"))
         self.creator_check_all_all.setText(translate("check_all_all"))
-        # Qt swallows a single "&" as a mnemonic marker (Alt+<next char>) and
-        # underlines the character after it, so escape it to show a literal
-        # ampersand in the label.
-        self.creator_auto_rename_check.setText(
-            translate("auto_rename").replace("&", "&&")
-        )
-        if hasattr(self, "creator_auto_rename_info_btn"):
-            self.creator_auto_rename_info_btn.setToolTip(
-                translate("auto_rename_info_title")
-            )
         if hasattr(self, "creator_skip_folder_info_btn"):
             self.creator_skip_folder_info_btn.setToolTip(
                 translate("skip_folder_info_title")
@@ -5058,14 +5036,6 @@ class CreatorDownloaderTab(QWidget):
             self,
             translate("downloader_box_info_title"),
             translate("downloader_box_info_text"),
-        )
-
-    def show_auto_rename_info(self):
-        """Show a dialog explaining what Rename & Sort by File order does."""
-        QMessageBox.information(
-            self,
-            translate("auto_rename_info_title"),
-            translate("auto_rename_info_text"),
         )
 
     def show_skip_folder_info(self):
@@ -5560,9 +5530,6 @@ class CreatorDownloaderTab(QWidget):
         self.creator_content_check.setEnabled(enabled)
 
         # Options
-        self.creator_auto_rename_check.setEnabled(enabled)
-        if hasattr(self, "creator_auto_rename_info_btn"):
-            self.creator_auto_rename_info_btn.setEnabled(enabled)
         self.creator_download_text_check.setEnabled(enabled)
 
         # Skip-folder toggle + dropdown
@@ -6005,10 +5972,6 @@ class CreatorDownloaderTab(QWidget):
 
         file_skip_keywords = self._file_skip_keywords_from_widgets()
 
-        # Ordered list order is what a first download's auto-rename blocks
-        # follow; the preparation workers return files out of order, so the
-        # order is remembered here and handed to the download thread.
-        self._preparation_post_order = list(post_ids)
         self.file_preparation_thread = FilePreparationThread(
             post_ids,
             self.all_files_map,
@@ -6094,13 +6057,28 @@ class CreatorDownloaderTab(QWidget):
             files_to_download,
             files_to_posts_map,
             urls[0],
-            post_order=self._preparation_post_order,
         )
-        self._preparation_post_order = None
         return
 
+    def _post_dates_map(self):
+        """Publish date ("YYYY-MM-DD") per post id, for the {post_date} placeholder.
+
+        The download thread only ever sees file URLs, so the dates come from the
+        posts the tab already holds.
+        """
+        dates = {}
+        for post in self.all_detected_posts or ():
+            if not isinstance(post, dict):
+                continue
+            post_id = post.get("id")
+            if post_id is None:
+                continue
+            published = get_post_published_date(post)
+            dates[str(post_id)] = published.isoformat() if published else ""
+        return dates
+
     def _start_download_thread(
-        self, files_to_download, files_to_posts_map, creator_url=None, post_order=None
+        self, files_to_download, files_to_posts_map, creator_url=None
     ):
         """Create and start a CreatorDownloadThread for the current creator.
 
@@ -6110,20 +6088,7 @@ class CreatorDownloaderTab(QWidget):
         creator_url = creator_url or self.current_creator_url
         self._last_run_creator_url = creator_url
         self.files_to_posts_map = dict(files_to_posts_map)
-        file_post_ids = list(dict.fromkeys(files_to_posts_map.values()))
-        # A first download numbers each post in the order the post list shows it,
-        # so the auto-rename blocks are reproducible instead of following
-        # whichever preparation worker answered first. Posts whose files arrived
-        # some other way still get a slot, after the ordered ones.
-        selected_posts = [
-            post_id
-            for post_id in dict.fromkeys(post_order or ())
-            if post_id in file_post_ids
-        ]
-        chosen = set(selected_posts)
-        selected_posts.extend(
-            post_id for post_id in file_post_ids if post_id not in chosen
-        )
+        selected_posts = list(dict.fromkeys(files_to_posts_map.values()))
 
         url = (creator_url or "").rstrip("/")
         parts = url.split("/")
@@ -6166,7 +6131,6 @@ class CreatorDownloaderTab(QWidget):
             None,
             self.other_files_dir,
             self.post_titles_map,
-            self.creator_auto_rename_check.isChecked(),
             settings,
             settings.simultaneous_downloads,
             download_text=self.creator_download_text_check.isChecked(),
@@ -6175,6 +6139,7 @@ class CreatorDownloaderTab(QWidget):
             force_folder_for_compressed=(
                 self.creator_force_compressed_folder_check.isChecked()
             ),
+            post_dates_map=self._post_dates_map(),
         )
         thread.file_progress.connect(self.update_creator_file_progress)
         thread.file_completed.connect(self.update_file_completion)

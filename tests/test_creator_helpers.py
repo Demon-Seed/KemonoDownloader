@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 from kemonodownloader.creator_downloader import (
     PreviewThread,
-    ThreadSettings,
     get_domain_config,
     get_headers,
     get_session,

@@ -40,7 +40,6 @@ def test_fetch_creator_and_post_info_populates(monkeypatch):
         console=None,
         other_files_dir="/tmp/other",
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -91,7 +90,6 @@ def test_fetch_creator_and_post_info_handles_errors(monkeypatch):
         console=None,
         other_files_dir="/tmp/other",
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -134,7 +132,6 @@ def test_download_file_size_mismatch_triggers_redownload(monkeypatch, tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -226,7 +223,6 @@ def test_download_file_makedirs_failure_records_error(monkeypatch, tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -270,7 +266,6 @@ def test_download_file_request_exception_records_failure(monkeypatch, tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )

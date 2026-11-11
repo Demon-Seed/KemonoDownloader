@@ -16,7 +16,6 @@ def _make_thread_for_runloop(tmp_path):
         console=SimpleNamespace(),
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={("kemono", "1", "1"): "Title"},
-        auto_rename_enabled=False,
         settings=settings,
         max_concurrent=1,
         download_text=False,

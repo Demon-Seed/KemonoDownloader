@@ -27,7 +27,6 @@ def test_generate_filename_template_fallback(qapp, tmp_path):
         object(),
         str(tmp_path),
         {("svc", "creator", "1"): "Title"},
-        True,
         Settings(),
         1,
     )
@@ -59,7 +58,6 @@ def test_get_desc_folder_for_post_variants(qapp, tmp_path):
         object(),
         str(tmp_path),
         {},
-        True,
         Settings(),
         1,
     )
@@ -101,7 +99,6 @@ def test_download_file_folder_creation_error(monkeypatch, qapp, tmp_path):
         object(),
         str(tmp_path),
         {("svc", "creator", "1"): "Title"},
-        True,
         Settings(),
         1,
     )
@@ -145,7 +142,6 @@ def test_download_file_request_exception_retries(monkeypatch, qapp, tmp_path):
         object(),
         str(tmp_path),
         {("svc", "creator", "1"): "Title"},
-        True,
         Settings(),
         1,
     )
@@ -197,7 +193,6 @@ def test_tab_update_file_completion_reads_thread_error(qapp, tmp_path):
         tab.creator_console,
         str(tmp_path),
         {},
-        True,
         Settings(),
         1,
     )

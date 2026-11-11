@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from kemonodownloader import creator_downloader as cd
 
 
-def make_thread(tmp_path, settings_tab=None, auto_rename=False):
+def make_thread(tmp_path, settings_tab=None):
     files = ["https://ex.org/files/f=example.png"]
     files_map = {files[0]: "42"}
     settings = SimpleNamespace(settings_tab=settings_tab)
@@ -19,7 +19,6 @@ def make_thread(tmp_path, settings_tab=None, auto_rename=False):
         console=console,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=auto_rename,
         settings=settings,
     )
     t.creator_name = "CreatorName"
@@ -32,7 +31,7 @@ def test_generate_filename_and_folder_strategies(tmp_path):
         get_creator_filename_template=lambda: "{post_id}_{orig_name}",
         get_creator_folder_strategy=lambda: "per_post",
     )
-    t = make_thread(tmp_path, settings_tab=settings_tab, auto_rename=False)
+    t = make_thread(tmp_path, settings_tab=settings_tab)
     folder, filename = t.generate_filename_and_folder(
         "https://ex.org/files/f=example.png", str(tmp_path), 0, 1, "42", "A Title", page_number=1
     )
@@ -131,20 +130,21 @@ def test_download_file_skips_when_not_running(tmp_path):
     asyncio.run(t.download_file(t.files_to_download[0], str(tmp_path), 0, 1, page_number=1))
 
 
-def test_auto_rename_prefix_increments(tmp_path):
+def test_shared_template_number_increments(tmp_path):
     settings_tab = SimpleNamespace(
-        get_creator_filename_template=lambda: "{post_id}_{orig_name}",
-        get_creator_folder_strategy=lambda: "per_post",
+        get_creator_filename_template=lambda: "{orig_name}",
+        get_creator_filename_template_shared=lambda: "{file_number}_{orig_name}",
+        get_creator_folder_strategy=lambda: "single_folder",
     )
-    t = make_thread(tmp_path, settings_tab=settings_tab, auto_rename=True)
-    folder, fn1 = t.generate_filename_and_folder(
+    t = make_thread(tmp_path, settings_tab=settings_tab)
+    _folder, fn1 = t.generate_filename_and_folder(
         "https://ex.org/files/f=example.png", str(tmp_path), 0, 1, "42", "Title", page_number=1
     )
     _, fn2 = t.generate_filename_and_folder(
         "https://ex.org/files/f=example.png", str(tmp_path), 1, 2, "42", "Title", page_number=2
     )
-    assert fn1.startswith("1_")
-    assert fn2.startswith("2_")
+    assert fn1 == "1_example.png"
+    assert fn2 == "2_example.png"
 
 
 def test_download_post_text_if_needed_calls_once(monkeypatch, tmp_path):

@@ -31,7 +31,6 @@ def make_thread(strategy="per_post"):
         console=None,
         other_files_dir="/tmp/other",
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=settings,
         max_concurrent=1,
     )

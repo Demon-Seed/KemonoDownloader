@@ -42,7 +42,6 @@ def test_download_file_skips_existing_hash(tmp_path):
         None,
         str(tmp_path),
         {},
-        False,
         settings,
     )
     # Inject fake hash DB
@@ -111,7 +110,6 @@ def test_terminal_http_error_is_reported_once_and_not_retried(tmp_path, monkeypa
         None,
         str(tmp_path),
         {},
-        False,
         settings,
     )
     t.hash_db = FakeHashDB()
@@ -186,7 +184,6 @@ def make_stream_thread(tmp_path, file_url):
         None,
         str(tmp_path),
         {},
-        False,
         settings,
     )
     thread.domain_config = {

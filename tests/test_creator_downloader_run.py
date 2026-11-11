@@ -17,7 +17,6 @@ def test_creator_download_thread_run_with_fake_workers(tmp_path, monkeypatch):
         None,
         str(tmp_path),
         {},
-        False,
         settings,
     )
 

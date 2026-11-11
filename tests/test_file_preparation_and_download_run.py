@@ -28,9 +28,15 @@ def test_file_preparation_thread_run(monkeypatch, qapp):
 
     assert finished, "FilePreparationThread did not finish as expected"
     files, fmap = finished[0]
-    assert any("file_p1" in u or "file_p2" in u for u in files) or len(files) >= 1
-    # Ensure mapping contains entries for returned file urls
-    assert all(v in fmap.values() for v in fmap.values() or [True])
+    assert sorted(files) == [
+        "https://kemono.cr/p1/file.jpg",
+        "https://kemono.cr/p2/file.jpg",
+    ]
+    # Every queued file maps back to the post it came from.
+    assert fmap == {
+        "https://kemono.cr/p1/file.jpg": "p1",
+        "https://kemono.cr/p2/file.jpg": "p2",
+    }
 
 
 def test_creator_download_thread_run_simulated(monkeypatch, qapp, tmp_path):
@@ -56,7 +62,6 @@ def test_creator_download_thread_run_simulated(monkeypatch, qapp, tmp_path):
         object(),
         download_folder,
         {("svc", "creator", "1"): "Title"},
-        True,
         Settings(),
         2,
     )

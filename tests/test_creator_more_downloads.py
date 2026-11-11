@@ -73,7 +73,6 @@ def test_generate_filename_by_file_type_and_creator_folder(tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )
@@ -114,7 +113,6 @@ def test_download_file_skips_when_hash_matches(tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "MyPost"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )

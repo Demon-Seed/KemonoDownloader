@@ -26,14 +26,13 @@ def test_template_bad_placeholder_fallsback_and_logs(tmp_path, qapp):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map=post_titles,
-        auto_rename_enabled=False,
         settings=settings,
     )
 
     # Capture log emits
     th.log = SimpleNamespace(emit=MagicMock())
 
-    target_folder, filename = th.generate_filename_and_folder(
+    _target_folder, filename = th.generate_filename_and_folder(
         file_url, str(tmp_path / "dl"), 0, 1, "1", "My Post", page_number=1
     )
 
@@ -43,9 +42,12 @@ def test_template_bad_placeholder_fallsback_and_logs(tmp_path, qapp):
     assert th.log.emit.called
 
 
-def test_template_format_exception_with_autorename_prefix(tmp_path, qapp):
-    """When auto-rename is enabled and template formatting fails,
-    the auto-rename counter should still be applied to the fallback name."""
+def test_template_format_exception_falls_back_without_a_prefix(tmp_path, qapp):
+    """A broken template falls back to post id + original name.
+
+    The fallback carries no number prefix any more: numbering is part of the
+    template now, so there is nothing to prepend.
+    """
     file_url = "https://kemono.cr/files/bar.jpg"
     settings_tab = SimpleNamespace(
         get_creator_filename_template=lambda: "{missing_field}",
@@ -65,17 +67,13 @@ def test_template_format_exception_with_autorename_prefix(tmp_path, qapp):
         console=None,
         other_files_dir=str(tmp_path / "other2"),
         post_titles_map=post_titles,
-        auto_rename_enabled=True,
         settings=settings,
     )
 
     th.log = SimpleNamespace(emit=MagicMock())
 
-    # First call should increment the per-post counter to 1
     _, fname1 = th.generate_filename_and_folder(
         file_url, str(tmp_path / "dl2"), 0, 1, "42", "Some Post", page_number=1
     )
-    assert fname1.endswith("bar.jpg")
-    # Should have prefix '1_' applied before the fallback name
-    assert fname1.startswith("1_")
+    assert fname1 == "42_bar.jpg"
     assert th.log.emit.called

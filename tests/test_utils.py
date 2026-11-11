@@ -100,7 +100,7 @@ class TestSanitizeFilename:
         """Test that unicode characters are preserved."""
         # Japanese characters
         result = sanitize_filename("日本語ファイル")
-        assert "日本語ファイル" in result or result == "日本語ファイル"
+        assert result == "日本語ファイル"
 
     def test_only_special_characters(self):
         """Test filename with only special characters returns 'unnamed'."""
@@ -159,10 +159,6 @@ class TestGetDomainConfig:
 
 class TestLanguageManager:
     """Tests for the KDLanguage translation system."""
-
-    def test_language_manager_singleton(self):
-        """Test that language_manager is a singleton instance."""
-        assert isinstance(language_manager, KDLanguage)
 
     def test_default_language_is_english(self):
         """Test that the default language is English."""

@@ -22,7 +22,6 @@ def make_thread_for_download(tmp_path, settings=None):
         MagicMock(),
         str(other),
         {("svc", "42", "p1"): "Title"},
-        False,
         settings,
         max_concurrent=1,
     )

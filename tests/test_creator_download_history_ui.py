@@ -378,7 +378,6 @@ def make_thread(tmp_path):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=make_settings(),
         download_text=False,
     )
@@ -405,7 +404,12 @@ def test_each_post_is_stamped_once_per_run(tmp_path, monkeypatch):
 
     assert [call[2] for call in calls] == ["1", "2"]
 
-
+
+
+
+
+
+
 def test_split_creator_url():
     assert cd.split_creator_url("https://kemono.cr/patreon/user/123") == (
         "patreon",
@@ -436,7 +440,6 @@ def test_creator_info_buttons_share_the_small_icon_style(qtbot, tmp_path):
         tab.date_filter_help_btn,
         tab.file_count_help_btn,
         tab.creator_box_info_btn,
-        tab.creator_auto_rename_info_btn,
         tab.creator_skip_folder_info_btn,
         tab.creator_skip_images_info_btn,
     ]

@@ -51,7 +51,6 @@ def test_hash_db_size_mismatch_triggers_redownload(monkeypatch, tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )

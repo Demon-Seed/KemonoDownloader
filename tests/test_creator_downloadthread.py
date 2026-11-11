@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import kemonodownloader.creator_downloader as cd
 
 
-def make_thread(tmp_path, settings=None, auto_rename=False, post_titles_map=None):
+def make_thread(tmp_path, settings=None, post_titles_map=None):
     dl = tmp_path / "dl"
     other = tmp_path / "other"
     dl.mkdir(exist_ok=True)
@@ -22,7 +22,6 @@ def make_thread(tmp_path, settings=None, auto_rename=False, post_titles_map=None
         MagicMock(),
         str(other),
         post_titles_map,
-        auto_rename,
         settings,
         max_concurrent=1,
     )
@@ -30,7 +29,7 @@ def make_thread(tmp_path, settings=None, auto_rename=False, post_titles_map=None
 
 
 def test_generate_filename_and_folder_default(tmp_path):
-    t = make_thread(tmp_path, settings=None, auto_rename=False)
+    t = make_thread(tmp_path, settings=None)
     t.creator_name = "Alice"
     key = (t.service, t.creator_id, "p1")
     t.post_titles_map[key] = "My Post"
@@ -50,11 +49,14 @@ def test_generate_filename_single_folder_and_template(tmp_path):
         def get_creator_filename_template(self):
             return "{creator_name}_{post_id}_{orig_name}"
 
+        def get_creator_filename_template_shared(self):
+            return "{creator_name}_{post_id}_{orig_name}"
+
         def get_creator_folder_strategy(self):
             return "single_folder"
 
     settings = SimpleNamespace(settings_tab=MockST())
-    t = make_thread(tmp_path, settings=settings, auto_rename=True)
+    t = make_thread(tmp_path, settings=settings)
     t.creator_name = "Bob"
     file_url = "https://kemono.cr/media/1.jpg?f=file.jpg"
 
@@ -64,8 +66,8 @@ def test_generate_filename_single_folder_and_template(tmp_path):
 
     # single_folder => target folder should end with creator folder
     assert os.path.basename(os.path.normpath(folder)) == "42_Bob"
-    # auto_rename_enabled => prefix '1_' present on first call
-    assert filename.startswith("1_")
+    # The shared template names the file, with no hidden prefix on top.
+    assert filename == "Bob_p1_file.jpg"
 
 
 def test_get_desc_folder_for_post_strategies(tmp_path):

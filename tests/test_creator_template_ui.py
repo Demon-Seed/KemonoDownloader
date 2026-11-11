@@ -11,10 +11,10 @@ def test_template_presets_and_custom(qapp, monkeypatch):
         # Basic existence
         assert combo is not None
         # Should have at least the preset entries + custom
-        assert combo.count() >= 5
+        assert combo.count() >= 6
         # First preset data should be the default
         first_data = combo.itemData(0)
-        assert first_data == "{post_id}_{orig_name}"
+        assert first_data == "{file_number}_{post_id}_{orig_name}"
 
         # Selecting preset should update temp_settings
         combo.setCurrentIndex(1)
@@ -25,8 +25,23 @@ def test_template_presets_and_custom(qapp, monkeypatch):
         combo.setEditText("{post_title}-{post_id}")
         assert st.temp_settings["creator_filename_template"] == "{post_title}-{post_id}"
 
-        # Help button should exist and not raise when invoked
+        # The shared-folder template has its own row with its own default
+        shared = st.creator_shared_filename_combo
+        assert shared.itemData(0) == "{post_id}_{file_number}_{orig_name}"
+        shared.setCurrentIndex(1)
+        assert st.temp_settings["creator_filename_template_shared"] == (
+            shared.itemData(1)
+        )
+
+        # The "append a number when the name is taken" guard is on by default
+        assert st.temp_settings["creator_unique_filenames"] is True
+        st.creator_unique_filenames_check.setChecked(False)
+        assert st.temp_settings["creator_unique_filenames"] is False
+        assert st.get_creator_unique_filenames() in (True, False)
+
+        # Help buttons should exist and not raise when invoked
         assert hasattr(st, "creator_template_help_btn")
+        assert hasattr(st, "creator_shared_template_help_btn")
         # Monkeypatch QMessageBox.information to avoid modal blocking
         monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
         # Call the help method - shouldn't raise or block
@@ -58,7 +73,6 @@ def test_invalid_template_falls_back_and_logs(qapp):
         None,
         "/tmp/other",
         {},
-        auto_rename_enabled=False,
         settings=DummySettings(),
         max_concurrent=1,
     )

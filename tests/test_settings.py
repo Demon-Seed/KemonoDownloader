@@ -226,7 +226,7 @@ class TestProxySettings:
 
         for url in valid_urls:
             # Basic validation - should contain a port
-            assert ":" in url or url.startswith("http")
+            assert ":" in url
 
     def test_tor_default_port(self):
         """Test Tor SOCKS proxy default configuration."""
@@ -818,10 +818,10 @@ class TestCustomUIState:
         parent = MagicMock()
         parent.base_folder = ""
 
-        # Preset template at index 2
+        # Preset template at index 3
         mock_settings = {
             "language": "english",
-            "creator_filename_template": "{post_id}_{post_title}",
+            "creator_filename_template": "{post_id}_{orig_name}",
             "base_directory": "/tmp",
             "base_folder_name": "Kemono Downloader",
             "simultaneous_downloads": 5,
@@ -847,9 +847,9 @@ class TestCustomUIState:
         st = SettingsTab(parent)
         try:
             # Match data correctly
-            idx = st.creator_filename_combo.findData("{post_id}_{post_title}")
+            idx = st.creator_filename_combo.findData("{post_id}_{orig_name}")
             st.creator_filename_combo.setCurrentIndex(idx)
-            assert st.creator_filename_combo.currentIndex() == 2
+            assert st.creator_filename_combo.currentIndex() == 3
         finally:
             st.deleteLater()
 

@@ -22,7 +22,7 @@ class MockThreadSettings:
         self.settings_tab = settings_tab
 
 
-def make_thread(auto_rename=False, template=None, strategy=None):
+def make_thread(template=None, strategy=None):
     settings_tab = MockSettingsTab(
         template if template is not None else "{post_id}_{orig_name}",
         strategy if strategy is not None else "per_post",
@@ -39,7 +39,6 @@ def make_thread(auto_rename=False, template=None, strategy=None):
         console=None,
         other_files_dir="/tmp/other",
         post_titles_map={},
-        auto_rename_enabled=auto_rename,
         settings=settings,
         max_concurrent=1,
     )
@@ -50,7 +49,7 @@ def make_thread(auto_rename=False, template=None, strategy=None):
 
 
 def test_filename_template_applies_and_sanitizes():
-    t = make_thread(auto_rename=False, template="{post_title}-{post_id}-{orig_name}")
+    t = make_thread(template="{post_title}-{post_id}-{orig_name}")
     folder, filename = t.generate_filename_and_folder(
         "https://kemono.cr/media/abc/image.jpg", "/downloads", 0, 1, "1", "My Post", page_number=1
     )
@@ -62,8 +61,8 @@ def test_filename_template_applies_and_sanitizes():
     assert expected in os.path.normpath(folder)
 
 
-def test_auto_rename_prefix_and_counter():
-    t = make_thread(auto_rename=True, template="{orig_name}")
+def test_file_number_prefix_increments():
+    t = make_thread(template="{file_number}_{orig_name}")
     # call twice for same post to get counter increment
     folder1, filename1 = t.generate_filename_and_folder(
         "https://kemono.cr/media/abc/file.png", "/downloads", 0, 2, "1", "My Post", page_number=1
@@ -71,8 +70,8 @@ def test_auto_rename_prefix_and_counter():
     folder2, filename2 = t.generate_filename_and_folder(
         "https://kemono.cr/media/abc/file2.png", "/downloads", 1, 2, "1", "My Post", page_number=2
     )
-    assert filename1.startswith("1_")
-    assert filename2.startswith("2_")
+    assert filename1 == "1_file.png"
+    assert filename2 == "2_file2.png"
 
 
 def test_folder_strategy_single_and_by_type():

@@ -72,7 +72,6 @@ def _make_creator_thread(tmp_path, files=None, max_concurrent=3):
         console=None,
         other_files_dir=str(tmp_path / "other"),
         post_titles_map=dict(FAKE_POST_TITLES),
-        auto_rename_enabled=False,
         settings=DummySettings(),
         max_concurrent=max_concurrent,
     )

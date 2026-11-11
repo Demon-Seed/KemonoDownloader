@@ -259,7 +259,7 @@ class TestHeadersConfiguration:
         """Test that headers include a Referer."""
         headers = get_headers()
         assert "Referer" in headers
-        assert "kemono" in headers["Referer"] or len(headers["Referer"]) > 0
+        assert "kemono" in headers["Referer"]
 
     def test_headers_have_accept_language(self):
         """Test that headers include Accept-Language."""

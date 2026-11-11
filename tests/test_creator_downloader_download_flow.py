@@ -69,7 +69,6 @@ def test_download_file_success_writes_and_stores(tmp_path, monkeypatch):
         None,
         str(tmp_path),
         {},
-        False,
         settings,
     )
     t.hash_db = FakeHashDB()

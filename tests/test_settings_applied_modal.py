@@ -1,5 +1,3 @@
-import os
-
 from PyQt6.QtWidgets import QMessageBox
 
 from kemonodownloader.kd_language import translate

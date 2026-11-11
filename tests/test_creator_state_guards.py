@@ -333,13 +333,12 @@ def test_clearing_the_queue_untickes_the_filetypes(qtbot, tmp_path, monkeypatch)
     assert tab.creator_queue == []
 
 
-def test_first_download_numbers_posts_in_list_order(qtbot, tmp_path, monkeypatch):
-    """Preparation finishes posts out of order; the blocks follow the list.
+def test_download_thread_gets_each_post_once(qtbot, tmp_path, monkeypatch):
+    """Concurrent preparation fills the file map out of order.
 
-    ``files_to_posts_map`` is filled by concurrent workers, so its order says
-    nothing about the list. The ordered post ids from preparation are handed to
-    the download thread so a first run numbers posts the way the list shows
-    them.
+    The download thread only needs each post once, because file numbering now
+    comes from the filename templates rather than from a post's place in the
+    selection.
     """
     tab = make_tab(qtbot, tmp_path)
     tab.current_creator_url = "https://kemono.cr/artist/user/1"
@@ -365,15 +364,15 @@ def test_first_download_numbers_posts_in_list_order(qtbot, tmp_path, monkeypatch
         "https://n1.kemono.cr/data/three.png": "3",
         "https://n1.kemono.cr/data/one.png": "1",
         "https://n1.kemono.cr/data/two.png": "2",
+        "https://n1.kemono.cr/data/three-again.png": "3",
     }
     tab._start_download_thread(
         list(files),
         dict(files),
         tab.current_creator_url,
-        post_order=["1", "2", "3"],
     )
 
-    assert captured["selected_posts"] == ["1", "2", "3"]
+    assert sorted(captured["selected_posts"]) == ["1", "2", "3"]
 
 
 def test_a_retry_keeps_its_own_order(qtbot, tmp_path, monkeypatch):

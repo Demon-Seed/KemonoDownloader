@@ -138,7 +138,6 @@ def test_on_file_preparation_finished_starts_download_thread_and_strips_query(
             console,
             other_files_dir,
             post_titles_map,
-            auto_rename_enabled,
             settings,
             max_concurrent,
             download_text=False,

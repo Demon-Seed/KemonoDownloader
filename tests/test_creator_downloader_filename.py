@@ -24,7 +24,7 @@ def make_settings_with_strategy(strategy, template=None):
     )
 
 
-def test_generate_filename_and_folder_autorename_and_strategies(tmp_path):
+def test_generate_filename_and_folder_templates_and_strategies(tmp_path):
     download_folder = str(tmp_path / "downloads")
     other_files_dir = str(tmp_path / "other")
     os.makedirs(download_folder, exist_ok=True)
@@ -34,7 +34,7 @@ def test_generate_filename_and_folder_autorename_and_strategies(tmp_path):
     files_to_download = [file_url]
     files_to_posts_map = {file_url: "1"}
 
-    # Per-post strategy with auto-rename
+    # Per-post strategy with the default templates
     settings = make_settings_with_strategy("per_post", template=None)
     thread = CreatorDownloadThread(
         service="svc",
@@ -46,7 +46,6 @@ def test_generate_filename_and_folder_autorename_and_strategies(tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "My Post"},
-        auto_rename_enabled=True,
         settings=settings,
         download_text=False,
     )
@@ -55,7 +54,7 @@ def test_generate_filename_and_folder_autorename_and_strategies(tmp_path):
         file_url, download_folder, 0, total_files=1, post_id="1", post_title="My Post", page_number=1
     )
 
-    # Expect auto-rename prefix '1_' and default template '{post_id}_{orig_name}'
+    # Default post-folder template: {file_number}_{post_id}_{orig_name}
     assert filename.endswith("origname.png")
     assert filename.startswith("1_1_")
 
@@ -75,7 +74,6 @@ def test_generate_filename_and_folder_autorename_and_strategies(tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creator123", "1"): "My Post"},
-        auto_rename_enabled=False,
         settings=settings2,
         download_text=False,
     )
@@ -115,7 +113,6 @@ def test_template_fallback_on_error(tmp_path):
         console=None,
         other_files_dir=other_files_dir,
         post_titles_map={("svc", "creatorX", "42"): "Title"},
-        auto_rename_enabled=False,
         settings=settings,
         download_text=False,
     )

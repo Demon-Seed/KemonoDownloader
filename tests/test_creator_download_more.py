@@ -31,7 +31,6 @@ def test_generate_filename_fallback_on_bad_template(tmp_path):
         console,
         str(tmp_path / "other"),
         post_titles_map,
-        False,
         settings,
         settings.simultaneous_downloads,
     )
@@ -43,7 +42,7 @@ def test_generate_filename_fallback_on_bad_template(tmp_path):
     )
     thread.settings.settings_tab = bad_tab
 
-    target_folder, filename = thread.generate_filename_and_folder(
+    _target_folder, filename = thread.generate_filename_and_folder(
         file_url,
         str(tmp_path),
         0,
@@ -83,7 +82,6 @@ def test_download_file_uses_hashdb_entry_and_skips_download(tmp_path):
         console,
         str(tmp_path / "other"),
         post_titles_map,
-        False,
         settings,
         settings.simultaneous_downloads,
     )
@@ -126,7 +124,6 @@ def test_download_file_size_mismatch_deletes_incomplete(monkeypatch, tmp_path):
         console,
         str(tmp_path / "other"),
         post_titles_map,
-        False,
         settings,
         settings.simultaneous_downloads,
     )
@@ -173,7 +170,6 @@ def test_run_emits_no_files_warning(tmp_path):
         console,
         str(tmp_path / "other"),
         {},
-        False,
         settings,
         settings.simultaneous_downloads,
     )

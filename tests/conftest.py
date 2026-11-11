@@ -87,21 +87,6 @@ def isolate_program_data(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
-def isolated_settings(tmp_path):
-    """Provide a QSettings instance backed by an isolated temp INI file.
-
-    This prevents tests from reading/writing the real application settings.
-    """
-    from PyQt6.QtCore import QSettings
-
-    ini_path = str(tmp_path / "test_settings.ini")
-    settings = QSettings(ini_path, QSettings.Format.IniFormat)
-    settings.clear()
-    yield settings
-    settings.clear()
-
-
-@pytest.fixture()
 def isolated_hash_dir(tmp_path):
     """Return a temp directory suitable for HashDB tests."""
     return str(tmp_path / "hash_store")
