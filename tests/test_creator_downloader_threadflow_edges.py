@@ -150,6 +150,7 @@ def test_on_file_preparation_finished_starts_download_thread_and_strips_query(
             self.file_progress = DummySignal()
             self.file_completed = DummySignal()
             self.post_completed = DummySignal()
+            self.creator_folder_ready = DummySignal()
             self.log = DummySignal()
             self.finished = DummySignal()
             self.started = False

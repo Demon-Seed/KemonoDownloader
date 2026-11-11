@@ -23,6 +23,7 @@ class FakeDownloadThread:
         self.file_progress = SimpleNamespace(connect=lambda cb: None)
         self.file_completed = SimpleNamespace(connect=lambda cb: None)
         self.post_completed = SimpleNamespace(connect=lambda cb: None)
+        self.creator_folder_ready = SimpleNamespace(connect=lambda cb: None)
         self.log = SimpleNamespace(connect=lambda cb: None)
         self.finished = SimpleNamespace(connect=lambda cb: None)
         FakeDownloadThread.instances.append(self)

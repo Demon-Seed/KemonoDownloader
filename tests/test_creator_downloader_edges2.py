@@ -123,6 +123,7 @@ def test_download_file_deletion_failure(monkeypatch, tmp_path):
     dummy._safe_emit = lambda signal, *args: signal.emit(*args)
     # The filename guard is covered elsewhere; this fake only needs the hook.
     dummy._unique_path = lambda path, entry: path
+    dummy._announce_creator_folder = lambda: None
     dummy.log = SimpleNamespace(emit=lambda *a, **k: None)
     dummy.file_progress = SimpleNamespace(emit=lambda *a, **k: None)
     completed = []
@@ -233,6 +234,7 @@ def test_download_file_success(monkeypatch, tmp_path):
     dummy._safe_emit = lambda signal, *args: signal.emit(*args)
     # The filename guard is covered elsewhere; this fake only needs the hook.
     dummy._unique_path = lambda path, entry: path
+    dummy._announce_creator_folder = lambda: None
     dummy.log = SimpleNamespace(emit=lambda *a, **k: None)
     dummy.file_progress = SimpleNamespace(emit=lambda *a, **k: None)
     completed = []
@@ -313,6 +315,7 @@ def test_download_file_retry_exhaustion(monkeypatch, tmp_path):
     dummy._safe_emit = lambda signal, *args: signal.emit(*args)
     # The filename guard is covered elsewhere; this fake only needs the hook.
     dummy._unique_path = lambda path, entry: path
+    dummy._announce_creator_folder = lambda: None
     dummy.log = SimpleNamespace(emit=lambda *a, **k: None)
     dummy.file_progress = SimpleNamespace(emit=lambda *a, **k: None)
     dummy.file_completed = SimpleNamespace(emit=lambda *a, **k: None)

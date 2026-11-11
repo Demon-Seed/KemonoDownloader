@@ -1198,12 +1198,20 @@ class SettingsTab(QWidget):
         self.download_slider.blockSignals(False)
         self.download_spinbox.blockSignals(False)
 
-    def _settings_summary(self, values):
-        """One 'Label: value' line per setting, for the confirm/apply dialogs.
+    @staticmethod
+    def _same_setting_value(left, right):
+        """Compare two setting values, tolerating int/str/bool mismatches."""
+        if isinstance(left, bool) or isinstance(right, bool):
+            return bool(left) == bool(right)
+        if isinstance(left, (int, float)) or isinstance(right, (int, float)):
+            try:
+                return float(left) == float(right)
+            except (TypeError, ValueError):
+                return str(left) == str(right)
+        return str(left or "") == str(right or "")
 
-        Built from *values* rather than a fixed format string, so a setting
-        added to this list can never silently go missing from the prompt.
-        """
+    def _settings_rows(self, values):
+        """(label, displayed value, setting key) for every prompt row."""
         enabled = translate("enabled")
         disabled = translate("disabled")
         mode_key = {
@@ -1217,73 +1225,123 @@ class SettingsTab(QWidget):
             "by_file_type": "subfolders_by_file_type",
         }.get(values.get("creator_folder_strategy", "per_post"), "per_post_folders")
 
-        rows = [
+        return [
             (
                 translate("data_directory"),
                 kd_paths.data_directory(values.get("data_directory")),
+                "data_directory",
             ),
-            (translate("save_directory"), values.get("base_directory", "")),
+            (
+                translate("save_directory"),
+                values.get("base_directory", ""),
+                "base_directory",
+            ),
             (
                 translate("simultaneous_downloads"),
                 values.get("simultaneous_downloads", ""),
+                "simultaneous_downloads",
             ),
             (
                 translate("creator_posts_max_attempts"),
                 values.get("creator_posts_max_attempts", ""),
+                "creator_posts_max_attempts",
             ),
             (
                 translate("post_data_max_retries"),
                 values.get("post_data_max_retries", ""),
+                "post_data_max_retries",
             ),
             (
                 translate("file_download_max_retries"),
                 values.get("file_download_max_retries", ""),
+                "file_download_max_retries",
             ),
             (
                 translate("api_request_max_retries"),
                 values.get("api_request_max_retries", ""),
+                "api_request_max_retries",
             ),
             (
                 translate("verbose_logging") + ":",
                 enabled if values.get("verbose_logging") else disabled,
+                "verbose_logging",
             ),
-            (translate("language"), language_manager.get_language_name()),
+            (translate("language"), language_manager.get_language_name(), "language"),
             (
                 translate("use_proxy") + ":",
                 enabled if values.get("use_proxy") else disabled,
+                "use_proxy",
             ),
-            (translate("proxy_type"), str(values.get("proxy_type", "")).capitalize()),
+            (
+                translate("proxy_type"),
+                str(values.get("proxy_type", "")).capitalize(),
+                "proxy_type",
+            ),
             (
                 translate("filename_template"),
                 values.get("creator_filename_template", ""),
+                "creator_filename_template",
             ),
             (
                 translate("filename_template_shared"),
                 values.get("creator_filename_template_shared", ""),
+                "creator_filename_template_shared",
             ),
             (
                 translate("unique_filenames"),
                 translate("option_on")
                 if values.get("creator_unique_filenames", True)
                 else translate("option_off"),
+                "creator_unique_filenames",
             ),
             (
                 translate("folder_name_template"),
                 values.get("creator_folder_name_template", ""),
+                "creator_folder_name_template",
             ),
-            (translate("folder_strategy"), translate(strategy_key)),
-            (translate("show_only_found_filetypes"), translate(mode_key)),
-            (translate("font"), values.get("font", "JetBrains Mono")),
+            (
+                translate("folder_strategy"),
+                translate(strategy_key),
+                "creator_folder_strategy",
+            ),
+            (
+                translate("show_only_found_filetypes"),
+                translate(mode_key),
+                "show_only_found_filetypes",
+            ),
+            (translate("font"), values.get("font", "JetBrains Mono"), "font"),
         ]
-        return "\n".join(f"{label} {value}" for label, value in rows)
+
+    def _settings_summary(self, values, baseline=None):
+        """'Label: value' lines for the prompt, limited to what changed.
+
+        With *baseline* (the settings as they were saved), only rows whose
+        setting differs are listed, so the prompt reports what this apply
+        changes instead of repeating every value back. Built from the settings
+        rather than a fixed format string, so a new setting cannot go missing.
+        """
+        rows = self._settings_rows(values)
+        if baseline is not None:
+            rows = [
+                row
+                for row in rows
+                if not self._same_setting_value(
+                    values.get(row[2]), baseline.get(row[2])
+                )
+            ]
+        if not rows:
+            return translate("no_settings_changed")
+        return "\n".join(f"{label} {value}" for label, value, _key in rows)
 
     def confirm_and_apply_settings(self):
+        # The prompt reports changes against the settings as they were saved.
+        before = self.settings.copy()
         reply = QMessageBox.question(
             self,
             translate("confirm_settings_change"),
             translate("confirm_settings_message")
             + "\n\n"
-            + self._settings_summary(self.temp_settings),
+            + self._settings_summary(self.temp_settings, before),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -1346,7 +1404,7 @@ class SettingsTab(QWidget):
             translate("settings_applied"),
             translate("settings_applied_message")
             + "\n\n"
-            + self._settings_summary(self.settings),
+            + self._settings_summary(self.temp_settings, before),
         )
 
     def confirm_and_reset_settings(self):

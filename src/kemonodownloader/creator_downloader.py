@@ -18,8 +18,8 @@ import requests
 from bs4 import BeautifulSoup
 from bs4.element import NavigableString
 from fake_useragent import UserAgent
-from PyQt6.QtCore import QByteArray, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import QByteArray, Qt, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QDesktopServices, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -2448,6 +2448,9 @@ class CreatorDownloadThread(QThread):
     post_completed = pyqtSignal(str)
     log = pyqtSignal(str, str)
     finished = pyqtSignal()
+    # The folder this run writes into, emitted once it is known to exist, so
+    # the tab can offer its "open folder" button.
+    creator_folder_ready = pyqtSignal(str)
 
     def __init__(
         self,
@@ -2510,6 +2513,10 @@ class CreatorDownloadThread(QThread):
         # multi-file post writes one row instead of one row per file.
         self._history_lock = threading.Lock()
         self._stamped_posts = set()
+        # Creator folder this run writes into, and whether it has been
+        # announced to the tab yet (the "open folder" button waits for it).
+        self._creator_folder = None
+        self._folder_announced = False
 
         self.completed_files_lock = threading.Lock()
         self.fetched_texts_lock = threading.Lock()
@@ -2823,6 +2830,9 @@ class CreatorDownloadThread(QThread):
             creator_folder = norm_folder
         else:
             creator_folder = os.path.join(folder, creator_folder_name)
+        # Remember it so the tab can offer to open it (see
+        # _announce_creator_folder).
+        self._creator_folder = creator_folder
 
         # ``post_folder_name`` stays None whenever the file lands in a folder
         # that can also hold files of other posts: single_folder,
@@ -2981,6 +2991,18 @@ class CreatorDownloadThread(QThread):
                 "WARNING",
             )
 
+    def _announce_creator_folder(self):
+        """Tell the tab which folder this run writes into, once.
+
+        Called from the first file that lands (or the first hash-db hit, which
+        implies the folder is already there), so the tab's "open folder"
+        button only lights up once the path exists.
+        """
+        if self._folder_announced or not self._creator_folder:
+            return
+        self._folder_announced = True
+        self._safe_emit(self.creator_folder_ready, self._creator_folder)
+
     def _unique_path(self, full_path, entry):
         """Return the path this file should be written to.
 
@@ -3133,6 +3155,9 @@ class CreatorDownloadThread(QThread):
                         self._safe_emit(self.file_completed, file_index, file_url, True)
                         with self.completed_files_lock:
                             self.completed_files.add(file_url)
+                        # A hash hit means the file (and so the folder) is
+                        # already on disk.
+                        self._announce_creator_folder()
                         self.check_post_completion(file_url)
                         return
 
@@ -3176,6 +3201,9 @@ class CreatorDownloadThread(QThread):
             self._safe_emit(self.file_completed, file_index, file_url, False)
             self.check_post_completion(file_url)
             return
+
+        # The folder exists now, so the tab can offer to open it.
+        self._announce_creator_folder()
 
         # Download text if enabled (only once per post).
         # This is placed AFTER the hash-db dedup check so that re-downloading
@@ -3970,6 +3998,9 @@ class CreatorDownloaderTab(QWidget):
         self._last_run_failed_files = {}
         self._last_run_files_to_posts_map = {}
         self._last_run_creator_url = None
+        # Creator folder of the run in flight (or the last one that produced
+        # files), for the "open folder" button. None until it is confirmed.
+        self._current_creator_folder = None
         self.files_to_posts_map = {}
         os.makedirs(self.cache_dir, exist_ok=True)
         os.makedirs(self.other_files_dir, exist_ok=True)
@@ -4301,6 +4332,18 @@ class CreatorDownloaderTab(QWidget):
         )
         self.creator_retry_failed_btn.setEnabled(False)
         creator_btn_layout.addWidget(self.creator_retry_failed_btn)
+
+        # Sits with the run controls but follows the folder, not the run: it
+        # stays greyed until this run's creator folder actually exists.
+        self.creator_open_folder_btn = QPushButton(
+            qta.icon("fa5s.folder-open", color="white"), ""
+        )
+        self.creator_open_folder_btn.clicked.connect(self._open_creator_folder)
+        self.creator_open_folder_btn.setStyleSheet(
+            "background: #4A5B7A; padding: 8px; border-radius: 5px;"
+        )
+        self.creator_open_folder_btn.setEnabled(False)
+        creator_btn_layout.addWidget(self.creator_open_folder_btn)
 
         left_layout.addLayout(creator_btn_layout)
 
@@ -4866,6 +4909,7 @@ class CreatorDownloaderTab(QWidget):
         self.creator_expand_logs_btn.setText(translate("expand_logs"))
         self.creator_expand_logs_btn.setToolTip(translate("expand_logs"))
         self._refresh_retry_button()
+        self._refresh_open_folder_button()
         self._update_download_summary()
         self._update_log_toggle_text()
 
@@ -6087,6 +6131,9 @@ class CreatorDownloaderTab(QWidget):
         """
         creator_url = creator_url or self.current_creator_url
         self._last_run_creator_url = creator_url
+        # The folder button follows the run in flight, so it starts greyed.
+        self._current_creator_folder = None
+        self._refresh_open_folder_button()
         self.files_to_posts_map = dict(files_to_posts_map)
         selected_posts = list(dict.fromkeys(files_to_posts_map.values()))
 
@@ -6144,6 +6191,7 @@ class CreatorDownloaderTab(QWidget):
         thread.file_progress.connect(self.update_creator_file_progress)
         thread.file_completed.connect(self.update_file_completion)
         thread.post_completed.connect(self.update_post_completion)
+        thread.creator_folder_ready.connect(self._on_creator_folder_ready)
         thread.log.connect(self.append_log_to_console)
         thread.finished.connect(lambda: self.cleanup_thread(thread))
         self.active_threads.append(thread)
@@ -7838,6 +7886,44 @@ class CreatorDownloaderTab(QWidget):
             if retryable
             else translate("retry_unavailable")
         )
+
+    def _refresh_open_folder_button(self):
+        """Grey the folder button out until this run's creator folder exists."""
+        button = getattr(self, "creator_open_folder_btn", None)
+        if button is None:
+            return
+        folder = getattr(self, "_current_creator_folder", None)
+        ready = bool(folder) and os.path.isdir(folder)
+        button.setText(translate("open_creator_folder"))
+        button.setEnabled(ready)
+        button.setToolTip(
+            translate("open_creator_folder_tooltip")
+            if ready
+            else translate("open_creator_folder_waiting")
+        )
+
+    def _on_creator_folder_ready(self, folder):
+        """The run just confirmed (and created) its creator folder."""
+        self._current_creator_folder = folder
+        self._refresh_open_folder_button()
+
+    def _open_creator_folder(self):
+        """Open this run's creator folder in the system file browser."""
+        folder = getattr(self, "_current_creator_folder", None)
+        if not folder:
+            return
+        if not os.path.isdir(folder):
+            # Deleted or moved while the app was running.
+            self.append_log_to_console(
+                translate(
+                    "log_warning", translate("open_creator_folder_missing", folder)
+                ),
+                "WARNING",
+            )
+            self._current_creator_folder = None
+            self._refresh_open_folder_button()
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
     def _remember_run_failures(self):
         """Snapshot the failures of the run about to be reset, for retrying."""

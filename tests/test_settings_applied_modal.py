@@ -33,11 +33,13 @@ def test_settings_applied_message_includes_template_and_strategy(
     try:
         # Prepare temp settings with non-empty directory to avoid directory creation warning
         st.temp_settings["base_directory"] = str(tmp_path)
-        st.temp_settings["base_folder_name"] = "Kemono Downloader Test"
         st.temp_settings["simultaneous_downloads"] = 3
-        st.temp_settings["language"] = "english"
-        st.temp_settings["use_proxy"] = False
-        st.temp_settings["proxy_type"] = "tor"
+        st.temp_settings["creator_posts_max_attempts"] = 12
+        st.temp_settings["post_data_max_retries"] = 9
+        st.temp_settings["file_download_max_retries"] = 33
+        st.temp_settings["api_request_max_retries"] = 4
+        st.temp_settings["verbose_logging"] = True
+        st.temp_settings["show_only_found_filetypes"] = "on"
 
         # Set creator-specific settings
         st.temp_settings["creator_filename_template"] = "{post_title}-{post_id}"
@@ -68,7 +70,7 @@ def test_settings_applied_message_includes_template_and_strategy(
         # Folder strategy display uses translate("single_creator_folder")
         assert translate("single_creator_folder") in captured["message"]
 
-        # Both prompts carry the whole setting list, newer settings included.
+        # Both prompts carry what changed, newer settings included.
         for prompt in (asked["text"], captured["message"]):
             assert translate("unique_filenames") in prompt
             assert translate("option_off") in prompt
@@ -79,5 +81,42 @@ def test_settings_applied_message_includes_template_and_strategy(
             assert translate("verbose_logging") in prompt
             assert translate("show_only_found_filetypes") in prompt
             assert str(st.temp_settings["file_download_max_retries"]) in prompt
+            # Only what changed: untouched settings stay out of the prompt.
+            assert translate("font") not in prompt
+            assert translate("data_directory") not in prompt
+            assert translate("language") not in prompt
+    finally:
+        st.deleteLater()
+
+
+def test_the_prompt_says_when_nothing_changed(monkeypatch, tmp_path, qapp):
+    parent = MockParent()
+    st = SettingsTab(parent)
+    try:
+        # Same value on both sides, so nothing counts as a change.
+        st.settings["base_directory"] = str(tmp_path)
+        st.temp_settings["base_directory"] = str(tmp_path)
+
+        asked = {}
+
+        def fake_question(parent_arg, title, text, *args, **kwargs):
+            asked["text"] = text
+            return QMessageBox.StandardButton.Yes
+
+        monkeypatch.setattr(QMessageBox, "question", fake_question)
+        captured = {}
+
+        def fake_info(self_arg, title, message):
+            captured["message"] = message
+
+        monkeypatch.setattr(QMessageBox, "information", fake_info)
+
+        st.confirm_and_apply_settings()
+
+        assert translate("no_settings_changed") in asked["text"]
+        assert translate("no_settings_changed") in captured["message"]
+        # Not a single value is repeated back.
+        assert translate("font") not in asked["text"]
+        assert translate("save_directory") not in asked["text"]
     finally:
         st.deleteLater()
