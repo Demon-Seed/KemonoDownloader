@@ -42,11 +42,16 @@ def test_settings_applied_message_includes_template_and_strategy(
         # Set creator-specific settings
         st.temp_settings["creator_filename_template"] = "{post_title}-{post_id}"
         st.temp_settings["creator_folder_strategy"] = "single_folder"
+        st.temp_settings["creator_unique_filenames"] = False
 
         # Monkeypatch question to behave as if the user clicked Yes
-        monkeypatch.setattr(
-            QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes
-        )
+        asked = {}
+
+        def fake_question(parent_arg, title, text, *args, **kwargs):
+            asked["text"] = text
+            return QMessageBox.StandardButton.Yes
+
+        monkeypatch.setattr(QMessageBox, "question", fake_question)
 
         captured = {}
 
@@ -62,5 +67,17 @@ def test_settings_applied_message_includes_template_and_strategy(
         assert "{post_title}-{post_id}" in captured["message"]
         # Folder strategy display uses translate("single_creator_folder")
         assert translate("single_creator_folder") in captured["message"]
+
+        # Both prompts carry the whole setting list, newer settings included.
+        for prompt in (asked["text"], captured["message"]):
+            assert translate("unique_filenames") in prompt
+            assert translate("option_off") in prompt
+            assert translate("creator_posts_max_attempts") in prompt
+            assert translate("post_data_max_retries") in prompt
+            assert translate("file_download_max_retries") in prompt
+            assert translate("api_request_max_retries") in prompt
+            assert translate("verbose_logging") in prompt
+            assert translate("show_only_found_filetypes") in prompt
+            assert str(st.temp_settings["file_download_max_retries"]) in prompt
     finally:
         st.deleteLater()

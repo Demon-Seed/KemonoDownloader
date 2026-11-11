@@ -812,47 +812,6 @@ class TestTorAsync:
 class TestCustomUIState:
     """Tests for specific UI initialization states (lines 384-387)."""
 
-    def test_preset_template_init(self, qapp, monkeypatch):
-        from kemonodownloader.kd_settings import SettingsTab
-
-        parent = MagicMock()
-        parent.base_folder = ""
-
-        # Preset template at index 3
-        mock_settings = {
-            "language": "english",
-            "creator_filename_template": "{post_id}_{orig_name}",
-            "base_directory": "/tmp",
-            "base_folder_name": "Kemono Downloader",
-            "simultaneous_downloads": 5,
-            "creator_posts_max_attempts": 200,
-            "post_data_max_retries": 7,
-            "file_download_max_retries": 50,
-            "api_request_max_retries": 3,
-            "use_proxy": False,
-            "proxy_type": "none",
-            "custom_proxy_url": "",
-            "tor_path": "",
-            "creator_folder_strategy": "per_post",
-            "font": "JetBrains Mono",
-        }
-        monkeypatch.setattr(SettingsTab, "load_settings", lambda self: mock_settings)
-        import kemonodownloader.kd_settings
-
-        monkeypatch.setattr(kemonodownloader.kd_settings, "translate", lambda s, *a: s)
-        monkeypatch.setattr(
-            kemonodownloader.kd_settings, "language_manager", MagicMock()
-        )
-
-        st = SettingsTab(parent)
-        try:
-            # Match data correctly
-            idx = st.creator_filename_combo.findData("{post_id}_{orig_name}")
-            st.creator_filename_combo.setCurrentIndex(idx)
-            assert st.creator_filename_combo.currentIndex() == 3
-        finally:
-            st.deleteLater()
-
     def test_custom_template_init(self, qapp, monkeypatch):
         from kemonodownloader.kd_settings import SettingsTab
 
@@ -891,7 +850,7 @@ class TestCustomUIState:
         try:
             # Should hit lines 384-387
             # We check the line edit text
-            assert st.creator_filename_combo.currentText() == "custom_{id}"
+            assert st.creator_filename_input.text() == "custom_{id}"
         finally:
             st.deleteLater()
 

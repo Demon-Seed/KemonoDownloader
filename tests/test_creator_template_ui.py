@@ -1,53 +1,75 @@
 from PyQt6.QtWidgets import QMessageBox
 
 from kemonodownloader.creator_downloader import CreatorDownloadThread
+from kemonodownloader.kd_language import translate
 from kemonodownloader.kd_settings import SettingsTab
 
 
-def test_template_presets_and_custom(qapp, monkeypatch):
+def test_template_boxes_hold_the_defaults(qapp, monkeypatch):
     st = SettingsTab(None)
     try:
-        combo = st.creator_filename_combo
-        # Basic existence
-        assert combo is not None
-        # Should have at least the preset entries + custom
-        assert combo.count() >= 6
-        # First preset data should be the default
-        first_data = combo.itemData(0)
-        assert first_data == "{file_number}_{post_id}_{orig_name}"
+        # Plain text boxes: no preset combo to keep in step.
+        assert not hasattr(st, "creator_filename_combo")
+        assert not hasattr(st, "creator_shared_filename_combo")
+        assert not hasattr(st, "creator_folder_name_combo")
 
-        # Selecting preset should update temp_settings
-        combo.setCurrentIndex(1)
-        assert st.temp_settings["creator_filename_template"] == combo.itemData(1)
+        assert st.creator_filename_input.text() == (
+            "{file_number}_{post_id}_{orig_name}"
+        )
+        assert st.creator_shared_filename_input.text() == (
+            "{post_id}_{file_number}_{orig_name}"
+        )
+        assert st.creator_folder_name_input.text() == "{post_id}_{post_title}"
 
-        # Editing text should mark as custom
-        combo.setCurrentIndex(combo.count() - 1)
-        combo.setEditText("{post_title}-{post_id}")
-        assert st.temp_settings["creator_filename_template"] == "{post_title}-{post_id}"
-
-        # The shared-folder template has its own row with its own default
-        shared = st.creator_shared_filename_combo
-        assert shared.itemData(0) == "{post_id}_{file_number}_{orig_name}"
-        shared.setCurrentIndex(1)
+        # Typing writes straight into the setting, separators included.
+        st.creator_filename_input.setText("{post_id}-{orig_name}")
+        assert st.temp_settings["creator_filename_template"] == "{post_id}-{orig_name}"
+        st.creator_shared_filename_input.setText("{post_date}-{orig_name}")
         assert st.temp_settings["creator_filename_template_shared"] == (
-            shared.itemData(1)
+            "{post_date}-{orig_name}"
         )
 
-        # The "append a number when the name is taken" guard is on by default
-        assert st.temp_settings["creator_unique_filenames"] is True
-        st.creator_unique_filenames_check.setChecked(False)
-        assert st.temp_settings["creator_unique_filenames"] is False
-        assert st.get_creator_unique_filenames() in (True, False)
-
-        # Help buttons should exist and not raise when invoked
+        # Help buttons exist and open without raising.
         assert hasattr(st, "creator_template_help_btn")
         assert hasattr(st, "creator_shared_template_help_btn")
-        # Monkeypatch QMessageBox.information to avoid modal blocking
         monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
-        # Call the help method - shouldn't raise or block
         st.show_template_help()
+
+        # The dedup guard is an Off/On dropdown, on by default.
+        assert st.creator_unique_filenames_combo.itemText(0) == translate("option_off")
+        assert st.creator_unique_filenames_combo.itemText(1) == translate("option_on")
+        assert bool(st.creator_unique_filenames_combo.currentData()) is True
+        st.creator_unique_filenames_combo.setCurrentIndex(0)
+        assert st.temp_settings["creator_unique_filenames"] is False
+        st.creator_unique_filenames_combo.setCurrentIndex(1)
+        assert st.temp_settings["creator_unique_filenames"] is True
     finally:
         st.deleteLater()
+
+
+def test_template_help_lists_every_placeholder():
+    text = translate("filename_template_help_text")
+    for placeholder in (
+        "{post_id}",
+        "{post_title}",
+        "{orig_name}",
+        "{ext}",
+        "{file_number}",
+        "{file_index}",
+        "{post_file_count}",
+        "{total_files}",
+        "{post_date}",
+        "{creator_id}",
+        "{creator_name}",
+        "{service}",
+    ):
+        assert placeholder in text
+    # The separators note stays: both work.
+    assert "{post_id}-{orig_name}" in text
+    assert "{post_id}_{orig_name}" in text
+    # The dupe warning stays; the other row's explanation does not.
+    assert "Warning" in text
+    assert "In Post Folder" not in text
 
 
 def test_invalid_template_falls_back_and_logs(qapp):

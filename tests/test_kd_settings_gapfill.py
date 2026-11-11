@@ -136,29 +136,15 @@ def test_confirm_and_apply_settings_language_changed(tmp_path, monkeypatch, qapp
     assert called == {"lang": 1, "emit": 1, "log": 1, "ui": 1}
 
 
-def test_update_ui_text_template_else_branch(tmp_path, monkeypatch, qapp):
+def test_update_ui_text_keeps_a_typed_template(tmp_path, monkeypatch, qapp):
     tab = make_tab(tmp_path)
-    tab.temp_settings["creator_filename_template"] = "__my_custom_template__"
+    tab.creator_filename_input.setText("__my_custom_template__")
     monkeypatch.setattr(tab, "update_temp_setting", lambda *_a, **_k: None)
 
     tab.update_ui_text()
 
-    assert (
-        tab.creator_filename_combo.currentIndex()
-        == tab.creator_filename_combo.count() - 1
-    )
-
-
-def test_update_ui_text_template_exception_is_ignored(tmp_path, monkeypatch, qapp):
-    tab = make_tab(tmp_path)
-
-    class BadCombo:
-        def blockSignals(self, *_a, **_k):
-            raise RuntimeError("combo gone")
-
-    tab.creator_filename_combo = BadCombo()
-
-    tab.update_ui_text()
+    # A language change re-labels widgets; it must not rewrite a typed template.
+    assert tab.creator_filename_input.text() == "__my_custom_template__"
 
 
 def test_update_ui_text_folder_strategy_exception_is_ignored(tmp_path, qapp):
