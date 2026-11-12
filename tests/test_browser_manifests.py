@@ -1,5 +1,7 @@
 import json
-import os
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_manifest(path):
@@ -8,14 +10,14 @@ def load_manifest(path):
 
 
 def test_chrome_manifest_is_mv3():
-    path = os.path.join("browser-extension", "chrome_manifest.json")
+    path = REPO_ROOT / "browser-extension" / "chrome_manifest.json"
     m = load_manifest(path)
     assert m.get("manifest_version") == 3
     assert "service_worker" in m.get("background", {})
 
 
 def test_firefox_manifest_is_mv2():
-    path = os.path.join("browser-extension", "firefox_manifest.json")
+    path = REPO_ROOT / "browser-extension" / "firefox_manifest.json"
     m = load_manifest(path)
     assert m.get("manifest_version") == 2
     assert "scripts" in m.get("background", {}) or m.get("applications")

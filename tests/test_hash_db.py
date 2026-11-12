@@ -58,19 +58,6 @@ class TestHashDBStoreAndLookup:
         assert entry["file_size"] == 200
         assert db.count() == 1
 
-    def test_contains(self, isolated_hash_dir):
-        db = HashDB(isolated_hash_dir)
-        assert not db.contains("k1")
-        db.store("k1", "/f.jpg", "h", "u")
-        assert db.contains("k1")
-
-    def test_delete(self, isolated_hash_dir):
-        db = HashDB(isolated_hash_dir)
-        db.store("k1", "/f.jpg", "h", "u")
-        db.delete("k1")
-        assert not db.contains("k1")
-        assert db.count() == 0
-
     def test_clear(self, isolated_hash_dir):
         db = HashDB(isolated_hash_dir)
         for i in range(5):
@@ -78,17 +65,6 @@ class TestHashDBStoreAndLookup:
         assert db.count() == 5
         db.clear()
         assert db.count() == 0
-
-    def test_all_entries(self, isolated_hash_dir):
-        db = HashDB(isolated_hash_dir)
-        db.store("k1", "/a.jpg", "ha", "ua", 500)
-        db.store("k2", "/b.jpg", "hb", "ub", 600)
-        entries = db.all_entries()
-        assert len(entries) == 2
-        assert "k1" in entries
-        assert entries["k2"]["file_path"] == "/b.jpg"
-        assert entries["k1"]["file_size"] == 500
-        assert entries["k2"]["file_size"] == 600
 
 
 class TestHashDBMigration:
@@ -241,15 +217,6 @@ class TestHashDBFileSize:
         entry = db.lookup("k1")
         assert entry is not None
         assert entry["file_size"] == 200
-
-    def test_file_size_in_all_entries(self, isolated_hash_dir):
-        """all_entries() should return file_size for each entry."""
-        db = HashDB(isolated_hash_dir)
-        db.store("a", "/a.jpg", "ha", "ua", 111)
-        db.store("b", "/b.jpg", "hb", "ub", 222)
-        entries = db.all_entries()
-        assert entries["a"]["file_size"] == 111
-        assert entries["b"]["file_size"] == 222
 
     def test_corruption_detection_by_size(self, isolated_hash_dir, tmp_path):
         """Simulate corruption detection: actual file size != stored file_size."""

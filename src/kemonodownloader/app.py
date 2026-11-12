@@ -140,7 +140,7 @@ class KemonoDownloader(QMainWindow):
             self.cache_folder,
             self.other_files_folder,
         ]:
-            os.makedirs(folder, exist_ok=True)
+            kd_paths.ensure_directory(folder, "application folder")
 
     def disable_other_tabs(self):
         if hasattr(self, "tabs"):
@@ -262,7 +262,6 @@ class KemonoDownloader(QMainWindow):
 
     def log(self, message):
         self.status_label.setText(message)
-        print(message)
 
 
 def main():

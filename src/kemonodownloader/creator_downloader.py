@@ -50,12 +50,10 @@ from kemonodownloader.domain_config import (
     get_domain_config,
     warm_file_host,
 )
-from kemonodownloader.download_history import (
-    DownloadHistoryDB,
-    iso_to_local_date,
-)
+from kemonodownloader.download_history import DownloadHistoryDB, iso_to_local_date
 from kemonodownloader.hash_db import HashDB
 from kemonodownloader.kd_language import translate
+from kemonodownloader.kd_paths import ensure_directory
 from kemonodownloader.retry_policy import (
     api_retry_delay,
     countdown_seconds,
@@ -129,22 +127,6 @@ def get_post_published_date(post):
     """
     published = _post_published_datetime(post)
     return published.date() if published is not None else None
-
-
-def get_post_published_time(post):
-    """Return the post's own publish time as "HHMM" (zero padded), or "".
-
-    Kept apart from the date on purpose: ``{post_date}`` and ``{post_time}``
-    are separate placeholders, so the template decides how they join
-    (``{post_date}_{post_time}`` or ``{post_date}{post_time}``). Minute
-    precision is enough to order two posts published on the same day. A
-    payload that only carries a date gives "0000", which keeps the field's
-    width instead of shortening the name.
-    """
-    published = _post_published_datetime(post)
-    if published is None:
-        return ""
-    return published.strftime("%H%M")
 
 
 def _hash_file(path):
@@ -366,7 +348,10 @@ def analyze_post(post):
         name = file_info.get("name") or os.path.basename(file_info.get("path") or "")
         if name:
             names.append(
-                (str(name), file_extension(name) or file_extension(file_info.get("path")))
+                (
+                    str(name),
+                    file_extension(name) or file_extension(file_info.get("path")),
+                )
             )
     attachments = post.get("attachments")
     if isinstance(attachments, list):
@@ -380,8 +365,7 @@ def analyze_post(post):
                 names.append(
                     (
                         str(name),
-                        file_extension(name)
-                        or file_extension(attachment.get("path")),
+                        file_extension(name) or file_extension(attachment.get("path")),
                     )
                 )
 
@@ -420,9 +404,7 @@ def analyze_post(post):
                     has_compressed = True
                 image_ext = normalize_extension(image_ext)
                 if image_ext:
-                    extension_counts[image_ext] = (
-                        extension_counts.get(image_ext, 0) + 1
-                    )
+                    extension_counts[image_ext] = extension_counts.get(image_ext, 0) + 1
 
     analysis["file_count"] = file_count
     analysis["has_compressed"] = has_compressed
@@ -885,6 +867,19 @@ def get_session(settings_tab=None):
     return session
 
 
+class _StoppableThread:
+    """Cooperative stop shared by every worker thread.
+
+    ``QThread`` stays the Qt base of each subclass; this mixin only adds the
+    flag and the two-line stop, so a worker cannot grow a divergent copy.
+    """
+
+    is_running = True
+
+    def stop(self):
+        self.is_running = False
+
+
 class PreviewThread(QThread):
     preview_ready = pyqtSignal(str, object)
     progress = pyqtSignal(int)
@@ -1149,7 +1144,7 @@ def _first_matching_keyword(keywords, text):
     return ""
 
 
-class PostDetectionThread(QThread):
+class PostDetectionThread(_StoppableThread, QThread):
     finished = pyqtSignal(list)
     posts_batch = pyqtSignal(list)
     log = pyqtSignal(str, str)
@@ -1265,12 +1260,9 @@ class PostDetectionThread(QThread):
             ext: 1 for ext in analysis.get("extensions") or []
         }
         for ext, amount in counts.items():
-            self.found_extensions[ext] = (
-                self.found_extensions.get(ext, 0) + int(amount or 0)
+            self.found_extensions[ext] = self.found_extensions.get(ext, 0) + int(
+                amount or 0
             )
-
-    def stop(self):
-        self.is_running = False
 
     def run(self):
         """Run the detection pass, always leaving the tab able to continue.
@@ -1720,9 +1712,7 @@ class PostDetectionThread(QThread):
                         self.log.emit(
                             translate(
                                 "log_debug",
-                                translate(
-                                    "skip_keyword_matched_after_rejoin", keyword
-                                ),
+                                translate("skip_keyword_matched_after_rejoin", keyword),
                             ),
                             "DEBUG",
                         )
@@ -1740,8 +1730,10 @@ class PostDetectionThread(QThread):
                 # fetch, so anything unexpected is simply "no thumbnail".
                 main_file = post.get("file")
                 if isinstance(main_file, dict) and main_file.get("path"):
-                    if main_file["path"].lower().endswith(
-                        (".jpg", ".jpeg", ".png", ".gif", ".webp")
+                    if (
+                        main_file["path"]
+                        .lower()
+                        .endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
                     ):
                         thumbnail_url = clean_file_url(
                             main_file["path"], self.domain_config
@@ -1816,7 +1808,8 @@ class PostDetectionThread(QThread):
             self.total_detected = len(all_posts)
             self.finished.emit(all_processed_posts)
 
-class PostPopulationThread(QThread):
+
+class PostPopulationThread(_StoppableThread, QThread):
     finished = pyqtSignal(dict, list)
     log = pyqtSignal(str, str)
 
@@ -1825,9 +1818,6 @@ class PostPopulationThread(QThread):
         self.detected_posts = detected_posts
         self.post_dates_map = post_dates_map if post_dates_map is not None else {}
         self.is_running = True
-
-    def stop(self):
-        self.is_running = False
 
     def run(self):
         if not self.is_running:
@@ -1863,7 +1853,7 @@ class PostPopulationThread(QThread):
         self.finished.emit(post_url_map, self.detected_posts)
 
 
-class FilterThread(QThread):
+class FilterThread(_StoppableThread, QThread):
     """Apply the search bar and the post filters to the loaded post list.
 
     This is the one place that decides what the Creator tab lists: the fetch
@@ -1917,9 +1907,6 @@ class FilterThread(QThread):
         self.file_keyword_skip_counts = {}
         self.is_running = True
 
-    def stop(self):
-        self.is_running = False
-
     def _count_skip(self, reason, keyword):
         """Book one skipped post under the filter that caught it."""
         self.filtered_count += 1
@@ -1971,7 +1958,7 @@ class FilterThread(QThread):
         self.finished.emit(filtered_items)
 
 
-class FilePreparationThread(QThread):
+class FilePreparationThread(_StoppableThread, QThread):
     progress = pyqtSignal(int)
     finished = pyqtSignal(list, dict)
     log = pyqtSignal(str, str)
@@ -2013,7 +2000,9 @@ class FilePreparationThread(QThread):
         self.is_running = True
         # Independent, always-on, filename-only skip list.
         # It can be combined freely with whole-post skipping.
-        self.file_skip_keywords = file_skip_keywords if file_skip_keywords is not None else []
+        self.file_skip_keywords = (
+            file_skip_keywords if file_skip_keywords is not None else []
+        )
         # Optional download option: when a post also offers a compressed
         # archive, its image files are dropped instead of downloaded.
         self.skip_images_if_compressed = skip_images_if_compressed
@@ -2022,9 +2011,6 @@ class FilePreparationThread(QThread):
         # keyword -> number of files it dropped, for the skip tooltip.
         self._file_skip_counts = {}
         self._files_skipped_lock = threading.Lock()
-
-    def stop(self):
-        self.is_running = False
 
     def _drop_images_when_archive_present(self, files_to_download):
         """Return *files_to_download* without its image files when the post
@@ -2084,9 +2070,7 @@ class FilePreparationThread(QThread):
             return ""
         with self._files_skipped_lock:
             self._files_skipped_count += 1
-            self._file_skip_counts[matched] = (
-                self._file_skip_counts.get(matched, 0) + 1
-            )
+            self._file_skip_counts[matched] = self._file_skip_counts.get(matched, 0) + 1
         return matched
 
     def detect_files(self, post, allowed_extensions, domain_config):
@@ -2169,9 +2153,7 @@ class FilePreparationThread(QThread):
                         self.log.emit(
                             translate(
                                 "log_debug",
-                                translate(
-                                    "skipped_individual_file", attachment_name
-                                ),
+                                translate("skipped_individual_file", attachment_name),
                             ),
                             "DEBUG",
                         )
@@ -2221,9 +2203,7 @@ class FilePreparationThread(QThread):
                     self.log.emit(
                         translate(
                             "log_debug",
-                            translate(
-                                "skipped_individual_file", img_name
-                            ),
+                            translate("skipped_individual_file", img_name),
                         ),
                         "DEBUG",
                     )
@@ -2423,9 +2403,7 @@ class FilePreparationThread(QThread):
         self.log.emit(
             translate(
                 "log_debug",
-                translate(
-                    "allowed_extensions_for_download", self.allowed_extensions
-                ),
+                translate("allowed_extensions_for_download", self.allowed_extensions),
             ),
             "DEBUG",
         )
@@ -2599,7 +2577,7 @@ def sanitize_filename(name, max_length=100):
     return sanitized if sanitized else "unnamed"
 
 
-class CreatorDownloadThread(QThread):
+class CreatorDownloadThread(_StoppableThread, QThread):
     file_progress = pyqtSignal(int, int)
     file_completed = pyqtSignal(int, str, bool)  # Added success flag
     post_completed = pyqtSignal(str)
@@ -2841,7 +2819,7 @@ class CreatorDownloadThread(QThread):
                     )
 
     def stop(self):
-        self.is_running = False
+        super().stop()
         self._destroyed = True
 
     def _safe_emit(self, signal, *args):
@@ -2866,9 +2844,7 @@ class CreatorDownloadThread(QThread):
         wanted = os.path.normcase(os.path.normpath(folder_path))
         for file_url in self.post_files_map.get(post_id, []):
             try:
-                entry = self.hash_db.lookup(
-                    hashlib.md5(file_url.encode()).hexdigest()
-                )
+                entry = self.hash_db.lookup(hashlib.md5(file_url.encode()).hexdigest())
             except Exception:
                 return False
             recorded = (entry or {}).get("file_path")
@@ -2983,8 +2959,14 @@ class CreatorDownloadThread(QThread):
             counter += 1
 
     def generate_filename_and_folder(
-        self, file_url, folder, file_index, total_files, post_id, post_title,
-        page_number
+        self,
+        file_url,
+        folder,
+        file_index,
+        total_files,
+        post_id,
+        post_title,
+        page_number,
     ):
         """Generate the target folder path and filename for a given file according to
         the creator downloader settings (folder strategy, and the filename
@@ -2996,9 +2978,9 @@ class CreatorDownloadThread(QThread):
         # and stops at "&": it used to be everything after the last "f=", which
         # truncated names that themselves contain "f=" and left "%20" in the
         # name instead of a space.
-        raw_filename = filename_from_query(file_url) or file_url.split("/")[-1].split(
-            "?"
-        )[0]
+        raw_filename = (
+            filename_from_query(file_url) or file_url.split("/")[-1].split("?")[0]
+        )
         # The extension is appended to the already-sanitized name, so scrub it
         # on its own: a URL can carry anything after "?f=", including the
         # control characters Windows rejects in a path.
@@ -3279,37 +3261,28 @@ class CreatorDownloadThread(QThread):
             # reason a download fails, so fall back to the templated name.
             return full_path
 
-    def _unique_filenames_enabled(self):
-        """Whether the "append a number when the name is taken" guard is on.
+    def _name_dedup(self, getter_name):
+        """Ask the settings tab one "Dedup when name is taken" question.
 
-        Settings tabs built before the option existed (and mocked ones) get the
-        default, which is on: the guard only ever acts where a file would
-        otherwise have been overwritten.
+        Settings tabs built before the option existed (and mocked ones) have
+        no getter; they keep the old unconditional behaviour (on).
         """
         tab = getattr(self.settings, "settings_tab", None)
-        getter = getattr(tab, "get_creator_unique_filenames", None)
+        getter = getattr(tab, getter_name, None)
         if getter is None:
             return True
         try:
             return bool(getter())
         except Exception:
             return True
+
+    def _unique_filenames_enabled(self):
+        """Whether the "append a number when the name is taken" guard is on."""
+        return self._name_dedup("get_creator_unique_filenames")
 
     def _folder_dedup_enabled(self):
-        """Whether a post folder name is checked for collisions.
-
-        The check used to be unconditional; it now follows the "Dedup when name
-        is taken" setting. A settings tab without the new getter keeps the old
-        behaviour (on), so mocks and older callers are unaffected.
-        """
-        tab = getattr(self.settings, "settings_tab", None)
-        getter = getattr(tab, "get_creator_folder_dedup", None)
-        if getter is None:
-            return True
-        try:
-            return bool(getter())
-        except Exception:
-            return True
+        """Whether a post folder name is checked for collisions."""
+        return self._name_dedup("get_creator_folder_dedup")
 
     def _discard_part_file(self, part_path):
         """Delete a partial transfer, logging what happened.
@@ -3340,7 +3313,9 @@ class CreatorDownloadThread(QThread):
             # Best-effort cleanup; never mask the original failure.
             pass
 
-    async def download_file(self, file_url, folder, file_index, total_files, page_number):
+    async def download_file(
+        self, file_url, folder, file_index, total_files, page_number
+    ):
         if not self.is_running or file_url not in _thread_run_files(self):
             self._safe_emit(
                 self.log, translate("log_info", f"Skipping {file_url}"), "INFO"
@@ -3353,8 +3328,7 @@ class CreatorDownloadThread(QThread):
 
         # Generate the final target folder and filename from the templates
         target_folder, filename = self.generate_filename_and_folder(
-            file_url, folder, file_index, total_files, post_id, post_title,
-            page_number
+            file_url, folder, file_index, total_files, post_id, post_title, page_number
         )
 
         full_path = os.path.join(target_folder, filename)
@@ -3482,9 +3456,10 @@ class CreatorDownloadThread(QThread):
                 # similar WAFs) treat a Referer that doesn't match the
                 # requested host as a bot/hotlink signal and 403 immediately
                 # (no CF-RAY, since it's DDoS-Guard, not Cloudflare).
-                file_base_url = self.domain_config.get(
-                    "file_base_url"
-                ) or self.domain_config["base_url"]
+                file_base_url = (
+                    self.domain_config.get("file_base_url")
+                    or self.domain_config["base_url"]
+                )
                 headers["Referer"] = file_base_url.rstrip("/") + "/"
                 headers["Origin"] = self.domain_config["base_url"].rstrip("/")
                 # get_headers() returns the module-wide default header set,
@@ -3771,9 +3746,7 @@ class CreatorDownloadThread(QThread):
         except Exception as e:
             self._safe_emit(
                 self.log,
-                translate(
-                    "log_warning", f"Could not update download history: {e}"
-                ),
+                translate("log_warning", f"Could not update download history: {e}"),
                 "WARNING",
             )
 
@@ -3955,8 +3928,7 @@ class CreatorDownloadThread(QThread):
             self._safe_emit(self.finished)
 
 
-
-class CheckboxToggleThread(QThread):
+class CheckboxToggleThread(_StoppableThread, QThread):
     finished = pyqtSignal(dict, list)
     log = pyqtSignal(str, str)
 
@@ -3968,9 +3940,6 @@ class CheckboxToggleThread(QThread):
         self.checked_urls = checked_urls.copy()
         self.check_all_state = check_all_state
         self.is_running = True
-
-    def stop(self):
-        self.is_running = False
 
     def run(self):
         if not self.is_running:
@@ -4102,8 +4071,7 @@ class LogsWindow(QDialog):
 
     def closeEvent(self, a0):
         """Stop timer when window closes"""
-        if hasattr(self, "update_timer"):
-            self.update_timer.stop()
+        self.update_timer.stop()
         if a0 is not None:
             a0.accept()
 
@@ -4192,7 +4160,9 @@ class CreatorDownloaderTab(QWidget):
         # download running?" consults this reference instead of the list.
         self._download_thread = None
         self.post_titles_map = {}
-        self.post_dates_map = {}  # post_id -> display string of the post's own publish date
+        self.post_dates_map = (
+            {}
+        )  # post_id -> display string of the post's own publish date
         # post_id -> lower-case searchable text ("filenames"/"description"/
         # "tags"), filled while detecting posts so the "Search by" scopes can
         # filter the list without touching the network or re-parsing HTML.
@@ -4287,8 +4257,10 @@ class CreatorDownloaderTab(QWidget):
         # files), for the "open folder" button. None until it is confirmed.
         self._current_creator_folder = None
         self.files_to_posts_map = {}
-        os.makedirs(self.cache_dir, exist_ok=True)
-        os.makedirs(self.other_files_dir, exist_ok=True)
+        self.cache_dir = ensure_directory(self.cache_dir, "cache folder")
+        self.other_files_dir = ensure_directory(
+            self.other_files_dir, "Other Files folder"
+        )
         self.setup_ui()
         if self._parent and hasattr(self._parent, "settings_tab"):
             self._parent.settings_tab.settings_applied.connect(self.refresh_ui)
@@ -4463,7 +4435,9 @@ class CreatorDownloaderTab(QWidget):
             self.creator_skip_folder_combo.addItem(str(n), n)
         self.creator_skip_folder_combo.setCurrentIndex(0)  # Default: 1
         self.creator_skip_folder_combo.setFixedWidth(60)
-        self.creator_skip_folder_combo.setStyleSheet("padding: 5px; border-radius: 5px;")
+        self.creator_skip_folder_combo.setStyleSheet(
+            "padding: 5px; border-radius: 5px;"
+        )
         skip_single_image_layout.addWidget(self.creator_skip_folder_combo)
         skip_single_image_layout.addStretch()
         creator_options_layout.addLayout(skip_single_image_layout)
@@ -4677,9 +4651,7 @@ class CreatorDownloaderTab(QWidget):
         skip_filter_layout = QHBoxLayout()
         skip_filter_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.skip_keywords_label = QLabel(
-            translate("skip_posts_keywords")
-        )
+        self.skip_keywords_label = QLabel(translate("skip_posts_keywords"))
         self.skip_keywords_label.setStyleSheet("color: white;")
         skip_filter_layout.addWidget(self.skip_keywords_label)
 
@@ -4731,9 +4703,7 @@ class CreatorDownloaderTab(QWidget):
         file_skip_filter_layout = QHBoxLayout()
         file_skip_filter_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.file_skip_keywords_label = QLabel(
-            translate("skip_files_keywords")
-        )
+        self.file_skip_keywords_label = QLabel(translate("skip_files_keywords"))
         self.file_skip_keywords_label.setStyleSheet("color: white;")
         file_skip_filter_layout.addWidget(self.file_skip_keywords_label)
 
@@ -4773,9 +4743,7 @@ class CreatorDownloaderTab(QWidget):
         date_range_layout.addWidget(self.date_from_label)
 
         self.date_from_edit = QLineEdit()
-        self.date_from_edit.setPlaceholderText(
-            translate("date_range_from_placeholder")
-        )
+        self.date_from_edit.setPlaceholderText(translate("date_range_from_placeholder"))
         self.date_from_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
         date_range_layout.addWidget(self.date_from_edit, stretch=1)
 
@@ -4784,9 +4752,7 @@ class CreatorDownloaderTab(QWidget):
         date_range_layout.addWidget(self.date_to_label)
 
         self.date_to_edit = QLineEdit()
-        self.date_to_edit.setPlaceholderText(
-            translate("date_range_to_placeholder")
-        )
+        self.date_to_edit.setPlaceholderText(translate("date_range_to_placeholder"))
         self.date_to_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
         date_range_layout.addWidget(self.date_to_edit, stretch=1)
 
@@ -5128,9 +5094,7 @@ class CreatorDownloaderTab(QWidget):
         self.creator_ext_empty_label.setText(
             translate("supported_filetypes_not_present")
         )
-        self.creator_post_empty_label.setText(
-            translate("no_posts_match_filters")
-        )
+        self.creator_post_empty_label.setText(translate("no_posts_match_filters"))
         self.run_summary_group.setTitle(translate("run_summary"))
         self.post_list_group.setTitle(translate("posts_to_download"))
         self.filters_group.setTitle(translate("filters_group_title"))
@@ -5140,66 +5104,40 @@ class CreatorDownloaderTab(QWidget):
         self.creator_content_check.setText(translate("content_images"))
         self.creator_check_all.setText(translate("check_all"))
         self.creator_check_all_all.setText(translate("check_all_all"))
-        if hasattr(self, "creator_skip_folder_info_btn"):
-            self.creator_skip_folder_info_btn.setToolTip(
-                translate("skip_folder_info_title")
-            )
-        if hasattr(self, "skip_keywords_help_btn"):
-            self.skip_keywords_help_btn.setToolTip(
-                translate("skip_posts_keywords_help_title")
-            )
-        if hasattr(self, "file_skip_keywords_help_btn"):
-            self.file_skip_keywords_help_btn.setToolTip(
-                translate("skip_files_keywords_help_title")
-            )
-        if hasattr(self, "date_filter_help_btn"):
-            self.date_filter_help_btn.setToolTip(
-                translate("date_filter_help_title")
-            )
-        if hasattr(self, "creator_box_info_btn"):
-            self.creator_box_info_btn.setToolTip(
-                translate("downloader_box_info_title")
-            )
-        if hasattr(self, "creator_force_compressed_folder_check"):
-            self.creator_force_compressed_folder_check.setToolTip(
-                translate("force_folder_for_compressed")
-            )
-        if hasattr(self, "creator_skip_images_check"):
-            self.creator_skip_images_check.setText(
-                translate("skip_images_if_compressed")
-            )
-        if hasattr(self, "creator_skip_images_info_btn"):
-            self.creator_skip_images_info_btn.setToolTip(
-                translate("skip_images_info_title")
-            )
-        if hasattr(self, "file_count_help_btn"):
-            self.file_count_help_btn.setToolTip(
-                translate("file_count_help_title")
-            )
-        if hasattr(self, "file_count_label"):
-            self.file_count_label.setText(
-                translate("file_count_filter")
-            )
-        if hasattr(self, "file_count_from_edit"):
-            self.file_count_from_edit.setPlaceholderText(
-                translate("file_count_from_placeholder")
-            )
-        if hasattr(self, "file_count_to_label"):
-            self.file_count_to_label.setText(translate("file_count_to"))
-        if hasattr(self, "file_count_to_edit"):
-            self.file_count_to_edit.setPlaceholderText(
-                translate("file_count_to_placeholder")
-            )
-        if hasattr(self, "file_count_keep_compressed_check"):
-            self.file_count_keep_compressed_check.setText(
-                translate("file_count_keep_compressed")
-            )
-        if hasattr(self, "filter_no_selected_filetypes_check"):
-            self.filter_no_selected_filetypes_check.setText(
-                translate("filter_no_selected_filetypes")
-            )
-        if hasattr(self, "search_scope_label"):
-            self.search_scope_label.setText(translate("search_scope"))
+        self.creator_skip_folder_info_btn.setToolTip(
+            translate("skip_folder_info_title")
+        )
+        self.skip_keywords_help_btn.setToolTip(
+            translate("skip_posts_keywords_help_title")
+        )
+        self.file_skip_keywords_help_btn.setToolTip(
+            translate("skip_files_keywords_help_title")
+        )
+        self.date_filter_help_btn.setToolTip(translate("date_filter_help_title"))
+        self.creator_box_info_btn.setToolTip(translate("downloader_box_info_title"))
+        self.creator_force_compressed_folder_check.setToolTip(
+            translate("force_folder_for_compressed")
+        )
+        self.creator_skip_images_check.setText(translate("skip_images_if_compressed"))
+        self.creator_skip_images_info_btn.setToolTip(
+            translate("skip_images_info_title")
+        )
+        self.file_count_help_btn.setToolTip(translate("file_count_help_title"))
+        self.file_count_label.setText(translate("file_count_filter"))
+        self.file_count_from_edit.setPlaceholderText(
+            translate("file_count_from_placeholder")
+        )
+        self.file_count_to_label.setText(translate("file_count_to"))
+        self.file_count_to_edit.setPlaceholderText(
+            translate("file_count_to_placeholder")
+        )
+        self.file_count_keep_compressed_check.setText(
+            translate("file_count_keep_compressed")
+        )
+        self.filter_no_selected_filetypes_check.setText(
+            translate("filter_no_selected_filetypes")
+        )
+        self.search_scope_label.setText(translate("search_scope"))
         self.creator_multi_url_input.setPlaceholderText(
             translate("multi_url_placeholder_creator")
         )
@@ -5235,34 +5173,23 @@ class CreatorDownloaderTab(QWidget):
         self.creator_search_input.setPlaceholderText(translate("search_posts"))
 
         # Update inline skip-keywords filter labels
-        if hasattr(self, "skip_keywords_label"):
-            self.skip_keywords_label.setText(
-                translate("skip_posts_keywords")
-            )
-        if hasattr(self, "skip_keywords_edit"):
-            self.skip_keywords_edit.setPlaceholderText(
-                translate("skip_posts_keywords_placeholder")
-            )
-        if hasattr(self, "skip_scope_label"):
-            self.skip_scope_label.setText(translate("skip_keywords_scope"))
-        if hasattr(self, "file_skip_keywords_label"):
-            self.file_skip_keywords_label.setText(
-                translate("skip_files_keywords")
-            )
-        if hasattr(self, "file_skip_keywords_edit"):
-            self.file_skip_keywords_edit.setPlaceholderText(
-                translate("skip_files_keywords_placeholder")
-            )
-        if hasattr(self, "skip_scope_checkboxes"):
-            for label_key, value in self._skip_scope_options:
-                checkbox = self.skip_scope_checkboxes.get(value)
-                if checkbox is not None:
-                    checkbox.setText(translate(label_key))
-        if hasattr(self, "search_scope_checkboxes"):
-            for label_key, value in self._search_scope_options:
-                checkbox = self.search_scope_checkboxes.get(value)
-                if checkbox is not None:
-                    checkbox.setText(translate(label_key))
+        self.skip_keywords_label.setText(translate("skip_posts_keywords"))
+        self.skip_keywords_edit.setPlaceholderText(
+            translate("skip_posts_keywords_placeholder")
+        )
+        self.skip_scope_label.setText(translate("skip_keywords_scope"))
+        self.file_skip_keywords_label.setText(translate("skip_files_keywords"))
+        self.file_skip_keywords_edit.setPlaceholderText(
+            translate("skip_files_keywords_placeholder")
+        )
+        for label_key, value in self._skip_scope_options:
+            checkbox = self.skip_scope_checkboxes.get(value)
+            if checkbox is not None:
+                checkbox.setText(translate(label_key))
+        for label_key, value in self._search_scope_options:
+            checkbox = self.search_scope_checkboxes.get(value)
+            if checkbox is not None:
+                checkbox.setText(translate(label_key))
 
         self.update_creator_queue_list()
 
@@ -5291,9 +5218,7 @@ class CreatorDownloaderTab(QWidget):
             self.completed_posts.clear()
             self.completed_files.clear()
             self.total_files_to_download = 0
-            self._reset_download_summary(
-                keep_post_stats=True, keep_run_failures=True
-            )
+            self._reset_download_summary(keep_post_stats=True, keep_run_failures=True)
             self.background_task_progress.setRange(0, 100)
             self.background_task_progress.setValue(0)
             self.background_task_label.setText(translate("idle"))
@@ -5309,31 +5234,42 @@ class CreatorDownloaderTab(QWidget):
     # between two independent profiles rather than a merge of them.
     # ------------------------------------------------------------------
 
-    def _config_store(self):
-        """Return the profile store, or None when it cannot be opened.
+    def _open_store(self, factory, instance_attr, dir_attr, failed_attr, label):
+        """Open a SQLite store once per "Other Files" folder, or None.
 
-        Opened on first need (which includes construction, where the default
-        profile is applied) and re-opened if the "Other Files" folder changes.
-        A failed open is remembered so it is not retried — and re-logged — on
-        every save.
+        Nothing is opened in ``__init__``, so constructing the tab never
+        touches the disk. A failed open is remembered (and logged once) so it
+        is not retried on every save or row render.
         """
         if not self.other_files_dir:
             return None
-        if self._config_store_dir != self.other_files_dir:
-            if self._config_store_failed_dir == self.other_files_dir:
-                return None
-            try:
-                self._config_store_instance = CreatorConfigStore(self.other_files_dir)
-                self._config_store_dir = self.other_files_dir
-                self._config_store_failed_dir = None
-            except Exception as e:
-                self._config_store_instance = None
-                self._config_store_failed_dir = self.other_files_dir
-                self.append_log_to_console(
-                    translate("log_warning", f"Saved configs unavailable: {e}"),
-                    "WARNING",
-                )
-        return self._config_store_instance
+        if getattr(self, dir_attr) == self.other_files_dir:
+            return getattr(self, instance_attr)
+        if getattr(self, failed_attr) == self.other_files_dir:
+            return None
+        try:
+            instance = factory(self.other_files_dir)
+            setattr(self, instance_attr, instance)
+            setattr(self, dir_attr, self.other_files_dir)
+            setattr(self, failed_attr, None)
+            return instance
+        except Exception as e:
+            setattr(self, instance_attr, None)
+            setattr(self, failed_attr, self.other_files_dir)
+            self.append_log_to_console(
+                translate("log_warning", f"{label}: {e}"), "WARNING"
+            )
+            return None
+
+    def _config_store(self):
+        """Return the profile store, or None when it cannot be opened."""
+        return self._open_store(
+            CreatorConfigStore,
+            "_config_store_instance",
+            "_config_store_dir",
+            "_config_store_failed_dir",
+            "Saved configs unavailable",
+        )
 
     def _config_snapshot(self):
         """Return the page's options and filters as a JSON-ready dict.
@@ -5372,9 +5308,7 @@ class CreatorDownloaderTab(QWidget):
                 "date_to": self.date_to_edit.text(),
                 "file_count_from": self.file_count_from_edit.text(),
                 "file_count_to": self.file_count_to_edit.text(),
-                "keep_compressed": (
-                    self.file_count_keep_compressed_check.isChecked()
-                ),
+                "keep_compressed": (self.file_count_keep_compressed_check.isChecked()),
                 "filter_no_selected_filetypes": (
                     self.filter_no_selected_filetypes_check.isChecked()
                 ),
@@ -5660,30 +5594,14 @@ class CreatorDownloaderTab(QWidget):
     # ------------------------------------------------------------------
 
     def _history_db(self):
-        """Return the download-history database, or None when unavailable.
-
-        Opened on first use rather than in __init__ so that constructing the
-        tab never touches the disk, and re-opened if the "Other Files" folder
-        changes.  A failed open is remembered so it is not retried on every
-        row render.
-        """
-        if not self.other_files_dir:
-            return None
-        if self._history_db_dir != self.other_files_dir:
-            if self._history_db_failed_dir == self.other_files_dir:
-                return None
-            try:
-                self._history_db_instance = DownloadHistoryDB(self.other_files_dir)
-                self._history_db_dir = self.other_files_dir
-                self._history_db_failed_dir = None
-            except Exception as e:
-                self._history_db_instance = None
-                self._history_db_failed_dir = self.other_files_dir
-                self.append_log_to_console(
-                    translate("log_warning", f"Download history unavailable: {e}"),
-                    "WARNING",
-                )
-        return self._history_db_instance
+        """Return the download-history database, or None when unavailable."""
+        return self._open_store(
+            DownloadHistoryDB,
+            "_history_db_instance",
+            "_history_db_dir",
+            "_history_db_failed_dir",
+            "Download history unavailable",
+        )
 
     def _current_creator_identity(self):
         """Return ``(service, creator_id)`` for the creator being viewed."""
@@ -5696,9 +5614,7 @@ class CreatorDownloaderTab(QWidget):
         if db is not None and self.current_creator_url:
             try:
                 service, creator_id = self._current_creator_identity()
-                self._creator_last_download = db.get_creator_time(
-                    service, creator_id
-                )
+                self._creator_last_download = db.get_creator_time(service, creator_id)
             except Exception:
                 self._creator_last_download = None
         self._update_last_download_label()
@@ -5709,8 +5625,6 @@ class CreatorDownloaderTab(QWidget):
         Always visible: "N/A" while no creator is being viewed, "Never" for a
         creator with nothing recorded, otherwise the newest date.
         """
-        if not hasattr(self, "creator_last_download_label"):
-            return
         if not self.current_creator_url:
             value = translate("not_available")
         else:
@@ -5749,29 +5663,21 @@ class CreatorDownloaderTab(QWidget):
             date_text = self._post_history_cache.get(str(post_id))
             widget.label.setText(f"{key} [{date_text}]" if date_text else key)
 
+    def _show_info(self, title_key, text_key):
+        """Show a translated one-paragraph help dialog."""
+        QMessageBox.information(self, translate(title_key), translate(text_key))
+
     def show_downloader_box_info(self):
         """Explain the post rows shown in the downloader box."""
-        QMessageBox.information(
-            self,
-            translate("downloader_box_info_title"),
-            translate("downloader_box_info_text"),
-        )
+        self._show_info("downloader_box_info_title", "downloader_box_info_text")
 
     def show_skip_folder_info(self):
         """Show a dialog explaining what Skip Post Folder does."""
-        QMessageBox.information(
-            self,
-            translate("skip_folder_info_title"),
-            translate("skip_folder_info_text"),
-        )
+        self._show_info("skip_folder_info_title", "skip_folder_info_text")
 
     def show_skip_images_info(self):
         """Show a dialog explaining what Skip Images if Compressed does."""
-        QMessageBox.information(
-            self,
-            translate("skip_images_info_title"),
-            translate("skip_images_info_text"),
-        )
+        self._show_info("skip_images_info_title", "skip_images_info_text")
 
     def add_multiple_creators_to_queue(self):
         """Add creator URLs from the multi-URL text area to the queue at once.
@@ -6268,8 +6174,7 @@ class CreatorDownloaderTab(QWidget):
         )
 
         # Post list info button
-        if hasattr(self, "creator_box_info_btn"):
-            self.creator_box_info_btn.setEnabled(not is_fetching)
+        self.creator_box_info_btn.setEnabled(not is_fetching)
 
         # Tab switching (disable other tabs during fetching)
         if self._parent and hasattr(self._parent, "tabs"):
@@ -6307,22 +6212,17 @@ class CreatorDownloaderTab(QWidget):
         # Skip-folder toggle + dropdown
         self.creator_skip_folder_check.setEnabled(enabled)
         self.creator_skip_folder_combo.setEnabled(enabled)
-        if hasattr(self, "creator_skip_folder_info_btn"):
-            self.creator_skip_folder_info_btn.setEnabled(enabled)
-        if hasattr(self, "creator_force_compressed_folder_check"):
-            self.creator_force_compressed_folder_check.setEnabled(enabled)
-        if hasattr(self, "creator_skip_images_check"):
-            self.creator_skip_images_check.setEnabled(enabled)
-        if hasattr(self, "creator_skip_images_info_btn"):
-            self.creator_skip_images_info_btn.setEnabled(enabled)
+        self.creator_skip_folder_info_btn.setEnabled(enabled)
+        self.creator_force_compressed_folder_check.setEnabled(enabled)
+        self.creator_skip_images_check.setEnabled(enabled)
+        self.creator_skip_images_info_btn.setEnabled(enabled)
 
         # Post selection
         self.creator_search_input.setEnabled(enabled)
         self.creator_check_all.setEnabled(enabled)
         self.creator_check_all_all.setEnabled(enabled)
         self.creator_post_list.setEnabled(enabled)
-        if hasattr(self, "creator_box_info_btn"):
-            self.creator_box_info_btn.setEnabled(enabled)
+        self.creator_box_info_btn.setEnabled(enabled)
 
         # Inline skip-keywords filter
         self.skip_keywords_edit.setEnabled(enabled)
@@ -6548,10 +6448,7 @@ class CreatorDownloaderTab(QWidget):
             self.background_task_progress.setValue(0)
             self.background_task_label.setText(translate("idle"))
 
-        if (
-            hasattr(self, "post_detection_thread")
-            and self.post_detection_thread is not None
-        ):
+        if self.post_detection_thread is not None:
             self.cleanup_post_detection_thread()
 
     def start_creator_download(self):
@@ -6701,8 +6598,7 @@ class CreatorDownloaderTab(QWidget):
 
     def prepare_files_for_download(self, urls):
         if (
-            hasattr(self, "file_preparation_thread")
-            and self.file_preparation_thread is not None
+            self.file_preparation_thread is not None
             and self.file_preparation_thread.isRunning()
         ):
             self.append_log_to_console(
@@ -6757,9 +6653,7 @@ class CreatorDownloaderTab(QWidget):
             self._create_thread_settings(),
             max_concurrent=5,
             file_skip_keywords=file_skip_keywords,
-            skip_images_if_compressed=(
-                self.creator_skip_images_check.isChecked()
-            ),
+            skip_images_if_compressed=(self.creator_skip_images_check.isChecked()),
             # Read on the GUI thread; the workers never touch the boxes.
             allowed_extensions=self._selected_extensions(),
         )
@@ -7202,9 +7096,7 @@ class CreatorDownloaderTab(QWidget):
         # Keep the failures and stats of the cancelled run: a cancel usually
         # leaves plenty to retry.
         self._remember_run_failures()
-        self._update_download_summary(
-            len(self.completed_files), len(self.failed_files)
-        )
+        self._update_download_summary(len(self.completed_files), len(self.failed_files))
         self.set_downloading_ui_state(False)
         self.total_files_to_download = 0
         self.completed_files.clear()
@@ -7286,9 +7178,7 @@ class CreatorDownloaderTab(QWidget):
             attempted_count = completed_count + len(self.failed_files)
             percentage = int((attempted_count / self.total_files_to_download) * 100)
             self.creator_overall_progress.setValue(percentage)
-            self._update_download_summary(
-                completed_count, len(self.failed_files)
-            )
+            self._update_download_summary(completed_count, len(self.failed_files))
 
             self.creator_overall_progress_label.setText(
                 translate(
@@ -7342,9 +7232,7 @@ class CreatorDownloaderTab(QWidget):
         # Snapshot the failures and surface the run stats before the counters
         # are cleared below: they feed the summary block and the retry button.
         self._remember_run_failures()
-        self._update_download_summary(
-            len(self.completed_files), len(self.failed_files)
-        )
+        self._update_download_summary(len(self.completed_files), len(self.failed_files))
 
         # Log summary of failed files
         if self.failed_files:
@@ -7420,42 +7308,29 @@ class CreatorDownloaderTab(QWidget):
 
     def show_skip_keywords_help(self):
         """Show help text explaining the inline skip-keywords post filter."""
-        QMessageBox.information(
-            self,
-            translate("skip_posts_keywords_help_title"),
-            translate("skip_posts_keywords_help_text"),
+        self._show_info(
+            "skip_posts_keywords_help_title", "skip_posts_keywords_help_text"
         )
 
     def show_file_skip_keywords_help(self):
         """Show help text explaining the inline skip-keywords file filter."""
-        QMessageBox.information(
-            self,
-            translate("skip_files_keywords_help_title"),
-            translate("skip_files_keywords_help_text"),
+        self._show_info(
+            "skip_files_keywords_help_title", "skip_files_keywords_help_text"
         )
 
     def show_date_filter_help(self):
         """Show help text explaining the post date range filter."""
-        QMessageBox.information(
-            self,
-            translate("date_filter_help_title"),
-            translate("date_filter_help_text"),
-        )
+        self._show_info("date_filter_help_title", "date_filter_help_text")
 
     def show_file_count_help(self):
         """Show help text explaining the post file-count range filter."""
-        QMessageBox.information(
-            self,
-            translate("file_count_help_title"),
-            translate("file_count_help_text"),
-        )
+        self._show_info("file_count_help_title", "file_count_help_text")
 
     def show_filter_no_selected_filetypes_help(self):
         """Show help text explaining the filetype post filter."""
-        QMessageBox.information(
-            self,
-            translate("filter_no_selected_filetypes_help_title"),
-            translate("filter_no_selected_filetypes_help_text"),
+        self._show_info(
+            "filter_no_selected_filetypes_help_title",
+            "filter_no_selected_filetypes_help_text",
         )
 
     def open_logs(self):
@@ -7475,8 +7350,7 @@ class CreatorDownloaderTab(QWidget):
 
     def toggle_check_all(self, state):
         if (
-            hasattr(self, "checkbox_toggle_thread")
-            and self.checkbox_toggle_thread is not None
+            self.checkbox_toggle_thread is not None
             and self.checkbox_toggle_thread.isRunning()
         ):
             self.append_log_to_console(
@@ -7534,8 +7408,7 @@ class CreatorDownloaderTab(QWidget):
 
     def toggle_check_all_all(self, state):
         if (
-            hasattr(self, "checkbox_toggle_thread")
-            and self.checkbox_toggle_thread is not None
+            self.checkbox_toggle_thread is not None
             and self.checkbox_toggle_thread.isRunning()
         ):
             self.append_log_to_console(
@@ -7609,9 +7482,7 @@ class CreatorDownloaderTab(QWidget):
             post_id for _title, post_id, _thumb, _checked in self.filtered_posts
         }
         ticked_ids = [
-            post_id
-            for post_id, is_checked in self.checked_urls.items()
-            if is_checked
+            post_id for post_id, is_checked in self.checked_urls.items() if is_checked
         ]
         for post_id in ticked_ids:
             if post_id in visible_ids and post_id not in seen_ids:
@@ -7644,13 +7515,7 @@ class CreatorDownloaderTab(QWidget):
         )
 
     def filter_items(self):
-        if (
-            hasattr(self, "filter_thread")
-            and self.filter_thread is not None
-            and self.filter_thread.isRunning()
-        ):
-            # A scope/search change landed while a pass is still running.
-            # Remember it so the change is not lost, then re-run below.
+        if self.filter_thread is not None and self.filter_thread.isRunning():
             self._filter_refresh_pending = True
             self.append_log_to_console(
                 translate("log_debug", translate("filtering_already_in_progress")),
@@ -8031,8 +7896,10 @@ class CreatorDownloaderTab(QWidget):
         if not thumbnail_url:
             # Posts without a thumbnail have nothing to show.
             return
-        if str(thumbnail_url).lower().endswith(
-            (".jpg", ".jpeg", ".png", ".gif", ".webp")
+        if (
+            str(thumbnail_url)
+            .lower()
+            .endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
         ):
             modal = ImageModal(
                 str(thumbnail_url),
@@ -8079,10 +7946,6 @@ class CreatorDownloaderTab(QWidget):
     def log_line_count(self):
         """Number of lines currently held in the log store."""
         return len(self._log_lines)
-
-    def log_first_index(self):
-        """Absolute index of the oldest line still retained."""
-        return self._log_dropped
 
     def log_next_index(self):
         """Absolute index just past the newest line."""
@@ -8135,10 +7998,7 @@ class CreatorDownloaderTab(QWidget):
 
         # The button's count is the only live view logging touches, and a
         # download can log hundreds of lines a second: throttle the relabel.
-        if (
-            hasattr(self, "_log_counter_timer")
-            and not self._log_counter_timer.isActive()
-        ):
+        if not self._log_counter_timer.isActive():
             self._log_counter_timer.start()
 
         window = getattr(self, "logs_window", None)
@@ -8193,9 +8053,7 @@ class CreatorDownloaderTab(QWidget):
     @staticmethod
     def _keyword_skip_lines(counts):
         """Return ``"  keyword: count"`` lines, most frequent first."""
-        ordered = sorted(
-            counts.items(), key=lambda item: (-item[1], item[0].lower())
-        )
+        ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))
         return [f"  {keyword}: {count}" for keyword, count in ordered]
 
     def _on_filetype_filter_changed(self, *_args):
@@ -8295,9 +8153,7 @@ class CreatorDownloaderTab(QWidget):
         """
         raw_keywords = self.skip_keywords_edit.text().strip()
         if raw_keywords:
-            skip_keywords = [
-                kw.strip() for kw in raw_keywords.split(",") if kw.strip()
-            ]
+            skip_keywords = [kw.strip() for kw in raw_keywords.split(",") if kw.strip()]
         else:
             skip_keywords = []
 
@@ -8501,14 +8357,14 @@ class CreatorDownloaderTab(QWidget):
                 return len(posts)
         return 0
 
-    def _update_download_summary(self, completed=None, failed=None, refresh_skips=False):
+    def _update_download_summary(
+        self, completed=None, failed=None, refresh_skips=False
+    ):
         """Refresh the stat block under the progress bars.
 
         The skip breakdown only changes when a filter or the file preparation
         runs, so it is cached and reused for the per-file progress updates.
         """
-        if not hasattr(self, "creator_download_summary_label"):
-            return
         if completed is None:
             completed = len(self.completed_files)
         if failed is None:
@@ -8521,9 +8377,11 @@ class CreatorDownloaderTab(QWidget):
             failed_posts = self._failed_post_count()
             if failed_posts:
                 failed_text = translate(
-                    "summary_failed_files_one_post"
-                    if failed_posts == 1
-                    else "summary_failed_files_posts",
+                    (
+                        "summary_failed_files_one_post"
+                        if failed_posts == 1
+                        else "summary_failed_files_posts"
+                    ),
                     failed,
                     failed_posts,
                 )
@@ -8715,9 +8573,7 @@ class CreatorDownloaderTab(QWidget):
         """Re-download only the files that failed in the last run."""
         if self._download_in_progress():
             self.append_log_to_console(
-                translate(
-                    "log_warning", translate("retry_already_downloading")
-                ),
+                translate("log_warning", translate("retry_already_downloading")),
                 "WARNING",
             )
             return
@@ -8868,7 +8724,7 @@ class CreatorDownloaderTab(QWidget):
             QMessageBox.critical(self, translate("file_read_error_title"), error_msg)
 
 
-class CancellationThread(QThread):
+class CancellationThread(_StoppableThread, QThread):
     finished = pyqtSignal()
     log = pyqtSignal(str, str)
 
@@ -8876,9 +8732,6 @@ class CancellationThread(QThread):
         super().__init__()
         self.threads = threads
         self.is_running = True
-
-    def stop(self):
-        self.is_running = False
 
     def run(self):
         if not self.is_running:

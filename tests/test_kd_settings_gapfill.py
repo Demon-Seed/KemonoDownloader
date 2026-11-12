@@ -310,7 +310,7 @@ def test_start_tor_not_configured_branch(tmp_path, monkeypatch, qapp):
     assert warned.get("ok") is True
 
 
-def test_stop_tor_rmtree_exception_prints(tmp_path, monkeypatch, qapp):
+def test_stop_tor_survives_a_failed_cleanup(tmp_path, monkeypatch, qapp):
     tab = make_tab(tmp_path)
 
     class Proc:
@@ -332,13 +332,14 @@ def test_stop_tor_rmtree_exception_prints(tmp_path, monkeypatch, qapp):
         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("cannot remove")),
     )
 
-    printed = []
-    monkeypatch.setattr("builtins.print", lambda *a, **k: printed.append(a))
     monkeypatch.setattr(ks.QMessageBox, "information", lambda *a, **k: None)
 
     tab.stop_tor()
 
-    assert printed
+    # The failed removal is swallowed, and the folder is kept for a later
+    # attempt instead of being forgotten.
+    assert tab.tor_data_dir == str(data_dir)
+    assert tab.start_tor_button.isEnabled() is True
 
 
 def test_download_tor_windows_and_macos_intel_branches(tmp_path, monkeypatch, qapp):

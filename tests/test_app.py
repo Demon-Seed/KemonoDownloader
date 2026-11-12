@@ -246,18 +246,16 @@ def test_main_block(monkeypatch):
     assert mock_main.called
 
 
-def test_app_log_updates_status_and_prints(monkeypatch):
-    called = {"text": None, "printed": None}
+def test_app_log_updates_status(monkeypatch):
+    called = {"text": None}
 
     dummy = SimpleNamespace(
         status_label=SimpleNamespace(setText=lambda m: called.__setitem__("text", m))
     )
-    monkeypatch.setattr("builtins.print", lambda m: called.__setitem__("printed", m))
 
     KemonoDownloader.log(dummy, "hello")
 
     assert called["text"] == "hello"
-    assert called["printed"] == "hello"
 
 
 def test_main_exec_calls_exit(monkeypatch):

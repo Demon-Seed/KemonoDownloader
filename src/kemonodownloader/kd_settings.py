@@ -2,7 +2,16 @@ import os
 import subprocess
 import sys
 
-from PyQt6.QtCore import QEvent, QObject, QProcess, QSettings, Qt, QThread, QUrl, pyqtSignal
+from PyQt6.QtCore import (
+    QEvent,
+    QObject,
+    QProcess,
+    QSettings,
+    Qt,
+    QThread,
+    QUrl,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QCursor, QDesktopServices
 from PyQt6.QtWidgets import (
     QAbstractSpinBox,
@@ -297,9 +306,7 @@ class SettingsTab(QWidget):
     def save_settings(self):
         self.qsettings.setValue("base_folder_name", self.settings["base_folder_name"])
         self.qsettings.setValue("base_directory", self.settings["base_directory"])
-        self.qsettings.setValue(
-            "data_directory", kd_paths.data_directory()
-        )
+        self.qsettings.setValue("data_directory", kd_paths.data_directory())
         self.qsettings.setValue(
             "simultaneous_downloads", self.settings["simultaneous_downloads"]
         )
@@ -530,9 +537,7 @@ class SettingsTab(QWidget):
                 "creator_filename_template", "{post_id}_{file_number}_{orig_name}"
             )
         )
-        self.creator_filename_input.setStyleSheet(
-            "padding: 5px; border-radius: 5px;"
-        )
+        self.creator_filename_input.setStyleSheet("padding: 5px; border-radius: 5px;")
         self.creator_filename_input.textChanged.connect(
             lambda text: self.update_temp_setting("creator_filename_template", text)
         )
@@ -569,9 +574,7 @@ class SettingsTab(QWidget):
         self.creator_shared_template_help_btn.setStyleSheet(
             "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
         )
-        self.creator_shared_template_help_btn.clicked.connect(
-            self.show_template_help
-        )
+        self.creator_shared_template_help_btn.clicked.connect(self.show_template_help)
         creator_custom_layout.addWidget(self.creator_shared_template_help_btn, 1, 2)
 
         self.creator_folder_name_label = QLabel(translate("folder_name_template"))
@@ -587,9 +590,7 @@ class SettingsTab(QWidget):
             "padding: 5px; border-radius: 5px;"
         )
         self.creator_folder_name_input.textChanged.connect(
-            lambda text: self.update_temp_setting(
-                "creator_folder_name_template", text
-            )
+            lambda text: self.update_temp_setting("creator_folder_name_template", text)
         )
         creator_custom_layout.addWidget(self.creator_folder_name_input, 2, 1)
 
@@ -634,9 +635,7 @@ class SettingsTab(QWidget):
                 self.creator_unique_filenames_combo.itemData(index),
             )
         )
-        creator_custom_layout.addWidget(
-            self.creator_unique_filenames_combo, 3, 1, 1, 2
-        )
+        creator_custom_layout.addWidget(self.creator_unique_filenames_combo, 3, 1, 1, 2)
 
         self.creator_folder_strategy_label = QLabel()
         creator_custom_layout.addWidget(self.creator_folder_strategy_label, 4, 0)
@@ -672,9 +671,7 @@ class SettingsTab(QWidget):
         # really has: off, on, or on with a per-type filecount beside each box.
         self.show_only_found_filetypes_label = QLabel()
         self.show_only_found_filetypes_label.setStyleSheet("color: white;")
-        creator_custom_layout.addWidget(
-            self.show_only_found_filetypes_label, 5, 0
-        )
+        creator_custom_layout.addWidget(self.show_only_found_filetypes_label, 5, 0)
 
         self.show_only_found_filetypes_combo = QComboBox()
         for label_key, mode in (
@@ -682,15 +679,11 @@ class SettingsTab(QWidget):
             ("filetype_filter_on", "on"),
             ("filetype_filter_on_with_count", "on_with_count"),
         ):
-            self.show_only_found_filetypes_combo.addItem(
-                translate(label_key), mode
-            )
+            self.show_only_found_filetypes_combo.addItem(translate(label_key), mode)
         self.show_only_found_filetypes_combo.setStyleSheet(
             "padding: 5px; border-radius: 5px;"
         )
-        current_mode = self.temp_settings.get(
-            "show_only_found_filetypes", "off"
-        )
+        current_mode = self.temp_settings.get("show_only_found_filetypes", "off")
         for i in range(self.show_only_found_filetypes_combo.count()):
             if self.show_only_found_filetypes_combo.itemData(i) == current_mode:
                 self.show_only_found_filetypes_combo.setCurrentIndex(i)
@@ -1196,9 +1189,7 @@ class SettingsTab(QWidget):
         # Also look for Tor inside the app's data directory / save directory
         try:
             base_dir = self.temp_settings.get("base_directory")
-            data_dir = kd_paths.data_directory(
-                self.temp_settings.get("data_directory")
-            )
+            data_dir = kd_paths.data_directory(self.temp_settings.get("data_directory"))
         except Exception:
             base_dir = None
             data_dir = None
@@ -1219,7 +1210,7 @@ class SettingsTab(QWidget):
             candidate_roots.extend([data_dir, os.path.join(data_dir, "Tor")])
 
         # If parent (app) provides download_folder use that too
-        if hasattr(self, "parent") and getattr(self.parent, "download_folder", None):
+        if getattr(self.parent, "download_folder", None):
             df = getattr(self.parent, "download_folder")
             candidate_roots.extend([df, os.path.join(df, "Tor")])
 
@@ -1332,7 +1323,10 @@ class SettingsTab(QWidget):
             "off": "filetype_filter_off",
             "on": "filetype_filter_on",
             "on_with_count": "filetype_filter_on_with_count",
-        }.get(values.get("show_only_found_filetypes", "on_with_count"), "filetype_filter_off")
+        }.get(
+            values.get("show_only_found_filetypes", "on_with_count"),
+            "filetype_filter_off",
+        )
         strategy_key = {
             "per_post": "per_post_folders",
             "single_folder": "single_creator_folder",
@@ -1403,10 +1397,12 @@ class SettingsTab(QWidget):
             ),
             (
                 translate("unique_filenames"),
-                translate(_NAME_DEDUP_LABEL_KEYS.get(
-                    normalize_name_dedup(values.get("creator_unique_filenames")),
-                    "option_off",
-                )),
+                translate(
+                    _NAME_DEDUP_LABEL_KEYS.get(
+                        normalize_name_dedup(values.get("creator_unique_filenames")),
+                        "option_off",
+                    )
+                ),
                 "creator_unique_filenames",
             ),
             (
@@ -1666,69 +1662,60 @@ class SettingsTab(QWidget):
         # Creator downloader customization texts
         self.creator_custom_group.setTitle(translate("creator_downloader_settings"))
         self.creator_custom_label.setText(translate("filename_template"))
-        if hasattr(self, "creator_shared_template_label"):
-            self.creator_shared_template_label.setText(
-                translate("filename_template_shared")
-            )
-        self.creator_folder_name_label.setText(
-            translate("folder_name_template")
+        self.creator_shared_template_label.setText(
+            translate("filename_template_shared")
         )
+        self.creator_folder_name_label.setText(translate("folder_name_template"))
         self.creator_folder_strategy_label.setText(translate("folder_strategy"))
-        if hasattr(self, "creator_unique_filenames_label"):
-            self.creator_unique_filenames_label.setText(translate("unique_filenames"))
-        if hasattr(self, "creator_unique_filenames_combo"):
-            self.creator_unique_filenames_combo.setToolTip(
-                translate("unique_filenames_tooltip")
+        self.creator_unique_filenames_label.setText(translate("unique_filenames"))
+        self.creator_unique_filenames_combo.setToolTip(
+            translate("unique_filenames_tooltip")
+        )
+        self.creator_unique_filenames_combo.blockSignals(True)
+        for index in range(self.creator_unique_filenames_combo.count()):
+            mode = self.creator_unique_filenames_combo.itemData(index)
+            self.creator_unique_filenames_combo.setItemText(
+                index, translate(_NAME_DEDUP_LABEL_KEYS.get(mode, "option_off"))
             )
-            self.creator_unique_filenames_combo.blockSignals(True)
-            for index in range(self.creator_unique_filenames_combo.count()):
-                mode = self.creator_unique_filenames_combo.itemData(index)
-                self.creator_unique_filenames_combo.setItemText(
-                    index, translate(_NAME_DEDUP_LABEL_KEYS.get(mode, "option_off"))
-                )
-            self.creator_unique_filenames_combo.blockSignals(False)
+        self.creator_unique_filenames_combo.blockSignals(False)
 
         # Ensure folder strategy combo labels are localized
         try:
-            if hasattr(self, "creator_folder_strategy_combo"):
-                current_data = self.creator_folder_strategy_combo.itemData(
-                    self.creator_folder_strategy_combo.currentIndex()
-                )
-                self.creator_folder_strategy_combo.blockSignals(True)
-                self.creator_folder_strategy_combo.clear()
-                self.creator_folder_strategy_combo.addItem(
-                    translate("per_post_folders"), "per_post"
-                )
-                self.creator_folder_strategy_combo.addItem(
-                    translate("single_creator_folder"), "single_folder"
-                )
-                self.creator_folder_strategy_combo.addItem(
-                    translate("subfolders_by_file_type"), "by_file_type"
-                )
-                # restore selection based on data
-                for i in range(self.creator_folder_strategy_combo.count()):
-                    if (
-                        self.creator_folder_strategy_combo.itemData(i) == current_data
-                    ):  # pragma: no cover - trivial UI restore
-                        self.creator_folder_strategy_combo.setCurrentIndex(i)
-                        break
-                self.creator_folder_strategy_combo.blockSignals(False)
+            current_data = self.creator_folder_strategy_combo.itemData(
+                self.creator_folder_strategy_combo.currentIndex()
+            )
+            self.creator_folder_strategy_combo.blockSignals(True)
+            self.creator_folder_strategy_combo.clear()
+            self.creator_folder_strategy_combo.addItem(
+                translate("per_post_folders"), "per_post"
+            )
+            self.creator_folder_strategy_combo.addItem(
+                translate("single_creator_folder"), "single_folder"
+            )
+            self.creator_folder_strategy_combo.addItem(
+                translate("subfolders_by_file_type"), "by_file_type"
+            )
+            # restore selection based on data
+            for i in range(self.creator_folder_strategy_combo.count()):
+                if (
+                    self.creator_folder_strategy_combo.itemData(i) == current_data
+                ):  # pragma: no cover - trivial UI restore
+                    self.creator_folder_strategy_combo.setCurrentIndex(i)
+                    break
+            self.creator_folder_strategy_combo.blockSignals(False)
         except Exception:
             pass
 
         # Tooltip/help for template
-        if hasattr(self, "creator_template_help_btn"):
-            self.creator_template_help_btn.setToolTip(
-                translate("filename_template_help_title")
-            )
-        if hasattr(self, "creator_shared_template_help_btn"):
-            self.creator_shared_template_help_btn.setToolTip(
-                translate("filename_template_help_title")
-            )
-        if hasattr(self, "creator_folder_name_help_btn"):
-            self.creator_folder_name_help_btn.setToolTip(
-                translate("folder_name_template_help_title")
-            )
+        self.creator_template_help_btn.setToolTip(
+            translate("filename_template_help_title")
+        )
+        self.creator_shared_template_help_btn.setToolTip(
+            translate("filename_template_help_title")
+        )
+        self.creator_folder_name_help_btn.setToolTip(
+            translate("folder_name_template_help_title")
+        )
 
         # Update proxy and other text
 
@@ -2153,8 +2140,9 @@ GeoIPExcludeUnknown 1
 
                 shutil.rmtree(self.tor_data_dir)
                 self.tor_data_dir = None
-            except Exception as e:
-                print(f"Failed to clean up Tor data directory: {e}")
+            except Exception:
+                # Best effort: the temp folder is the OS's to reclaim.
+                pass
 
         # Update UI
         self.start_tor_button.setEnabled(True)
@@ -2343,8 +2331,9 @@ GeoIPExcludeUnknown 1
 
                 shutil.rmtree(self.tor_data_dir)
                 self.tor_data_dir = None
-            except Exception as e:
-                print(f"Failed to clean up Tor data directory: {e}")
+            except Exception:
+                # Best effort: the temp folder is the OS's to reclaim.
+                pass
 
         # Clean up temporary config file
         if hasattr(self, "tor_config_file") and os.path.exists(
@@ -2352,8 +2341,9 @@ GeoIPExcludeUnknown 1
         ):
             try:
                 os.unlink(self.tor_config_file.name)
-            except Exception as e:
-                print(f"Failed to clean up Tor config file: {e}")
+            except Exception:
+                # Best effort: the temp config file is the OS's to reclaim.
+                pass
 
         self.start_tor_button.setEnabled(True)
         self.stop_tor_button.setEnabled(False)
@@ -2406,10 +2396,7 @@ GeoIPExcludeUnknown 1
         elif settings_to_check["proxy_type"] == "tor":
             # Check if Tor is actually running
             tor_process = getattr(settings_tab, "tor_process", None)
-            if (
-                not tor_process
-                or tor_process.state() != QProcess.ProcessState.Running
-            ):
+            if not tor_process or tor_process.state() != QProcess.ProcessState.Running:
                 raise ProxyUnavailableError(translate("proxy_tor_not_running_error"))
 
             # For Tor, we need to use SOCKS5h proxy (resolves DNS through Tor)

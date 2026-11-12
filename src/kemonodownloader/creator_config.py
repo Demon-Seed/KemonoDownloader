@@ -13,10 +13,9 @@ per call, guarded by a lock, in WAL mode.
 """
 
 import json
-import os
-import sqlite3
-import threading
 from typing import Optional
+
+from kemonodownloader.sqlite_store import SQLiteStore
 
 from .download_history import utc_now_iso
 
@@ -26,35 +25,14 @@ from .download_history import utc_now_iso
 SCHEMA_VERSION = 1
 
 
-class CreatorConfigStore:
+class CreatorConfigStore(SQLiteStore):
     """Thread-safe SQLite store of Creator-tab config profiles."""
 
     DB_FILENAME = "creator_configs.db"
 
-    def __init__(self, directory: str):
-        """Create the database file and its tables if they do not exist.
-
-        Parameters
-        ----------
-        directory:
-            Directory where the database file will be stored.
-        """
-        os.makedirs(directory, exist_ok=True)
-        self.db_path = os.path.join(directory, self.DB_FILENAME)
-        self._lock = threading.Lock()
-        self._init_db()
-
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    def _get_connection(self) -> sqlite3.Connection:
-        """Create a new connection (one per call – safe for threads)."""
-        conn = sqlite3.connect(self.db_path, timeout=30)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.row_factory = sqlite3.Row
-        return conn
 
     def _init_db(self) -> None:
         """Create the tables if they are not present yet."""
@@ -180,15 +158,3 @@ class CreatorConfigStore:
             finally:
                 conn.close()
         return self._decode(row)
-
-    def count_creator_configs(self) -> int:
-        """Return how many creator profiles are stored."""
-        with self._lock:
-            conn = self._get_connection()
-            try:
-                row = conn.execute(
-                    "SELECT COUNT(*) AS cnt FROM creator_config"
-                ).fetchone()
-                return row["cnt"] if row else 0
-            finally:
-                conn.close()

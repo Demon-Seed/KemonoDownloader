@@ -447,18 +447,17 @@ def test_a_missing_post_time_leaves_the_rest_of_the_name_alone(tmp_path):
     ]
 
 
-def test_publish_time_reads_the_post_not_the_import_stamp():
-    assert cd.get_post_published_time({"published": "2026-04-15T05:04:44"}) == "0504"
-    assert cd.get_post_published_time({"published": "2026-04-15T14:00:11Z"}) == "1400"
+def test_publish_date_reads_the_post_not_the_import_stamp():
     assert (
-        cd.get_post_published_time({"published": "2026-04-15T14:00:11+00:00"})
-        == "1400"
+        cd.get_post_published_date({"published": "2026-04-15T05:04:44"}).isoformat()
+        == "2026-04-15"
     )
-    # A date-only payload keeps the field's width instead of shortening names.
-    assert cd.get_post_published_time({"published": "2026-04-15"}) == "0000"
+    assert cd.get_post_published_date({"published": "2026-04-15"}).isoformat() == (
+        "2026-04-15"
+    )
     # 'added' is when Pawchive scraped the post, not when it was posted.
-    assert cd.get_post_published_time({"added": "2026-04-16T01:00:00"}) == ""
-    assert cd.get_post_published_time(None) == ""
+    assert cd.get_post_published_date({"added": "2026-04-16T01:00:00"}) is None
+    assert cd.get_post_published_date(None) is None
 
 
 def test_a_title_only_folder_keeps_its_own_files_on_a_rerun(tmp_path):

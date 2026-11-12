@@ -169,7 +169,6 @@ def test_log_store_is_capped(qtbot, tmp_path):
 
     remaining = [message for message, _ in tab.log_lines_from(0)]
     assert remaining == ["line 3", "line 4", "line 5", "line 6", "line 7"]
-    assert tab.log_first_index() == 3
     assert tab.log_next_index() == 8
 
 

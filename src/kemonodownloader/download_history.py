@@ -15,11 +15,10 @@ directory and follows the same threading model as
 a lock, in WAL mode.
 """
 
-import os
-import sqlite3
-import threading
 from datetime import datetime, timezone
 from typing import Optional
+
+from kemonodownloader.sqlite_store import SQLiteStore
 
 
 def utc_now_iso() -> str:
@@ -44,35 +43,14 @@ def iso_to_local_date(timestamp: Optional[str]) -> str:
     return parsed.astimezone().strftime("%Y-%m-%d")
 
 
-class DownloadHistoryDB:
+class DownloadHistoryDB(SQLiteStore):
     """Thread-safe SQLite store of per-post download timestamps."""
 
     DB_FILENAME = "download_history.db"
 
-    def __init__(self, directory: str):
-        """Initialise the download history database.
-
-        Parameters
-        ----------
-        directory:
-            Directory where the database file will be stored.
-        """
-        os.makedirs(directory, exist_ok=True)
-        self.db_path = os.path.join(directory, self.DB_FILENAME)
-        self._lock = threading.Lock()
-        self._init_db()
-
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    def _get_connection(self) -> sqlite3.Connection:
-        """Create a new connection (one per call – safe for threads)."""
-        conn = sqlite3.connect(self.db_path, timeout=30)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.row_factory = sqlite3.Row
-        return conn
 
     def _init_db(self) -> None:
         """Create the table if it is not present yet."""
@@ -133,29 +111,9 @@ class DownloadHistoryDB:
             finally:
                 conn.close()
 
-    def forget_post(self, service: str, creator_id: str, post_id: str) -> None:
-        """Remove a single post's record."""
-        with self._lock:
-            conn = self._get_connection()
-            try:
-                conn.execute(
-                    "DELETE FROM post_downloads "
-                    "WHERE service = ? AND creator_id = ? AND post_id = ?",
-                    (str(service), str(creator_id), str(post_id)),
-                )
-                conn.commit()
-            finally:
-                conn.close()
-
     def clear(self) -> None:
         """Remove **all** records."""
-        with self._lock:
-            conn = self._get_connection()
-            try:
-                conn.execute("DELETE FROM post_downloads")
-                conn.commit()
-            finally:
-                conn.close()
+        self._delete_all("post_downloads")
 
     # ------------------------------------------------------------------
     # Reads
@@ -197,12 +155,4 @@ class DownloadHistoryDB:
 
     def count(self) -> int:
         """Return the total number of recorded posts."""
-        with self._lock:
-            conn = self._get_connection()
-            try:
-                row = conn.execute(
-                    "SELECT COUNT(*) AS cnt FROM post_downloads"
-                ).fetchone()
-                return row["cnt"] if row else 0
-            finally:
-                conn.close()
+        return self._count_rows("post_downloads")

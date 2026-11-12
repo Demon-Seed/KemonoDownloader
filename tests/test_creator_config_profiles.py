@@ -90,7 +90,7 @@ def no_blocking_dialogs(monkeypatch):
 def test_store_round_trips_both_profiles(tmp_path):
     store = CreatorConfigStore(str(tmp_path))
     assert store.get_page_default() is None
-    assert store.count_creator_configs() == 0
+    assert store.get_creator_config("patreon", "42") is None
 
     store.set_page_default({"options": {"main": True}})
     saved_default = store.get_page_default()
@@ -103,7 +103,6 @@ def test_store_round_trips_both_profiles(tmp_path):
     assert saved_creator is not None
     assert saved_creator["options"] == {"main": True}
     assert store.get_creator_config("patreon", "99") is None
-    assert store.count_creator_configs() == 1
 
 
 def test_store_ignores_other_versions_and_corrupt_payloads(tmp_path):
@@ -286,7 +285,7 @@ def test_creator_config_without_a_creator_is_refused(qtbot, tmp_path):
     tab = make_tab(qtbot, tmp_path)
 
     assert tab.save_creator_config() is False
-    assert tab._config_store().count_creator_configs() == 0
+    assert tab._config_store().get_creator_config("patreon", "42") is None
 
 
 def test_a_missing_store_only_logs(
@@ -351,7 +350,6 @@ def test_a_creator_save_needs_a_usable_identity(qtbot, tmp_path, no_blocking_dia
     # page default and reporting a save that never happened.
     assert tab._store_config(payload, "patreon", "") is False
     assert tab._store_config(payload, "", "") is False
-    assert store.count_creator_configs() == 0
     assert store.get_page_default() is None
     assert no_blocking_dialogs == []
 
@@ -362,7 +360,6 @@ def test_a_creator_url_without_a_service_is_refused(qtbot, tmp_path):
     tab.current_creator_url = "https://kemono.cr/notacreator"
 
     assert tab.save_creator_config() is False
-    assert tab._config_store().count_creator_configs() == 0
     assert tab._config_store().get_page_default() is None
 
 

@@ -6,12 +6,12 @@ for better concurrent access, data integrity, and performance.
 
 import json
 import os
-import sqlite3
-import threading
 from typing import Optional
 
+from kemonodownloader.sqlite_store import SQLiteStore
 
-class HashDB:
+
+class HashDB(SQLiteStore):
     """Thread-safe SQLite database for storing file hashes.
 
     Stores URL hashes mapped to file paths and content hashes
@@ -28,23 +28,12 @@ class HashDB:
         directory:
             Directory where the database file will be stored.
         """
-        os.makedirs(directory, exist_ok=True)
-        self.db_path = os.path.join(directory, self.DB_FILENAME)
-        self._lock = threading.Lock()
-        self._init_db()
+        super().__init__(directory)
         self._migrate_json(directory)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    def _get_connection(self) -> sqlite3.Connection:
-        """Create a new connection (one per call – safe for threads)."""
-        conn = sqlite3.connect(self.db_path, timeout=30)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.row_factory = sqlite3.Row
-        return conn
 
     def _init_db(self) -> None:
         """Create table if not yet present and run schema migrations."""
@@ -172,57 +161,10 @@ class HashDB:
             finally:
                 conn.close()
 
-    def contains(self, url_hash: str) -> bool:
-        """Check whether *url_hash* already exists."""
-        return self.lookup(url_hash) is not None
-
     def count(self) -> int:
         """Return total number of stored hashes."""
-        with self._lock:
-            conn = self._get_connection()
-            try:
-                row = conn.execute("SELECT COUNT(*) AS cnt FROM file_hashes").fetchone()
-                return row["cnt"] if row else 0
-            finally:
-                conn.close()
-
-    def all_entries(self) -> dict:
-        """Return all entries as ``{url_hash: {file_path, file_hash, url, file_size}}``."""
-        with self._lock:
-            conn = self._get_connection()
-            try:
-                rows = conn.execute(
-                    "SELECT url_hash, file_path, file_hash, url, file_size "
-                    "FROM file_hashes"
-                ).fetchall()
-                return {
-                    row["url_hash"]: {
-                        "file_path": row["file_path"],
-                        "file_hash": row["file_hash"],
-                        "url": row["url"],
-                        "file_size": row["file_size"],
-                    }
-                    for row in rows
-                }
-            finally:
-                conn.close()
-
-    def delete(self, url_hash: str) -> None:
-        """Remove a single entry by *url_hash*."""
-        with self._lock:
-            conn = self._get_connection()
-            try:
-                conn.execute("DELETE FROM file_hashes WHERE url_hash = ?", (url_hash,))
-                conn.commit()
-            finally:
-                conn.close()
+        return self._count_rows("file_hashes")
 
     def clear(self) -> None:
         """Remove **all** entries."""
-        with self._lock:
-            conn = self._get_connection()
-            try:
-                conn.execute("DELETE FROM file_hashes")
-                conn.commit()
-            finally:
-                conn.close()
+        self._delete_all("file_hashes")

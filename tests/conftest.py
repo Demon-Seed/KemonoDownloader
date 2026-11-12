@@ -47,6 +47,17 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
+def work_in_tmp_path(tmp_path, monkeypatch):
+    """Run every test from its own temporary directory.
+
+    A mock or a stray relative path then writes under ``tmp_path`` instead of
+    the repository root (that is how the nested ``MagicMock/`` tree got there).
+    """
+    monkeypatch.chdir(tmp_path)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def isolate_qsettings(tmp_path, monkeypatch):
     """Redirect every QSettings created by kd_settings to a temp INI.
 

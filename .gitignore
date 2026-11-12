@@ -79,3 +79,9 @@ debug_*.py
 
 # The app's own working data (created next to the app at run time)
 /extras/
+
+# Junk written when a mock reaches a path argument (should never reappear now
+# that kd_paths.ensure_directory rejects non-path values)
+/MagicMock/
+/c/
+/o/

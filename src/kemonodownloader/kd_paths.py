@@ -51,7 +51,9 @@ def app_root_directory():
 def per_user_directory():
     """The platform's per-user folder for the app (still the Save Directory default)."""
     if sys.platform == "win32":
-        return os.path.join(os.getenv("APPDATA", os.path.expanduser("~")), LEGACY_FOLDER)
+        return os.path.join(
+            os.getenv("APPDATA", os.path.expanduser("~")), LEGACY_FOLDER
+        )
     if sys.platform == "darwin":
         return os.path.expanduser(f"~/Library/Application Support/{LEGACY_FOLDER}")
     fallback = os.path.join(os.path.expanduser("~"), ".local", "share")
@@ -115,10 +117,21 @@ def migrate_legacy_data(target, legacy_directory=None):
         return False
 
 
-def reset_resolution():
-    """Forget the cached data directory (tests only)."""
-    global _resolved_directory
-    _resolved_directory = None
+def ensure_directory(path, label="folder"):
+    """Create *path* if needed and return it as a string.
+
+    Only real path values are accepted. A mock or ``None`` here used to reach
+    ``os.makedirs`` and create a directory named after its repr, so the type is
+    checked before anything touches the disk.
+    """
+    try:
+        resolved = os.fspath(path)
+    except TypeError as exc:
+        raise TypeError(f"{label} must be a path, not {type(path).__name__}") from exc
+    if isinstance(resolved, bytes):
+        resolved = resolved.decode()
+    os.makedirs(resolved, exist_ok=True)
+    return resolved
 
 
 def data_directory(configured=None):
@@ -147,4 +160,3 @@ def cache_dir(configured=None):
 def other_files_dir(configured=None):
     """Return the folder holding the databases and saved config profiles."""
     return os.path.join(data_directory(configured), OTHER_FILES_FOLDER)
-

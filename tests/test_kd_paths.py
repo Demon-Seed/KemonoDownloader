@@ -24,9 +24,9 @@ def _fresh_resolution(monkeypatch, tmp_path):
     monkeypatch.setattr(
         kd_paths, "app_root_directory", lambda: str(tmp_path / "app")
     )
-    kd_paths.reset_resolution()
+    monkeypatch.setattr(kd_paths, "_resolved_directory", None)
     yield
-    kd_paths.reset_resolution()
+    monkeypatch.setattr(kd_paths, "_resolved_directory", None)
 
 
 def test_the_data_folder_sits_next_to_the_application():
