@@ -1,61 +1,22 @@
-import inspect
 import os
 from types import SimpleNamespace
 
-from PyQt6.QtWidgets import QTextEdit, QWidget
+from tests.factories import LogStoreParent, Signal, make_tab_parent
 
 from kemonodownloader import creator_downloader as cd
 from kemonodownloader.creator_downloader import LogsWindow
 
 
-def make_parent(tmp_path):
-    parent = SimpleNamespace()
-    parent.cache_folder = str(tmp_path / "cache")
-    parent.other_files_folder = str(tmp_path / "other")
-    parent.download_folder = str(tmp_path / "dl")
-    st = SimpleNamespace()
-    st.settings_applied = SimpleNamespace(connect=lambda cb: None)
-    st.language_changed = SimpleNamespace(connect=lambda cb: None)
-    st.get_creator_posts_max_attempts = lambda: 1
-    st.get_post_data_max_retries = lambda: 1
-    st.get_file_download_max_retries = lambda: 1
-    st.get_api_request_max_retries = lambda: 1
-    st.get_simultaneous_downloads = lambda: 1
-    parent.settings_tab = st
-    parent.ensure_folders_exist = lambda: None
-    parent.post_tab = SimpleNamespace()
-    parent.creator_tab = SimpleNamespace()
-    return parent
-
-
 def test_detection_to_population_flow(tmp_path, monkeypatch):
-    parent = make_parent(tmp_path)
+    parent = make_tab_parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
-
-    class FakeSignal:
-        def __init__(self):
-            self.cb = None
-
-        def connect(self, cb):
-            self.cb = cb
-
-        def emit(self, *args):
-            if self.cb:
-                # Call only as many args as the slot accepts to mimic Qt behavior
-                import inspect
-
-                try:
-                    n = len(inspect.signature(self.cb).parameters)
-                except Exception:
-                    n = 0
-                self.cb(*args[:n])
 
     class FakePostDetectionThread:
         def __init__(self, url, post_titles_map, settings, **kwargs):
-            self.finished = FakeSignal()
-            self.posts_batch = FakeSignal()
-            self.log = FakeSignal()
-            self.error = FakeSignal()
+            self.finished = Signal()
+            self.posts_batch = Signal()
+            self.log = Signal()
+            self.error = Signal()
 
         def isRunning(self):
             return False
@@ -67,8 +28,8 @@ def test_detection_to_population_flow(tmp_path, monkeypatch):
 
     class FakePostPopulationThread:
         def __init__(self, detected_posts, post_dates_map=None):
-            self.finished = FakeSignal()
-            self.log = FakeSignal()
+            self.finished = Signal()
+            self.log = Signal()
 
         def isRunning(self):
             return False
@@ -93,28 +54,12 @@ def test_detection_to_population_flow(tmp_path, monkeypatch):
     assert any(pid in tab.checked_urls for _, (pid, _) in tab.all_detected_posts)
 
 
-class FakeSignal:
-    def __init__(self):
-        self._cbs = []
-
-    def connect(self, cb):
-        self._cbs.append(cb)
-
-    def emit(self, *args):
-        for cb in list(self._cbs):
-            try:
-                cb(*args)
-            except TypeError:
-                # Some slots may accept fewer args; fall back to calling without args
-                cb()
-
-
 class FakePostDetectionThread:
     def __init__(self, url, post_titles_map, settings, **kwargs):
-        self.finished = FakeSignal()
-        self.posts_batch = FakeSignal()
-        self.log = FakeSignal()
-        self.error = FakeSignal()
+        self.finished = Signal()
+        self.posts_batch = Signal()
+        self.log = Signal()
+        self.error = Signal()
         self._started = False
 
     def start(self):
@@ -124,30 +69,8 @@ class FakePostDetectionThread:
         self.finished.emit(sample)
 
 
-def make_parent__from_creator_detection_ui(tmp_path):
-    parent = SimpleNamespace()
-    parent.cache_folder = str(tmp_path / "cache")
-    parent.other_files_folder = str(tmp_path / "other")
-    parent.download_folder = str(tmp_path / "dl")
-    parent.settings_tab = None
-    parent.ensure_folders_exist = lambda: None
-    parent.post_tab = SimpleNamespace()
-    parent.creator_tab = SimpleNamespace()
-    # settings_tab must provide a settings_applied signal with connect()
-    parent.settings_tab = SimpleNamespace()
-    parent.settings_tab.settings_applied = FakeSignal()
-    parent.settings_tab.language_changed = FakeSignal()
-    # Provide minimal getters used by CreatorDownloaderTab._create_thread_settings
-    parent.settings_tab.get_creator_posts_max_attempts = lambda: 1
-    parent.settings_tab.get_post_data_max_retries = lambda: 1
-    parent.settings_tab.get_file_download_max_retries = lambda: 1
-    parent.settings_tab.get_api_request_max_retries = lambda: 1
-    parent.settings_tab.get_simultaneous_downloads = lambda: 1
-    return parent
-
-
 def test_check_creator_from_queue_triggers_detection(monkeypatch, tmp_path):
-    parent = make_parent__from_creator_detection_ui(tmp_path)
+    parent = make_tab_parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
 
     # Prevent modal dialogs
@@ -175,35 +98,8 @@ def test_check_creator_from_queue_triggers_detection(monkeypatch, tmp_path):
     assert called.get("started") is True
 
 
-def make_parent__from_creator_downloader_tab_behavior(tmp_path):
-    class FakeTabs:
-        def count(self):
-            return 1
-
-        def currentIndex(self):
-            return 0
-
-        def setTabEnabled(self, i, enabled):
-            pass
-
-    settings_tab = SimpleNamespace(
-        settings_applied=SimpleNamespace(connect=lambda cb: None),
-        language_changed=SimpleNamespace(connect=lambda cb: None),
-    )
-    parent = SimpleNamespace(
-        cache_folder=str(tmp_path / "cacheX"),
-        other_files_folder=str(tmp_path / "otherX"),
-        download_folder=str(tmp_path / "downloadX"),
-        settings_tab=settings_tab,
-        tabs=FakeTabs(),
-        status_label=SimpleNamespace(setText=lambda s: None),
-        animate_button=lambda *a, **k: None,
-    )
-    return parent
-
-
 def test_create_remove_handler_and_queue_update(qtbot, tmp_path, monkeypatch):
-    parent = make_parent__from_creator_downloader_tab_behavior(tmp_path)
+    parent = make_tab_parent(tmp_path, window=True)
     tab = cd.CreatorDownloaderTab(parent)
     url = "https://kemono.cr/service/user/creatorA"
     tab.creator_queue.append((url, False))
@@ -219,7 +115,7 @@ def test_create_remove_handler_and_queue_update(qtbot, tmp_path, monkeypatch):
 
 
 def test_toggle_check_all_uses_checkbox_thread(monkeypatch, qtbot, tmp_path):
-    parent = make_parent__from_creator_downloader_tab_behavior(tmp_path)
+    parent = make_tab_parent(tmp_path, window=True)
     tab = cd.CreatorDownloaderTab(parent)
 
     # Populate post_widget_cache with two visible items
@@ -270,33 +166,15 @@ def test_toggle_check_all_uses_checkbox_thread(monkeypatch, qtbot, tmp_path):
     assert set(tab.posts_to_download) == {"1", "2"}
 
 
-class FakeSignal__from_creator_downloader_tab_flow_ui:
-    def __init__(self):
-        self._cbs = []
-
-    def connect(self, cb):
-        self._cbs.append(cb)
-
-    def emit(self, *args):
-        import inspect
-
-        for cb in list(self._cbs):
-            try:
-                n = len(inspect.signature(cb).parameters)
-            except Exception:
-                n = 0
-            cb(*args[:n])
-
-
-class FakePostDetectionThread__from_creator_downloader_tab_flow_ui:
+class FakePostDetectionThreadWithBatch:
     def __init__(self, url, post_titles_map, settings, **kwargs):
         self.url = url
         self.post_titles_map = post_titles_map
         self.settings = settings
-        self.finished = FakeSignal__from_creator_downloader_tab_flow_ui()
-        self.posts_batch = FakeSignal__from_creator_downloader_tab_flow_ui()
-        self.log = FakeSignal__from_creator_downloader_tab_flow_ui()
-        self.error = FakeSignal__from_creator_downloader_tab_flow_ui()
+        self.finished = Signal()
+        self.posts_batch = Signal()
+        self.log = Signal()
+        self.error = Signal()
 
     def start(self):
         # Emit a small batch and a finished list synchronously
@@ -308,8 +186,8 @@ class FakePostDetectionThread__from_creator_downloader_tab_flow_ui:
 class FakePostPopulationThread:
     def __init__(self, detected_posts, post_dates_map=None):
         self.detected_posts = detected_posts
-        self.finished = FakeSignal__from_creator_downloader_tab_flow_ui()
-        self.log = FakeSignal__from_creator_downloader_tab_flow_ui()
+        self.finished = Signal()
+        self.log = Signal()
 
     def start(self):
         # Provide a post_url_map and pass through detected posts
@@ -319,39 +197,12 @@ class FakePostPopulationThread:
         self.finished.emit(post_url_map, list(self.detected_posts))
 
 
-def make_parent__from_creator_downloader_tab_flow_ui(tmp_path):
-    class FakeTabs:
-        def count(self):
-            return 1
-
-        def currentIndex(self):
-            return 0
-
-        def setTabEnabled(self, i, enabled):
-            pass
-
-    settings_tab = SimpleNamespace(
-        settings_applied=FakeSignal__from_creator_downloader_tab_flow_ui(),
-        language_changed=FakeSignal__from_creator_downloader_tab_flow_ui(),
-    )
-    parent = SimpleNamespace(
-        cache_folder=str(tmp_path / "cache"),
-        other_files_folder=str(tmp_path / "other"),
-        download_folder=str(tmp_path / "download"),
-        settings_tab=settings_tab,
-        tabs=FakeTabs(),
-        status_label=SimpleNamespace(setText=lambda s: None),
-        animate_button=lambda *a, **k: None,
-    )
-    return parent
-
-
 def test_check_creator_from_queue_flow(qtbot, monkeypatch, tmp_path):
     # Monkeypatch thread classes and thread settings helper
     monkeypatch.setattr(
         cd,
         "PostDetectionThread",
-        FakePostDetectionThread__from_creator_downloader_tab_flow_ui,
+        FakePostDetectionThreadWithBatch,
     )
     monkeypatch.setattr(cd, "PostPopulationThread", FakePostPopulationThread)
     monkeypatch.setattr(
@@ -367,7 +218,7 @@ def test_check_creator_from_queue_flow(qtbot, monkeypatch, tmp_path):
         ),
     )
 
-    parent = make_parent__from_creator_downloader_tab_flow_ui(tmp_path)
+    parent = make_tab_parent(tmp_path, window=True)
     tab = cd.CreatorDownloaderTab(parent)
 
     url = "https://kemono.cr/service/user/creator1"
@@ -382,25 +233,9 @@ def test_check_creator_from_queue_flow(qtbot, monkeypatch, tmp_path):
     assert tab.all_detected_posts
 
 
-class DummyParent(QWidget):
-    def __init__(self):
-        super().__init__()
-        self._lines = [("line1", "green"), ("line2", "green")]
-        self.append_log_to_console = lambda *a, **k: None
-
-    def log_lines_from(self, index):
-        return self._lines[index:]
-
-    def log_next_index(self):
-        return len(self._lines)
-
-    def clear_log(self):
-        self._lines.clear()
-
-
 def test_logs_window_download_logs(tmp_path, qapp, monkeypatch):
     # Parent exposing the shared log store, plus append_log_to_console
-    parent = DummyParent()
+    parent = LogStoreParent([("line1", "green"), ("line2", "green")])
 
     lw = cd.LogsWindow(parent)
     # Force update of logs_display from the store (timer won't fire in test)
@@ -469,37 +304,8 @@ def test_add_creators_from_file_reads_and_adds(tmp_path, qapp, monkeypatch):
     )
 
 
-class SimpleSignal:
-    def __init__(self):
-        pass
-
-    def connect(self, cb):
-        return None
-
-
-def make_parent__from_creator_tab_handlers(tmp_path):
-    parent = SimpleNamespace()
-    parent.cache_folder = str(tmp_path / "cache")
-    parent.other_files_folder = str(tmp_path / "other")
-    parent.download_folder = str(tmp_path / "dl")
-    # Minimal settings_tab with required getters and connectable signals
-    st = SimpleNamespace()
-    st.settings_applied = SimpleSignal()
-    st.language_changed = SimpleSignal()
-    st.get_creator_posts_max_attempts = lambda: 1
-    st.get_post_data_max_retries = lambda: 1
-    st.get_file_download_max_retries = lambda: 1
-    st.get_api_request_max_retries = lambda: 1
-    st.get_simultaneous_downloads = lambda: 1
-    parent.settings_tab = st
-    parent.ensure_folders_exist = lambda: None
-    parent.post_tab = SimpleNamespace()
-    parent.creator_tab = SimpleNamespace()
-    return parent
-
-
 def test_create_remove_handler_removes_url(monkeypatch, tmp_path):
-    parent = make_parent__from_creator_tab_handlers(tmp_path)
+    parent = make_tab_parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
 
     url = "https://kemono.cr/user/xyz"
@@ -518,57 +324,13 @@ def test_create_remove_handler_removes_url(monkeypatch, tmp_path):
 
 
 def test_add_multiple_creators_to_queue_validates_and_adds(monkeypatch, tmp_path):
-    parent = make_parent__from_creator_tab_handlers(tmp_path)
+    parent = make_tab_parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
 
     url = "https://kemono.cr/user/abc"
     tab.creator_multi_url_input.setPlainText(url)
     tab.add_multiple_creators_to_queue()
     assert any(u for u, _ in tab.creator_queue if u == url)
-
-
-def make_parent__from_creator_tab_population_and_filter(tmp_path):
-    class FakeTabs:
-        def count(self):
-            return 1
-
-        def currentIndex(self):
-            return 0
-
-        def setTabEnabled(self, i, enabled):
-            pass
-
-    settings_tab = SimpleNamespace(
-        settings_applied=SimpleNamespace(connect=lambda cb: None),
-        language_changed=SimpleNamespace(connect=lambda cb: None),
-    )
-    parent = SimpleNamespace(
-        cache_folder=str(tmp_path / "cacheX"),
-        other_files_folder=str(tmp_path / "otherX"),
-        download_folder=str(tmp_path / "downloadX"),
-        settings_tab=settings_tab,
-        tabs=FakeTabs(),
-        status_label=SimpleNamespace(setText=lambda s: None),
-        animate_button=lambda *a, **k: None,
-    )
-    return parent
-
-
-class FinishedSignal:
-    def __init__(self, value=None):
-        self._cbs = []
-        self._value = value
-
-    def connect(self, cb):
-        self._cbs.append(cb)
-
-    def emit(self, *args):
-        for cb in list(self._cbs):
-            try:
-                n = len(inspect.signature(cb).parameters)
-            except Exception:
-                n = 0
-            cb(*args[:n])
 
 
 class FakeFilterThread:
@@ -590,8 +352,8 @@ class FakeFilterThread:
         self.search_scopes = search_scopes
         self.post_search_index = post_search_index
         self.post_filters = post_filters
-        self.finished = FinishedSignal()
-        self.log = FinishedSignal()
+        self.finished = Signal()
+        self.log = Signal()
 
     def start(self):
         # Build a filtered list identical to all_detected_posts with extra fields
@@ -609,7 +371,7 @@ class FakeFilterThread:
 
 
 def test_on_post_population_finished_and_filtering(monkeypatch, qtbot, tmp_path):
-    parent = make_parent__from_creator_tab_population_and_filter(tmp_path)
+    parent = make_tab_parent(tmp_path, window=True)
     tab = cd.CreatorDownloaderTab(parent)
 
     # Prepare detected posts
@@ -686,35 +448,8 @@ def test_creator_tab_ui_basics(monkeypatch, qapp, tmp_path):
     assert len(tab.creator_queue) <= pre_len
 
 
-def make_parent__from_creator_tab_ui_small(tmp_path):
-    class FakeTabs:
-        def count(self):
-            return 1
-
-        def currentIndex(self):
-            return 0
-
-        def setTabEnabled(self, i, enabled):
-            pass
-
-    settings_tab = SimpleNamespace(
-        settings_applied=SimpleNamespace(connect=lambda cb: None),
-        language_changed=SimpleNamespace(connect=lambda cb: None),
-    )
-    parent = SimpleNamespace(
-        cache_folder=str(tmp_path / "cacheX"),
-        other_files_folder=str(tmp_path / "otherX"),
-        download_folder=str(tmp_path / "downloadX"),
-        settings_tab=settings_tab,
-        tabs=FakeTabs(),
-        status_label=SimpleNamespace(setText=lambda s: None),
-        animate_button=lambda *a, **k: None,
-    )
-    return parent
-
-
 def test_add_multiple_creators_to_queue_basic(tmp_path):
-    parent = make_parent__from_creator_tab_ui_small(tmp_path)
+    parent = make_tab_parent(tmp_path, window=True)
     tab = cd.CreatorDownloaderTab(parent)
 
     # Provide one valid and one invalid URL
@@ -729,7 +464,7 @@ def test_add_multiple_creators_to_queue_basic(tmp_path):
 
 
 def test_category_checks_are_enabled(tmp_path):
-    parent = make_parent__from_creator_tab_ui_small(tmp_path)
+    parent = make_tab_parent(tmp_path, window=True)
     tab = cd.CreatorDownloaderTab(parent)
 
     assert tab.creator_main_check.isEnabled() is True
@@ -737,27 +472,8 @@ def test_category_checks_are_enabled(tmp_path):
     assert tab.creator_content_check.isEnabled() is True
 
 
-class StoreParent(QWidget):
-    """Minimal parent exposing the shared log-store API."""
-
-    def __init__(self, lines=()):
-        super().__init__()
-        self._lines = list(lines)
-        self.clear_calls = 0
-
-    def log_lines_from(self, index):
-        return self._lines[index:]
-
-    def log_next_index(self):
-        return len(self._lines)
-
-    def clear_log(self):
-        self.clear_calls += 1
-        self._lines.clear()
-
-
 def test_logs_window_download_and_clear(tmp_path, monkeypatch):
-    parent = StoreParent([("line1", "green"), ("line2", "green")])
+    parent = LogStoreParent([("line1", "green"), ("line2", "green")])
     appended = []
     parent.append_log_to_console = lambda msg, level=None: appended.append((msg, level))
 
@@ -813,31 +529,8 @@ def test_image_modal_display_and_progress(monkeypatch):
     assert called.get("ok") is True
 
 
-class StoreParent__from_logs_window(QTextEdit):
-    """Minimal parent exposing the shared log-store API."""
-
-    def __init__(self, lines=()):
-        super().__init__()
-        self._lines = list(lines)
-        self.clear_calls = 0
-        self.logged = []
-
-    def log_lines_from(self, index):
-        return self._lines[index:]
-
-    def log_next_index(self):
-        return len(self._lines)
-
-    def clear_log(self):
-        self.clear_calls += 1
-        self._lines.clear()
-
-    def append_log_to_console(self, message, level=None):
-        self.logged.append((message, level))
-
-
-def test_logs_window_download_and_clear__from_logs_window(qtbot, tmp_path, monkeypatch):
-    parent = StoreParent__from_logs_window([("line1", "green"), ("line2", "green")])
+def test_logs_window_download_and_clear_through_store(qtbot, tmp_path, monkeypatch):
+    parent = LogStoreParent([("line1", "green"), ("line2", "green")])
 
     lw = LogsWindow(parent)
     qtbot.addWidget(lw)

@@ -54,7 +54,7 @@ STRINGS = {
     "config_save_invalid_text": "Fix these entries first:\n{0}",
     "config_save_invalid_title": "Config Not Saved",
     "config_save_info_title": "Saved configs",
-    "config_save_info_text": "Save Config stores this page's options and filters as the default for every creator. Save Creator Config stores them for the creator that is loaded, and that profile replaces the default whenever the creator is loaded again.",
+    "config_save_info_text": "Save Config stores this page's options and filters as the default for every creator. Save Creator Config stores them for the creator that is loaded, and that profile replaces the default whenever the creator is loaded again. Both are kept in creator_configs.db in the app's Other Files folder (extras, next to the app), so they survive a restart and never touch the saved posts.",
     "config_saved_log": "Page config saved.",
     "config_saved_text": "Saved {0} options and {1} filter field(s).",
     "config_saved_title": "Config Saved",

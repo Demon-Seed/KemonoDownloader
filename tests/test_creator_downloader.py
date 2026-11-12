@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 import requests
 from PyQt6.QtGui import QColor, QPixmap
+from tests.factories import SessionReturning, StreamingResponse
 
 from kemonodownloader import creator_downloader as cd
 from kemonodownloader.creator_downloader import (
@@ -23,20 +24,10 @@ from kemonodownloader.creator_downloader import (
 )
 
 try:
-    from kemonodownloader.creator_downloader import (
-        ThreadSettings,
-        get_domain_config,
-        get_headers,
-        sanitize_filename,
-    )
+    from kemonodownloader.creator_downloader import get_domain_config, get_headers
 except ImportError:
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "src"))
-    from kemonodownloader.creator_downloader import (
-        ThreadSettings,
-        get_domain_config,
-        get_headers,
-        sanitize_filename,
-    )
+    from kemonodownloader.creator_downloader import get_domain_config, get_headers
 
 
 class TestThreadSettings:
@@ -802,31 +793,6 @@ def test_get_session_socks_proxy_returns_socks_session():
     assert session.proxies.get("http") == "socks5h://127.0.0.1:9050"
 
 
-class FakeResponse__from_preview_thread:
-    def __init__(self, chunks):
-        self._chunks = chunks
-        self.status_code = 200
-        self.headers = {"content-length": str(sum(len(c) for c in chunks))}
-
-    def iter_content(self, chunk_size=8192):
-        for c in self._chunks:
-            yield c
-
-    def raise_for_status(self):
-        return None
-
-    def close(self):
-        return None
-
-
-class FakeSession__from_preview_thread:
-    def __init__(self, chunks):
-        self._chunks = chunks
-
-    def get(self, *args, **kwargs):
-        return FakeResponse__from_preview_thread(self._chunks)
-
-
 def test_preview_thread_uses_cache(qtbot, tmp_path):
     url = "https://example.com/img.png"
     cache_dir = str(tmp_path / "cachep")
@@ -860,7 +826,7 @@ def test_preview_thread_emits_error_for_invalid_data(qtbot, tmp_path, monkeypatc
     chunks = [b"notanimage"]
     monkeypatch.setattr(
         "kemonodownloader.creator_downloader.get_session",
-        lambda settings_tab=None: FakeSession__from_preview_thread(chunks),
+        lambda settings_tab=None: SessionReturning(StreamingResponse(chunks)),
     )
 
     errors = []
