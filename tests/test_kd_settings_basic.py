@@ -1,7 +1,11 @@
+import os
 import sys
 from types import SimpleNamespace
 
+import pytest
 from PyQt6.QtCore import QSettings
+
+from kemonodownloader import kd_paths
 
 from kemonodownloader import kd_settings as ks
 from kemonodownloader.kd_settings import SettingsTab
@@ -26,11 +30,11 @@ def test_get_default_base_directory_platforms(monkeypatch, tmp_path):
     assert "Kemono Downloader" in path
 
 
-def test_show_only_found_filetypes_defaults_to_off():
+def test_show_only_found_filetypes_defaults_to_on_with_count():
     s = SettingsTab.__new__(SettingsTab)
     s.settings = {}
 
-    assert s.get_show_only_found_filetypes() == "off"
+    assert s.get_show_only_found_filetypes() == "on_with_count"
 
 
 def test_show_only_found_filetypes_reads_each_mode():
@@ -120,12 +124,14 @@ def test_proxy_type_and_get_proxy_settings(tmp_path, monkeypatch):
     tab.temp_settings["proxy_type"] = "custom"
     tab.temp_settings["custom_proxy_url"] = "http://127.0.0.1:8080"
     proxies = tab.get_proxy_settings()
+    assert proxies is not None
     assert proxies["http"].startswith("http")
 
-    # tor proxy when tor not running -> returns None
+    # tor proxy when tor not running -> error, never a direct connection
     tab.temp_settings["proxy_type"] = "tor"
     tab.tor_process = None
-    assert tab.get_proxy_settings() is None
+    with pytest.raises(ks.ProxyUnavailableError):
+        tab.get_proxy_settings()
 
     # simulate tor process running but no socks package -> fallback to http
     class FakeProc:
@@ -149,15 +155,19 @@ def test_browse_sets_each_directory(tmp_path, monkeypatch):
 
     assert tab.directory_input.text() == str(tmp_path)
 
-    other = tmp_path / "program data"
+    # The program data folder is fixed now: the button opens it instead.
+    opened = []
     monkeypatch.setattr(
-        "kemonodownloader.kd_settings.QFileDialog.getExistingDirectory",
-        lambda *a, **k: str(other),
+        "kemonodownloader.kd_settings.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toLocalFile()),
     )
-    tab.browse_data_directory()
+    tab.open_data_directory()
 
-    assert tab.data_directory_input.text() == str(other)
-    assert tab.temp_settings["data_directory"] == str(other)
+    assert [os.path.normpath(path) for path in opened] == [
+        os.path.normpath(kd_paths.data_directory())
+    ]
+    assert tab.data_directory_input.text() == kd_paths.data_directory()
+    assert tab.data_directory_input.isReadOnly() is True
 
 
 def test_the_folder_group_has_no_open_buttons(tmp_path):
@@ -180,6 +190,80 @@ def test_reset_to_defaults_and_template_help(tmp_path, monkeypatch):
         "kemonodownloader.kd_settings.QMessageBox.information", lambda *a, **k: None
     )
     tab.reset_to_defaults()
-    assert (
-        tab.data_directory_input.text() == tab.default_settings["data_directory"]
+    # The data folder is fixed, so the field reads it back rather than a
+    # stored default.
+    assert tab.data_directory_input.text() == kd_paths.data_directory()
+
+
+def test_reset_also_restores_the_creator_templates(tmp_path, monkeypatch):
+    """A15: the template fields and layout combos are defaults too."""
+    tab = make_tab(tmp_path)
+    monkeypatch.setattr(
+        "kemonodownloader.kd_settings.QMessageBox.information", lambda *a, **k: None
     )
+
+    tab.creator_filename_input.setText("{orig_name}")
+    tab.creator_shared_filename_input.setText("{orig_name}")
+    tab.creator_folder_name_input.setText("{post_title}")
+    tab.creator_folder_strategy_combo.setCurrentIndex(
+        tab.creator_folder_strategy_combo.findData("single_folder")
+    )
+    tab.creator_unique_filenames_combo.setCurrentIndex(
+        tab.creator_unique_filenames_combo.findData(False)
+    )
+
+    tab.reset_to_defaults()
+
+    defaults = tab.default_settings
+    assert tab.creator_filename_input.text() == defaults["creator_filename_template"]
+    assert (
+        tab.creator_shared_filename_input.text()
+        == defaults["creator_filename_template_shared"]
+    )
+    assert tab.creator_folder_name_input.text() == defaults["creator_folder_name_template"]
+    assert (
+        tab.creator_folder_strategy_combo.currentData()
+        == defaults["creator_folder_strategy"]
+    )
+    assert (
+        tab.creator_unique_filenames_combo.currentData()
+        == defaults["creator_unique_filenames"]
+    )
+
+
+def test_B5_the_cached_proxy_answer_costs_no_qprocess_call(tmp_path):
+    """Download threads read the proxy answer, never QProcess itself."""
+
+    class FakeProcess:
+        def state(self):
+            from PyQt6.QtCore import QProcess
+
+            return QProcess.ProcessState.Running
+
+    tab = make_tab(tmp_path)
+    tab.tor_process = FakeProcess()
+    tab.temp_settings["use_proxy"] = True
+    tab.temp_settings["proxy_type"] = "tor"
+    # The GUI-thread snapshot (what a widget change or stateChanged does).
+    tab._refresh_proxy_cache()
+
+    def no_qt_off_thread():
+        raise AssertionError("QProcess.state() was read off the GUI thread")
+
+    tab.tor_process.state = no_qt_off_thread
+
+    # Same signature, so the cached answer is returned without asking Qt.
+    assert "http" in tab.get_proxy_settings()
+
+
+def test_B5_editing_the_proxy_refreshes_the_cached_answer(tmp_path):
+    tab = make_tab(tmp_path)
+    tab.temp_settings["use_proxy"] = True
+    tab.temp_settings["proxy_type"] = "custom"
+
+    tab.update_temp_setting("custom_proxy_url", "1.2.3.4:8080")
+
+    assert tab.get_proxy_settings() == {
+        "http": "1.2.3.4:8080",
+        "https": "1.2.3.4:8080",
+    }

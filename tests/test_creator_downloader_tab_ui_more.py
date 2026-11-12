@@ -48,11 +48,9 @@ def test_multi_url_input_always_visible(qtbot, monkeypatch, tmp_path):
     tab = cd.CreatorDownloaderTab(parent)
 
     # The multi-URL input replaced the old single-URL row, so it is always
-    # visible and there is no fast-mode toggle to disable it.
+    # visible.
     assert tab.creator_multi_url_input.isVisibleTo(tab)
     assert tab.creator_multi_url_add_btn.isVisibleTo(tab)
-    assert not hasattr(tab, "toggle_fast_mode")
-    assert not hasattr(tab, "fast_mode")
 
 
 def test_pagination_and_display(qtbot, monkeypatch, tmp_path):

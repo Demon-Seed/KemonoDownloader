@@ -179,7 +179,7 @@ def test_retry_button_sits_with_the_run_controls(qtbot, tmp_path):
     )
     # It lives on the left with the run controls, not next to the log.
     assert tab.creator_retry_failed_btn.parentWidget() is not (
-        tab.creator_log_toggle_btn.parentWidget()
+        tab.creator_log_btn.parentWidget()
     )
 
 

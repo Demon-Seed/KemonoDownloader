@@ -329,12 +329,12 @@ class TestCreatorDownloadThread:
     def test_download_file_skip(self, download_thread):
         import asyncio
 
+        other_url = "https://other.com/f.jpg"
         # Should skip if file_url not in files_to_download
-        asyncio.run(
-            download_thread.download_file(
-                "https://other.com/f.jpg", "/tmp", 0, 1, 1
-            )
-        )
+        asyncio.run(download_thread.download_file(other_url, "/tmp", 0, 1, 1))
+
+        assert other_url not in download_thread.completed_files
+        assert other_url not in download_thread.failed_files
 
     def test_generate_filename_and_folder_strategies(self, download_thread):
         url = "https://kemono.cr/f1.jpg"
@@ -584,13 +584,6 @@ class TestCreatorDownloaderTab:
         assert creator_tab.creator_queue_list.count() == 1
         assert creator_tab.creator_queue[0][0] == "https://kemono.cr/fanbox/user/1"
 
-    def test_fast_mode_removed_from_creator_tab(self, creator_tab):
-        # Fast Mode no longer exists on the Creator tab.
-        assert not hasattr(creator_tab, "creator_fast_mode_check")
-        assert not hasattr(creator_tab, "fast_mode")
-        # The multi-URL input is always present instead.
-        assert creator_tab.creator_multi_url_input.isVisibleTo(creator_tab)
-
     def test_remove_creator_from_queue(self, creator_tab, monkeypatch):
         url = "https://kemono.cr/fanbox/user/123"
         creator_tab.creator_queue.append((url, False))
@@ -727,9 +720,7 @@ class TestCreatorDownloaderTab:
         assert creator_tab.downloading is False
         assert any(level == "WARNING" for _msg, level in logs)
 
-    def test_start_creator_download_warns_when_no_queue(
-        self, creator_tab, monkeypatch
-    ):
+    def test_start_creator_download_warns_when_no_queue(self, creator_tab, monkeypatch):
         creator_tab.creator_queue = []
         creator_tab.current_creator_url = None
         creator_tab.posts_to_download = ["p1"]
@@ -815,11 +806,9 @@ class TestCreatorDownloaderTab:
             lambda *a, **k: mock_thread,
         )
 
-        # Populate cache so it finds "visible" posts
-        mock_item = MagicMock()
-        mock_item.isHidden.return_value = False
-        creator_tab.post_widget_cache = {"T1": (mock_item, MagicMock())}
+        # The rows carry the post id, so the toggle reads the list widget.
         creator_tab.post_url_map = {"T1": ("id1", "th1")}
+        creator_tab.add_list_item("T1", "https://kemono.cr/u/1", False)
 
         creator_tab.toggle_check_all(2)  # Checked
         assert mock_thread.start.called
@@ -971,5 +960,3 @@ class TestFilePreparationThread:
         assert len(results) == 1
         assert "u1" in results[0][0]
         assert results[0][1]["u1"] == "p1"
-
-

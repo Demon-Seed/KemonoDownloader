@@ -10,6 +10,12 @@ from kemonodownloader import creator_downloader as cd
 
 CREATOR_URL = "https://kemono.cr/patreon/user/42"
 
+def log_text(tab):
+    """Return the tab's log lines as plain text (there is no console)."""
+    return "\n".join(message for message, _colour in tab.log_lines_from(0))
+
+
+
 
 class FakeDownloadThread:
     """Stands in for the real QThread so retrying never downloads."""
@@ -110,7 +116,6 @@ def test_retry_resets_the_run_state(qtbot, tmp_path, monkeypatch):
     _seed_failures(tab)
     tab.completed_files = {"stale"}
     tab.failed_files = {"stale": "stale"}
-    tab.set_log_panel_visible(True)
 
     tab.retry_failed_downloads()
 
@@ -121,30 +126,28 @@ def test_retry_resets_the_run_state(qtbot, tmp_path, monkeypatch):
     assert tab.failed_files == {}
     assert tab.creator_retry_failed_btn.isVisibleTo(tab) is True
     assert tab.creator_retry_failed_btn.isEnabled() is False
-    assert "Retrying 2 failed file(s)" in tab.creator_console.toPlainText()
+    assert "Retrying 2 failed file(s)" in log_text(tab)
 
 
 def test_retry_without_failures_only_warns(qtbot, tmp_path, monkeypatch):
     tab = make_tab(qtbot, tmp_path, monkeypatch)
-    tab.set_log_panel_visible(True)
 
     tab.retry_failed_downloads()
 
     assert FakeDownloadThread.instances == []
     assert tab.downloading is False
-    assert "Nothing to retry" in tab.creator_console.toPlainText()
+    assert "Nothing to retry" in log_text(tab)
 
 
 def test_retry_is_refused_while_a_download_runs(qtbot, tmp_path, monkeypatch):
     tab = make_tab(qtbot, tmp_path, monkeypatch)
     _seed_failures(tab)
     tab.downloading = True
-    tab.set_log_panel_visible(True)
 
     tab.retry_failed_downloads()
 
     assert FakeDownloadThread.instances == []
-    assert "A download is already running" in tab.creator_console.toPlainText()
+    assert "A download is already running" in log_text(tab)
 
 
 def test_retry_keeps_failures_the_map_cannot_place(qtbot, tmp_path, monkeypatch):
@@ -152,12 +155,11 @@ def test_retry_keeps_failures_the_map_cannot_place(qtbot, tmp_path, monkeypatch)
     tab._last_run_creator_url = CREATOR_URL
     tab._last_run_failed_files = {"https://n1/orphan.jpg": "boom"}
     tab._last_run_files_to_posts_map = {}
-    tab.set_log_panel_visible(True)
 
     tab.retry_failed_downloads()
 
     assert FakeDownloadThread.instances == []
-    assert "Nothing to retry" in tab.creator_console.toPlainText()
+    assert "Nothing to retry" in log_text(tab)
     assert tab.creator_retry_failed_btn.isEnabled() is False
 
 
@@ -200,12 +202,11 @@ def test_retry_ignores_finished_threads_left_in_active_threads(
     tab = make_tab(qtbot, tmp_path, monkeypatch)
     _seed_failures(tab)
     tab.active_threads.append(FinishedThreadStand())
-    tab.set_log_panel_visible(True)
 
     tab.retry_failed_downloads()
 
     assert len(FakeDownloadThread.instances) == 1
-    assert "A download is already running" not in tab.creator_console.toPlainText()
+    assert "A download is already running" not in log_text(tab)
 
 
 def test_retry_is_refused_while_the_download_thread_still_runs(
@@ -215,9 +216,8 @@ def test_retry_is_refused_while_the_download_thread_still_runs(
     _seed_failures(tab)
     tab.downloading = False
     tab._download_thread = RunningThreadStand()
-    tab.set_log_panel_visible(True)
 
     tab.retry_failed_downloads()
 
     assert FakeDownloadThread.instances == []
-    assert "A download is already running" in tab.creator_console.toPlainText()
+    assert "A download is already running" in log_text(tab)

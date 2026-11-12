@@ -190,7 +190,7 @@ def test_tab_update_file_completion_reads_thread_error(qapp, tmp_path):
         ["1"],
         [file_url],
         {file_url: "1"},
-        tab.creator_console,
+        None,  # console argument: kept for compatibility, logging uses `log`
         str(tmp_path),
         {},
         Settings(),

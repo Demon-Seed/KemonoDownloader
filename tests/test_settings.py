@@ -3,51 +3,51 @@ Integration tests for the Settings module.
 These tests verify settings loading, saving, and UI configuration logic.
 """
 
+import ast
 import os
+import pathlib
 import sys
-import tempfile
 from unittest.mock import MagicMock
 
 from PyQt6.QtCore import QSettings
+from PyQt6.QtWidgets import QMessageBox
+
+from kemonodownloader.kd_language import translate
+from kemonodownloader.kd_settings import DownloadTorThread, SettingsTab
 
 
 class TestDefaultSettings:
     """Tests for default settings values."""
 
-    def test_default_base_folder_name(self):
-        """Test default base folder name."""
+    def test_default_settings_values(self, qapp):
+        """The shipped defaults, as a fresh Settings tab shows them."""
+        from kemonodownloader.kd_settings import SettingsTab
 
-        # Create a minimal mock parent
-        class MockParent:
-            base_folder = ""
-            download_folder = ""
-            cache_folder = ""
-            other_files_folder = ""
-
-            def log(self, msg):
-                pass
-
-            def ensure_folders_exist(self):
-                pass
-
-        # Access default settings directly
-        default_settings = {
-            "base_folder_name": "Kemono Downloader",
-            "simultaneous_downloads": 5,
-            "language": "english",
-            "creator_posts_max_attempts": 200,
-            "post_data_max_retries": 7,
-            "file_download_max_retries": 50,
-            "api_request_max_retries": 3,
-            "use_proxy": False,
-            "proxy_type": "tor",
-            "custom_proxy_url": "",
-            "tor_path": "",
-        }
-
-        assert default_settings["base_folder_name"] == "Kemono Downloader"
-        assert default_settings["simultaneous_downloads"] == 5
-        assert default_settings["language"] == "english"
+        st = SettingsTab(None)
+        try:
+            defaults = st.default_settings
+            assert defaults["base_folder_name"] == "Kemono Downloader"
+            assert defaults["simultaneous_downloads"] == 5
+            assert defaults["language"] == "english"
+            assert defaults["creator_posts_max_attempts"] == 200
+            assert defaults["post_data_max_retries"] == 7
+            assert defaults["file_download_max_retries"] == 50
+            assert defaults["api_request_max_retries"] == 3
+            assert defaults["show_only_found_filetypes"] == "on_with_count"
+            assert defaults["creator_filename_template"] == (
+                "{post_id}_{file_number}_{orig_name}"
+            )
+            assert defaults["creator_filename_template_shared"] == (
+                "{post_id}_{file_number}_{orig_name}"
+            )
+            assert defaults["creator_folder_name_template"] == "{post_id}_{post_title}"
+            assert defaults["creator_unique_filenames"] == "both"
+            assert defaults["creator_folder_strategy"] == "per_post"
+            assert defaults["font"] == "JetBrains Mono"
+            assert defaults["use_proxy"] is False
+            assert defaults["proxy_type"] == "tor"
+        finally:
+            st.deleteLater()
 
     def test_creator_filename_and_folder_defaults(self):
         """Ensure the creator filename template and folder strategy defaults exist."""
@@ -63,39 +63,6 @@ class TestDefaultSettings:
             ]
         finally:
             st.deleteLater()
-
-    def test_default_retry_settings(self):
-        """Test default retry configuration values."""
-        defaults = {
-            "creator_posts_max_attempts": 200,
-            "post_data_max_retries": 7,
-            "file_download_max_retries": 50,
-            "api_request_max_retries": 3,
-        }
-
-        # Verify reasonable default values
-        assert defaults["creator_posts_max_attempts"] > 0
-        assert defaults["post_data_max_retries"] > 0
-        assert defaults["file_download_max_retries"] > 0
-        assert defaults["api_request_max_retries"] > 0
-
-        # Verify they are integers
-        assert isinstance(defaults["creator_posts_max_attempts"], int)
-        assert isinstance(defaults["post_data_max_retries"], int)
-
-    def test_default_proxy_settings(self):
-        """Test default proxy configuration."""
-        defaults = {
-            "use_proxy": False,
-            "proxy_type": "tor",
-            "custom_proxy_url": "",
-            "tor_path": "",
-        }
-
-        # Proxy should be disabled by default
-        assert defaults["use_proxy"] is False
-        assert defaults["proxy_type"] in ["tor", "custom"]
-        assert defaults["custom_proxy_url"] == ""
 
 
 class TestBaseDirectoryLogic:
@@ -203,38 +170,6 @@ class TestLanguageSettings:
             assert language_manager.get_language() == "english"
         finally:
             language_manager.set_language(original)
-
-
-class TestProxySettings:
-    """Tests for proxy configuration logic."""
-
-    def test_proxy_type_values(self):
-        """Test valid proxy type values."""
-        valid_types = ["custom", "tor"]
-
-        for proxy_type in valid_types:
-            assert proxy_type in ["custom", "tor", "none"]
-
-    def test_custom_proxy_url_format(self):
-        """Test custom proxy URL format validation."""
-        valid_urls = [
-            "127.0.0.1:8080",
-            "192.168.1.1:3128",
-            "http://proxy.example.com:8080",
-            "socks5://127.0.0.1:9050",
-        ]
-
-        for url in valid_urls:
-            # Basic validation - should contain a port
-            assert ":" in url
-
-    def test_tor_default_port(self):
-        """Test Tor SOCKS proxy default configuration."""
-        tor_proxy_url = "socks5h://127.0.0.1:9050"
-
-        assert "127.0.0.1" in tor_proxy_url
-        assert "9050" in tor_proxy_url
-        assert "socks" in tor_proxy_url.lower()
 
 
 class TestSettingsMigration:
@@ -622,7 +557,7 @@ class TestTorAsync:
         # Mock requests.get for download
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.iter_content = lambda b: [b"dummy data"]
+        mock_resp.iter_content = lambda *a, **k: [b"dummy data"]
         mock_resp.headers = {"content-length": "10"}
         monkeypatch.setattr(requests, "get", lambda *a, **k: mock_resp)
 
@@ -634,6 +569,7 @@ class TestTorAsync:
         monkeypatch.setattr(os, "makedirs", lambda *a, **k: None)
         monkeypatch.setattr(os, "remove", lambda *a, **k: None)
         monkeypatch.setattr(os.path, "exists", lambda p: True)
+        monkeypatch.setattr(os, "walk", lambda p: [("root", [], ["tor.exe"])])
         import shutil
 
         monkeypatch.setattr(shutil, "rmtree", lambda *a, **k: None)
@@ -642,20 +578,24 @@ class TestTorAsync:
         thread = DownloadTorThread(
             "http://example.com/tor.tar.gz", "extract_dir", "tor_path"
         )
+        events = []
         thread.progress.connect(lambda v: None)
-        thread.finished_success.connect(lambda p: None)
-        thread.finished_error.connect(lambda e: None)
+        thread.finished_success.connect(lambda p: events.append(("ok", p)))
+        thread.finished_error.connect(lambda e: events.append(("err", e)))
 
         thread.run()
-        # Success covered
+        assert events and events[0][0] == "ok"
 
         # Test error path: 404
-        mock_resp.status_code = 404
+        mock_resp.raise_for_status.side_effect = Exception("404 Client Error")
         thread.run()
+        assert events[-1][0] == "err"
+        mock_resp.raise_for_status.side_effect = None
 
         # Test error path: Exception
         monkeypatch.setattr(requests, "get", MagicMock(side_effect=Exception("Failed")))
         thread.run()
+        assert len([event for event in events if event[0] == "err"]) >= 2
 
     def test_download_tor_thread_extra_errors(self, qapp, monkeypatch):
         import hashlib
@@ -666,6 +606,9 @@ class TestTorAsync:
         from kemonodownloader.kd_settings import DownloadTorThread
 
         thread = DownloadTorThread("url", "ex_dir", "tor_p")
+        outcomes = []
+        thread.finished_success.connect(lambda p: outcomes.append("ok"))
+        thread.finished_error.connect(lambda e: outcomes.append("err"))
 
         # Test hash verification failure
         mock_resp = MagicMock(status_code=200, headers={"content-length": "10"})
@@ -693,6 +636,8 @@ class TestTorAsync:
         )
         thread.run()
 
+        assert outcomes == ["err", "err"], "both failures must be reported"
+
     def test_download_tor_thread_success_search(self, qapp, monkeypatch):
         import hashlib
         import tarfile
@@ -702,10 +647,13 @@ class TestTorAsync:
         from kemonodownloader.kd_settings import DownloadTorThread
 
         thread = DownloadTorThread("url", "ex_dir", "tor_p")
+        outcomes = []
+        thread.finished_success.connect(lambda p: outcomes.append("ok"))
+        thread.finished_error.connect(lambda e: outcomes.append("err"))
 
         # Mock download success
         mock_resp = MagicMock(status_code=200, headers={"content-length": "10"})
-        mock_resp.iter_content = lambda b: [b"dummy"]
+        mock_resp.iter_content = lambda *a, **k: [b"dummy"]
         monkeypatch.setattr(requests, "get", lambda *a, **k: mock_resp)
         monkeypatch.setattr(os, "makedirs", lambda *a, **k: None)
         monkeypatch.setattr(os, "remove", lambda *a, **k: None)
@@ -727,8 +675,11 @@ class TestTorAsync:
         thread.run()
 
         # Test 3: Download error (status code 404)
-        mock_resp.status_code = 404
+        mock_resp.raise_for_status.side_effect = Exception("404 Client Error")
         thread.run()
+
+        # No tor binary -> error; tor.exe found -> success; 404 -> error.
+        assert outcomes == ["err", "ok", "err"]
 
     def test_test_tor_network_errors(self, qapp, monkeypatch):
         import subprocess
@@ -742,7 +693,10 @@ class TestTorAsync:
         try:
             st.temp_settings["tor_path"] = "/usr/bin/tor"
             monkeypatch.setattr(os.path, "exists", lambda p: True)
-            monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+            warnings = []
+            monkeypatch.setattr(
+                QMessageBox, "warning", lambda *a, **k: warnings.append(a)
+            )
 
             # Subprocess version check failure
             mock_res = MagicMock()
@@ -783,6 +737,8 @@ class TestTorAsync:
             st.tor_config_file.name = "/tmp/fake.torrc"
             monkeypatch.setattr(os, "unlink", lambda p: None)
             st.handle_tor_finished(0, MagicMock())
+
+            assert len(warnings) >= 3, "each failure path must warn the user"
         finally:
             st.deleteLater()
 
@@ -799,6 +755,8 @@ class TestTorAsync:
             st.tor_process.readAllStandardError.return_value = mock_data
 
             st.handle_tor_error()
+
+            assert st.tor_process.readAllStandardError.called
 
             # Test handle_tor_finished
             st.tor_config_file = MagicMock()
@@ -865,9 +823,15 @@ class TestDetailedUI:
         try:
             from PyQt6.QtWidgets import QMessageBox
 
-            monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+            shown = []
+            monkeypatch.setattr(
+                QMessageBox, "information", lambda *a, **k: shown.append(a)
+            )
             st.show_template_help()
             st.show_tor_help()
+
+            assert len(shown) == 2, "both help buttons must show a dialog"
+            assert all(call[1] for call in shown), "each dialog needs a title"
         finally:
             st.deleteLater()
 
@@ -878,70 +842,13 @@ class TestDetailedUI:
         st = SettingsTab(parent)
         try:
             # Pass integer index
+            st.font_combo = MagicMock()
+            st.font_combo.itemData.return_value = "Poppins"
             st.update_font(0)
+
+            assert st.temp_settings["font"] == "Poppins"
         finally:
             st.deleteLater()
-
-
-class TestSimultaneousDownloadsSettings:
-    """Tests for simultaneous downloads configuration."""
-
-    def test_simultaneous_downloads_range(self):
-        """Test valid range for simultaneous downloads."""
-        min_downloads = 1
-        max_downloads = 20
-        default_downloads = 5
-
-        assert min_downloads >= 1
-        assert max_downloads <= 20
-        assert min_downloads <= default_downloads <= max_downloads
-
-    def test_simultaneous_downloads_is_integer(self):
-        """Test that simultaneous downloads is an integer."""
-        value = 5
-        assert isinstance(value, int)
-        assert value > 0
-
-
-class TestRetrySettings:
-    """Tests for retry configuration."""
-
-    def test_retry_values_positive(self):
-        """Test that all retry values are positive."""
-        retry_settings = {
-            "creator_posts_max_attempts": 200,
-            "post_data_max_retries": 7,
-            "file_download_max_retries": 50,
-            "api_request_max_retries": 3,
-        }
-
-        for key, value in retry_settings.items():
-            assert value > 0, f"{key} should be positive"
-
-    def test_retry_ranges(self):
-        """Test that retry values are within reasonable ranges."""
-        # Based on UI spinbox ranges
-        assert 1 <= 200 <= 1000  # creator_posts_max_attempts
-        assert 1 <= 7 <= 100  # post_data_max_retries
-        assert 1 <= 50 <= 200  # file_download_max_retries
-        assert 1 <= 3 <= 50  # api_request_max_retries
-
-
-class TestFolderStructure:
-    """Tests for folder structure configuration."""
-
-    def test_folder_structure_paths(self):
-        """Test that folder structure is correctly defined."""
-        base_folder = "/fake/base/Kemono Downloader"
-
-        expected_structure = {
-            "Downloads": os.path.join(base_folder, "Downloads"),
-            "Cache": os.path.join(base_folder, "Cache"),
-            "Other Files": os.path.join(base_folder, "Other Files"),
-        }
-
-        assert expected_structure["Downloads"].endswith("Downloads")
-        assert expected_structure["Cache"].endswith("Cache")
 
 
 def test_auto_detect_tor_in_base_directory(tmp_path, monkeypatch, qapp):
@@ -996,20 +903,6 @@ def test_auto_detect_tor_in_base_directory(tmp_path, monkeypatch, qapp):
         if settings_tab is not None:
             settings_tab.deleteLater()
 
-    def test_folder_creation_logic(self):
-        """Test folder creation with os.makedirs."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            test_folder = os.path.join(tmpdir, "Test", "Nested", "Folder")
-
-            # os.makedirs with exist_ok=True should not raise
-            os.makedirs(test_folder, exist_ok=True)
-
-            assert os.path.exists(test_folder)
-            assert os.path.isdir(test_folder)
-
-            # Calling again should not raise
-            os.makedirs(test_folder, exist_ok=True)
-
 
 class TestQSettingsIntegration:
     """Tests for QSettings integration."""
@@ -1057,7 +950,10 @@ class TestQSettingsIntegration:
             monkeypatch.setattr(
                 QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes
             )
-            monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+            warnings = []
+            monkeypatch.setattr(
+                QMessageBox, "warning", lambda *a, **k: warnings.append(a)
+            )
             monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
 
             # Directory creation failure: the Save Directory cannot be made.
@@ -1067,6 +963,8 @@ class TestQSettingsIntegration:
                 os, "makedirs", MagicMock(side_effect=OSError("Permission denied"))
             )
             st.confirm_and_apply_settings()
+
+            assert warnings, "a directory that cannot be made must warn, not apply"
         finally:
             st.deleteLater()
 
@@ -1079,13 +977,19 @@ class TestQSettingsIntegration:
         st = SettingsTab(MagicMock())
         try:
             # Trigger exception in show_template_help (777-779)
-            monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+            shown = []
+            monkeypatch.setattr(
+                QMessageBox, "information", lambda *a, **k: shown.append(a)
+            )
             monkeypatch.setattr(
                 kemonodownloader.kd_settings,
                 "translate",
                 MagicMock(side_effect=Exception("Error")),
             )
             st.show_template_help()
+
+            assert shown, "the fallback help dialog must still appear"
+            assert shown[0][1] == "Template Help"
         finally:
             st.deleteLater()
 
@@ -1096,6 +1000,9 @@ class TestQSettingsIntegration:
         try:
             # Test update_font with -1 index
             st.update_font(-1)
+
+            # An invalid index selects nothing instead of crashing.
+            assert st.temp_settings["font"] is None
         finally:
             st.deleteLater()
 
@@ -1130,3 +1037,243 @@ class TestQSettingsIntegration:
             assert "base_directory" in s
         finally:
             st.deleteLater()
+
+
+def test_download_tor_thread_skips_path_traversal(monkeypatch, tmp_path):
+    # Prepare fake response for requests.get
+    class FakeResp:
+        status_code = 200
+
+        def __init__(self, chunks):
+            self._chunks = chunks
+            self.headers = {"content-length": str(sum(len(c) for c in chunks))}
+
+        def iter_content(self, chunk_size=8192):
+            for c in self._chunks:
+                yield c
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(
+        "requests.get",
+        lambda *a, **k: FakeResp([b"data"]),
+    )
+
+    # Fake tarfile object that records extracted member names
+    class FakeMember:
+        def __init__(self, name):
+            self.name = name
+
+    class FakeTar:
+        def __init__(self, members):
+            self._members = [FakeMember(n) for n in members]
+            self.extracted = []
+
+        def getmembers(self):
+            return self._members
+
+        def extract(self, member, path):
+            # record the member name that would be extracted
+            self.extracted.append(member.name)
+
+        def close(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    # Create tar_ref with a safe and an unsafe member
+    members = ["tor/tor", "../../etc/passwd", "tor/bin/tor"]
+    fake_tar = FakeTar(members)
+
+    monkeypatch.setattr("tarfile.open", lambda *a, **k: fake_tar)
+
+    # Ensure os.unlink doesn't remove anything important during test
+    monkeypatch.setattr("os.unlink", lambda p: None)
+
+    # Run the DownloadTorThread
+    tor_path = str(tmp_path / "tor_dir")
+    os.makedirs(tor_path, exist_ok=True)
+    thread = DownloadTorThread("http://example.com/tor.tar.gz", str(tmp_path), tor_path)
+    # Connect signals to no-op to avoid Qt requirements
+    thread.progress.connect(lambda v: None)
+    thread.finished_success.connect(lambda p: None)
+    thread.finished_error.connect(lambda e: None)
+
+    # Execute run() directly
+    thread.run()
+
+    # After run, only safe members should have been extracted
+    assert all(".." not in name for name in fake_tar.extracted)
+    assert any(name.startswith("tor/") for name in fake_tar.extracted)
+
+
+class MockParent:
+    def __init__(self):
+        self.download_folder = ""
+        self.cache_folder = ""
+        self.other_files_folder = ""
+
+        # Minimal post/creator tabs used elsewhere
+        class DummyTab:
+            pass
+
+        self.post_tab = DummyTab()
+        self.creator_tab = DummyTab()
+
+    def ensure_folders_exist(self):
+        # Real window creates the folders; the mock only needs the call to work.
+        return None
+
+    def log(self, msg):
+        pass
+
+
+def test_settings_applied_message_includes_template_and_strategy(
+    monkeypatch, tmp_path, qapp
+):
+    parent = MockParent()
+    st = SettingsTab(parent)
+    try:
+        # Prepare temp settings with non-empty directory to avoid directory creation warning
+        st.temp_settings["base_directory"] = str(tmp_path)
+        st.temp_settings["simultaneous_downloads"] = 3
+        st.temp_settings["creator_posts_max_attempts"] = 12
+        st.temp_settings["post_data_max_retries"] = 9
+        st.temp_settings["file_download_max_retries"] = 33
+        st.temp_settings["api_request_max_retries"] = 4
+        st.temp_settings["verbose_logging"] = True
+        st.temp_settings["show_only_found_filetypes"] = "on"
+
+        # Set creator-specific settings
+        st.temp_settings["creator_filename_template"] = "{post_title}-{post_id}"
+        st.temp_settings["creator_folder_strategy"] = "single_folder"
+        st.temp_settings["creator_unique_filenames"] = False
+
+        # Monkeypatch question to behave as if the user clicked Yes
+        asked = {}
+
+        def fake_question(parent_arg, title, text, *args, **kwargs):
+            asked["text"] = text
+            return QMessageBox.StandardButton.Yes
+
+        monkeypatch.setattr(QMessageBox, "question", fake_question)
+
+        captured = {}
+
+        def fake_info(self_arg, title, message):
+            captured["title"] = title
+            captured["message"] = message
+
+        monkeypatch.setattr(QMessageBox, "information", fake_info)
+
+        # Call apply
+        st.confirm_and_apply_settings()
+
+        assert "{post_title}-{post_id}" in captured["message"]
+        # Folder strategy display uses translate("single_creator_folder")
+        assert translate("single_creator_folder") in captured["message"]
+
+        # Both prompts carry what changed, newer settings included.
+        for prompt in (asked["text"], captured["message"]):
+            assert translate("unique_filenames") in prompt
+            assert translate("option_off") in prompt
+            assert translate("creator_posts_max_attempts") in prompt
+            assert translate("post_data_max_retries") in prompt
+            assert translate("file_download_max_retries") in prompt
+            assert translate("api_request_max_retries") in prompt
+            assert translate("verbose_logging") in prompt
+            assert translate("show_only_found_filetypes") in prompt
+            assert str(st.temp_settings["file_download_max_retries"]) in prompt
+            # Only what changed: untouched settings stay out of the prompt.
+            assert translate("font") not in prompt
+            assert translate("data_directory") not in prompt
+            assert translate("language") not in prompt
+    finally:
+        st.deleteLater()
+
+
+def test_the_prompt_says_when_nothing_changed(monkeypatch, tmp_path, qapp):
+    parent = MockParent()
+    st = SettingsTab(parent)
+    try:
+        # Same value on both sides, so nothing counts as a change.
+        st.settings["base_directory"] = str(tmp_path)
+        st.temp_settings["base_directory"] = str(tmp_path)
+
+        asked = {}
+
+        def fake_question(parent_arg, title, text, *args, **kwargs):
+            asked["text"] = text
+            return QMessageBox.StandardButton.Yes
+
+        monkeypatch.setattr(QMessageBox, "question", fake_question)
+        captured = {}
+
+        def fake_info(self_arg, title, message):
+            captured["message"] = message
+
+        monkeypatch.setattr(QMessageBox, "information", fake_info)
+
+        st.confirm_and_apply_settings()
+
+        assert translate("no_settings_changed") in asked["text"]
+        assert translate("no_settings_changed") in captured["message"]
+        # Not a single value is repeated back.
+        assert translate("font") not in asked["text"]
+        assert translate("save_directory") not in asked["text"]
+    finally:
+        st.deleteLater()
+
+
+def test_settings_tab_uses_the_isolated_store(qapp):
+    from kemonodownloader.kd_settings import SettingsTab
+
+    st = SettingsTab(None)
+    try:
+        file_name = st.qsettings.fileName()
+        assert "kd_settings.ini" in file_name
+        assert "VoxDroid" not in file_name
+
+        st.qsettings.setValue("isolation_sentinel", 1)
+        assert st.qsettings.value("isolation_sentinel", type=int) == 1
+    finally:
+        st.deleteLater()
+
+
+def _real_settings_call_lines(path):
+    """Return the line numbers where *path* builds the real settings store."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    hits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = getattr(func, "id", None) or getattr(func, "attr", None)
+        if name != "QSettings":
+            continue
+        first_args = [
+            arg.value for arg in node.args[:2] if isinstance(arg, ast.Constant)
+        ]
+        if first_args == ["VoxDroid", "KemonoDownloader"]:
+            hits.append(node.lineno)
+    return hits
+
+
+def test_no_test_module_constructs_the_real_settings_store():
+    """Fail if any test binds the real QSettings class directly.
+
+    A module-level ``from PyQt6.QtCore import QSettings`` resolved at import
+    time bypasses the ``isolate_qsettings`` fixture, which is exactly how
+    earlier suite runs emptied the user's Settings page.
+    """
+    offenders = {}
+    for path in pathlib.Path(__file__).resolve().parent.glob("test_*.py"):
+        hits = _real_settings_call_lines(path)
+        if hits:
+            offenders[path.name] = hits
+    assert offenders == {}

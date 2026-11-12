@@ -52,6 +52,7 @@ class TestHashDBStoreAndLookup:
         db.store("abc", "/old.jpg", "hash1", "url1", 100)
         db.store("abc", "/new.jpg", "hash2", "url2", 200)
         entry = db.lookup("abc")
+        assert entry is not None
         assert entry["file_path"] == "/new.jpg"
         assert entry["file_hash"] == "hash2"
         assert entry["file_size"] == 200
@@ -229,6 +230,7 @@ class TestHashDBFileSize:
         db = HashDB(isolated_hash_dir)
         db.store("k1", "/f.jpg", "h1", "u1", 12345)
         entry = db.lookup("k1")
+        assert entry is not None
         assert entry["file_size"] == 12345
 
     def test_file_size_updated_on_replace(self, isolated_hash_dir):
@@ -237,6 +239,7 @@ class TestHashDBFileSize:
         db.store("k1", "/f.jpg", "h1", "u1", 100)
         db.store("k1", "/f.jpg", "h2", "u1", 200)
         entry = db.lookup("k1")
+        assert entry is not None
         assert entry["file_size"] == 200
 
     def test_file_size_in_all_entries(self, isolated_hash_dir):
@@ -260,6 +263,7 @@ class TestHashDBFileSize:
 
         # File is intact
         entry = db.lookup("k1")
+        assert entry is not None
         assert os.path.getsize(str(test_file)) == entry["file_size"]
 
         # Simulate corruption by truncating the file
@@ -325,6 +329,7 @@ class TestHashDBSchemaMigration:
         # New stores should work with file_size
         db.store("new_key", "/new.jpg", "newhash", "https://new.url", 999)
         entry2 = db.lookup("new_key")
+        assert entry2 is not None
         assert entry2["file_size"] == 999
 
 

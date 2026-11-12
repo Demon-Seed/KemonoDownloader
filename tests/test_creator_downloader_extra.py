@@ -259,19 +259,6 @@ def test_get_domain_config():
     assert default_["domain"] == "kemono.cr"
 
 
-def test_get_user_agent_fallback(monkeypatch):
-    # Force a UserAgent error to exercise fallback
-    monkeypatch.setattr(cd, "_user_agent", None)
-
-    class BrokenUA:
-        def __init__(self):
-            raise RuntimeError("nope")
-
-    monkeypatch.setattr(cd, "UserAgent", BrokenUA)
-    ua = cd.get_user_agent()
-    assert ua.startswith("Mozilla/")
-
-
 def test_detect_files_main_attachments_content():
     fpt = cd.FilePreparationThread(
         post_ids=[],
@@ -392,45 +379,6 @@ def test_creator_generate_filename_and_desc_folder(tmp_path, monkeypatch):
     # Desc folder for per_post
     desc = thread.get_desc_folder_for_post(str(tmp_path), "1", "Cool Post")
     assert "1_" in desc
-
-
-def test_download_text_sync_writes_file(tmp_path, monkeypatch):
-    # Prepare a fake session that returns JSON with content
-    class FakeResp:
-        status_code = 200
-
-        def json(self):
-            return {"content": "<p>Hello world</p>"}
-
-    class FakeSession:
-        def get(self, *a, **k):
-            return FakeResp()
-
-    monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: FakeSession())
-
-    service = "kemono"
-    creator_id = "99"
-    other_dir = str(tmp_path / "other2")
-    settings = SimpleNamespace(settings_tab=None)
-    thread = cd.CreatorDownloadThread(
-        service,
-        creator_id,
-        str(tmp_path),
-        ["1"],
-        [],
-        {},
-        None,
-        other_dir,
-        {},
-        settings,
-        max_concurrent=1,
-        download_text=False,
-    )
-
-    post_folder = str(tmp_path / "postfolder")
-    os.makedirs(post_folder, exist_ok=True)
-    thread._download_text_sync("1", post_folder)
-    assert os.path.exists(os.path.join(post_folder, "desc_1.txt"))
 
 
 def test_generate_filename_strategies_and_download_text_dup(tmp_path, monkeypatch):
@@ -756,3 +704,4 @@ def test_get_desc_folder_for_post_respects_strategy(tmp_path, qapp, monkeypatch)
     )
     desc3 = th3.get_desc_folder_for_post(creator_folder, "42", "My Title")
     assert desc3 == os.path.normpath(creator_folder)
+

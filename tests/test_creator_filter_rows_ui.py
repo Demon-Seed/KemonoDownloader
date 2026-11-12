@@ -308,6 +308,9 @@ def test_new_info_buttons_share_the_small_icon_style(qtbot, tmp_path):
 
 def test_fetch_passes_file_count_bounds_and_swaps_them(qtbot, tmp_path, monkeypatch):
     tab = make_tab(qtbot, tmp_path)
+    # Profiles are covered by test_creator_config_profiles.py; here the point
+    # is that the fetch reads whatever the widget actually holds.
+    tab._load_config_for_creator = lambda: None
     instances = _patch_detection_thread(monkeypatch)
     tab.file_count_from_edit.setText("9")
     tab.file_count_to_edit.setText("4")
@@ -325,6 +328,7 @@ def test_fetch_passes_file_count_bounds_and_swaps_them(qtbot, tmp_path, monkeypa
 
 def test_fetch_rejects_junk_file_counts(qtbot, tmp_path, monkeypatch):
     tab = make_tab(qtbot, tmp_path)
+    tab._load_config_for_creator = lambda: None
     instances = _patch_detection_thread(monkeypatch)
     messages = []
     monkeypatch.setattr(

@@ -14,7 +14,7 @@ def test_template_boxes_hold_the_defaults(qapp, monkeypatch):
         assert not hasattr(st, "creator_folder_name_combo")
 
         assert st.creator_filename_input.text() == (
-            "{file_number}_{post_id}_{orig_name}"
+            "{post_id}_{file_number}_{orig_name}"
         )
         assert st.creator_shared_filename_input.text() == (
             "{post_id}_{file_number}_{orig_name}"
@@ -35,14 +35,32 @@ def test_template_boxes_hold_the_defaults(qapp, monkeypatch):
         monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
         st.show_template_help()
 
-        # The dedup guard is an Off/On dropdown, on by default.
-        assert st.creator_unique_filenames_combo.itemText(0) == translate("option_off")
-        assert st.creator_unique_filenames_combo.itemText(1) == translate("option_on")
-        assert bool(st.creator_unique_filenames_combo.currentData()) is True
-        st.creator_unique_filenames_combo.setCurrentIndex(0)
-        assert st.temp_settings["creator_unique_filenames"] is False
-        st.creator_unique_filenames_combo.setCurrentIndex(1)
-        assert st.temp_settings["creator_unique_filenames"] is True
+        # The dedup guard is a four-way dropdown, Both by default.
+        combo = st.creator_unique_filenames_combo
+        assert combo.itemText(0) == translate("option_off")
+        assert combo.itemText(1) == translate("option_on_file")
+        assert combo.itemText(2) == translate("option_on_folder")
+        assert combo.itemText(3) == translate("option_on_both")
+        assert combo.currentData() == "both"
+        combo.setCurrentIndex(0)
+        assert st.temp_settings["creator_unique_filenames"] == "off"
+        combo.setCurrentIndex(1)
+        assert st.temp_settings["creator_unique_filenames"] == "file"
+        combo.setCurrentIndex(2)
+        assert st.temp_settings["creator_unique_filenames"] == "folder"
+        combo.setCurrentIndex(3)
+        assert st.temp_settings["creator_unique_filenames"] == "both"
+
+        # The getters read the applied copy, so they move only on Apply.
+        for mode, file_dedup, folder_dedup in (
+            ("off", False, False),
+            ("file", True, False),
+            ("folder", False, True),
+            ("both", True, True),
+        ):
+            st.settings["creator_unique_filenames"] = mode
+            assert st.get_creator_unique_filenames() is file_dedup
+            assert st.get_creator_folder_dedup() is folder_dedup
     finally:
         st.deleteLater()
 
@@ -67,6 +85,9 @@ def test_template_help_lists_every_placeholder():
     # The separators note stays: both work.
     assert "{post_id}-{orig_name}" in text
     assert "{post_id}_{orig_name}" in text
+    # Zero padding is documented with its worked examples.
+    assert "{file_number:03d}" in text
+    assert "{post_id:0>10}" in text
     # The dupe warning stays; the other row's explanation does not.
     assert "Warning" in text
     assert "In Post Folder" not in text
@@ -110,3 +131,26 @@ def test_invalid_template_falls_back_and_logs(qapp):
         or "1_" in filename
         or "1-image.jpg" in filename
     )
+
+
+def test_folder_name_help_explains_padding():
+    text = translate("folder_name_template_help_text")
+    assert "{post_id:0>10}" in text
+    assert "Zero-pad" in text
+
+
+def test_the_dedup_row_follows_the_folder_name_template(qapp):
+    """The dedup setting is the folder template's safety net, so it sits below."""
+    st = SettingsTab(None)
+    try:
+        grid = st.creator_custom_group.layout()
+        folder_row = grid.getItemPosition(
+            grid.indexOf(st.creator_folder_name_input)
+        )[0]
+        dedup_row = grid.getItemPosition(
+            grid.indexOf(st.creator_unique_filenames_combo)
+        )[0]
+
+        assert dedup_row == folder_row + 1
+    finally:
+        st.deleteLater()

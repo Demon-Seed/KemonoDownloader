@@ -7,6 +7,20 @@ using real HTTP requests to the API endpoints where appropriate.
 import hashlib
 import os
 import sys
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import requests
+from PyQt6.QtGui import QColor, QPixmap
+
+from kemonodownloader import creator_downloader as cd
+from kemonodownloader.creator_downloader import (
+    CreatorDownloadThread,
+    PreviewThread,
+    ThreadSettings,
+    get_session,
+    sanitize_filename,
+)
 
 try:
     from kemonodownloader.creator_downloader import (
@@ -332,3 +346,530 @@ class TestAPIResponseParsing:
         ]
 
         assert len(archives) == 1
+
+
+class FakeResponse:
+    def __init__(self, status_code=200, data=None):
+        self.status_code = status_code
+        self._data = data or {}
+
+    def json(self):
+        return self._data
+
+
+class FakeSession:
+    def __init__(self, responses):
+        # responses is an iterable of FakeResponse objects
+        self._responses = list(responses)
+        self._calls = 0
+
+    def get(self, *args, **kwargs):
+        idx = min(self._calls, len(self._responses) - 1)
+        resp = self._responses[idx]
+        self._calls += 1
+        return resp
+
+
+def test_fetch_and_detect_files_success(monkeypatch):
+    post_payload = {
+        "post": {
+            "file": {"path": "/media/main.jpg", "name": "main.jpg"},
+            "attachments": [{"path": "/att/file.zip", "name": "file.zip"}],
+            "content": '<p><img src="/images/img1.png"></p>',
+        }
+    }
+
+    fake_session = FakeSession([FakeResponse(200, post_payload)])
+    monkeypatch.setattr(cd, "get_session", lambda settings_tab: fake_session)
+
+    settings = SimpleNamespace(post_data_max_retries=1, settings_tab=None)
+
+    class C:
+        def __init__(self, checked=True):
+            self._checked = checked
+
+        def isChecked(self):
+            return self._checked
+
+    ext_checks = {".jpg": C(True), ".png": C(True), ".zip": C(True)}
+
+    fpt = cd.FilePreparationThread(["1"], {}, ext_checks, True, True, True, settings)
+    res = fpt.fetch_and_detect_files("1", "https://kemono.cr/service/user/creator")
+    assert res is not None
+    pid, files = res
+    assert pid == "1"
+    assert any(
+        "main.jpg" in n or n.endswith(".zip") or n.endswith(".png") for n, u in files
+    )
+
+
+def test_fetch_and_detect_files_rate_limit_retry(monkeypatch):
+    # First response is 429, second is 200
+    post_payload = {"post": {"file": {"path": "/media/m.jpg", "name": "m.jpg"}}}
+    fake_session = FakeSession([FakeResponse(429, {}), FakeResponse(200, post_payload)])
+    monkeypatch.setattr(cd, "get_session", lambda settings_tab: fake_session)
+    # Avoid sleeping delays
+    monkeypatch.setattr(cd, "time", SimpleNamespace(sleep=lambda s: None))
+
+    settings = SimpleNamespace(post_data_max_retries=2, settings_tab=None)
+
+    class C:
+        def __init__(self, checked=True):
+            self._checked = checked
+
+        def isChecked(self):
+            return self._checked
+
+    ext_checks = {".jpg": C(True)}
+    fpt = cd.FilePreparationThread(["1"], {}, ext_checks, True, True, True, settings)
+    res = fpt.fetch_and_detect_files("1", "https://kemono.cr/service/user/creator")
+    assert res is not None
+    pid, files = res
+    assert pid == "1"
+    assert files
+
+
+def make_settings_with_strategy(strategy, template=None):
+    settings_tab = SimpleNamespace(
+        get_creator_filename_template=lambda: template,
+        get_creator_folder_strategy=lambda: strategy,
+        get_proxy_settings=lambda: None,
+    )
+    return ThreadSettings(
+        creator_posts_max_attempts=1,
+        post_data_max_retries=1,
+        file_download_max_retries=1,
+        api_request_max_retries=1,
+        simultaneous_downloads=1,
+        settings_tab=settings_tab,
+    )
+
+
+def test_generate_filename_and_folder_templates_and_strategies(tmp_path):
+    download_folder = str(tmp_path / "downloads")
+    other_files_dir = str(tmp_path / "other")
+    os.makedirs(download_folder, exist_ok=True)
+    os.makedirs(other_files_dir, exist_ok=True)
+
+    file_url = "https://kemono.cr/files/origname.png?f=origname.png"
+    files_to_download = [file_url]
+    files_to_posts_map = {file_url: "1"}
+
+    # Per-post strategy with the default templates
+    settings = make_settings_with_strategy("per_post", template=None)
+    thread = CreatorDownloadThread(
+        service="svc",
+        creator_id="creator123",
+        download_folder=download_folder,
+        selected_posts=["1"],
+        files_to_download=files_to_download,
+        files_to_posts_map=files_to_posts_map,
+        console=None,
+        other_files_dir=other_files_dir,
+        post_titles_map={("svc", "creator123", "1"): "My Post"},
+        settings=settings,
+        download_text=False,
+    )
+
+    target_folder, filename = thread.generate_filename_and_folder(
+        file_url,
+        download_folder,
+        0,
+        total_files=1,
+        post_id="1",
+        post_title="My Post",
+        page_number=1,
+    )
+
+    # Default post-folder template: {file_number}_{post_id}_{orig_name}
+    assert filename.endswith("origname.png")
+    assert filename.startswith("1_1_")
+
+    # Expect folder ends with sanitized post title
+    expected_post_folder = f"1_{sanitize_filename('My Post')}"
+    assert os.path.basename(target_folder) == expected_post_folder
+
+    # Single-folder strategy places desc in creator folder
+    settings2 = make_settings_with_strategy("single_folder")
+    thread2 = CreatorDownloadThread(
+        service="svc",
+        creator_id="creator123",
+        download_folder=download_folder,
+        selected_posts=["1"],
+        files_to_download=files_to_download,
+        files_to_posts_map=files_to_posts_map,
+        console=None,
+        other_files_dir=other_files_dir,
+        post_titles_map={("svc", "creator123", "1"): "My Post"},
+        settings=settings2,
+        download_text=False,
+    )
+
+    tfolder2, fname2 = thread2.generate_filename_and_folder(
+        file_url,
+        download_folder,
+        0,
+        total_files=1,
+        post_id="1",
+        post_title="My Post",
+        page_number=1,
+    )
+    # creator folder should be the immediate child of download_folder
+    creator_folder_name = os.path.basename(tfolder2)
+    assert creator_folder_name in (
+        "creator123_creator123",
+        "creator123_Unknown_Creator",
+    )
+
+
+def test_template_fallback_on_error(tmp_path):
+    download_folder = str(tmp_path / "downloads3")
+    other_files_dir = str(tmp_path / "other3")
+    os.makedirs(download_folder, exist_ok=True)
+    os.makedirs(other_files_dir, exist_ok=True)
+
+    file_url = "https://kemono.cr/files/origname.png?f=origname.png"
+    files_to_download = [file_url]
+    files_to_posts_map = {file_url: "42"}
+
+    # Provide a broken template that will raise during formatting
+    settings = make_settings_with_strategy(
+        "per_post", template="{nonexistent}_{post_id}"
+    )
+    thread = CreatorDownloadThread(
+        service="svc",
+        creator_id="creatorX",
+        download_folder=download_folder,
+        selected_posts=["42"],
+        files_to_download=files_to_download,
+        files_to_posts_map=files_to_posts_map,
+        console=None,
+        other_files_dir=other_files_dir,
+        post_titles_map={("svc", "creatorX", "42"): "Title"},
+        settings=settings,
+        download_text=False,
+    )
+
+    tfolder, fname = thread.generate_filename_and_folder(
+        file_url,
+        download_folder,
+        0,
+        total_files=1,
+        post_id="42",
+        post_title="Title",
+        page_number=1,
+    )
+
+    # Fallback should produce filename like '{post_id}_{orig_name}.ext'
+    assert fname.endswith("origname.png")
+    assert "42_" in fname
+
+
+def test_get_session_caching():
+    import kemonodownloader.creator_downloader as cd
+
+    # Ensure thread-local state is clean
+    if hasattr(cd._thread_local, "session"):
+        del cd._thread_local.session
+    s1 = cd.get_session()
+    s2 = cd.get_session()
+    assert s1 is s2
+    # cleanup
+    try:
+        del cd._thread_local.session
+    except Exception:
+        pass
+
+
+def test_get_session_http_and_socks_proxy(tmp_path):
+    from types import SimpleNamespace
+
+    import kemonodownloader.creator_downloader as cd
+
+    # Clean thread-local session state
+    for attr in ("session", "socks_session"):
+        if hasattr(cd._thread_local, attr):
+            try:
+                delattr(cd._thread_local, attr)
+            except Exception:
+                try:
+                    delattr(cd._thread_local, attr)
+                except Exception:
+                    pass
+
+    # HTTP proxy should be applied to the per-thread session
+    http_settings = SimpleNamespace(
+        get_proxy_settings=lambda: {"http": "http://proxy:8080"}
+    )
+    s_http = cd.get_session(http_settings)
+    assert isinstance(s_http, requests.Session)
+    assert s_http.proxies.get("http") == "http://proxy:8080"
+
+    # Clean and test socks proxy path returns a separate socks_session
+    try:
+        del cd._thread_local.session
+    except Exception:
+        pass
+    if hasattr(cd._thread_local, "socks_session"):
+        try:
+            del cd._thread_local.socks_session
+        except Exception:
+            pass
+
+    socks_settings = SimpleNamespace(
+        get_proxy_settings=lambda: {"http": "socks5://localhost:1080"}
+    )
+    s_socks = cd.get_session(socks_settings)
+    # socks_session should be created on thread-local and returned
+    assert hasattr(cd._thread_local, "socks_session")
+    assert s_socks is cd._thread_local.socks_session
+    assert str(s_socks.proxies.get("http")).startswith("socks5://")
+
+    # cleanup
+    for attr in ("session", "socks_session"):
+        if hasattr(cd._thread_local, attr):
+            try:
+                delattr(cd._thread_local, attr)
+            except Exception:
+                try:
+                    delattr(cd._thread_local, attr)
+                except Exception:
+                    pass
+
+
+class DummySignal:
+    def __init__(self):
+        self.emitted = False
+        self.last_args = None
+
+    def emit(self, *args):
+        self.emitted = True
+        self.last_args = args
+
+
+def test_preview_thread_network_success(tmp_path, monkeypatch):
+    # Create a valid PNG by using QPixmap -> QBuffer to ensure valid image bytes
+    from PyQt6.QtCore import QBuffer, QIODevice
+    from PyQt6.QtGui import QPixmap
+
+    pix = QPixmap(1, 1)
+    pix.fill()
+    buf = QBuffer()
+    buf.open(QIODevice.OpenModeFlag.ReadWrite)
+    pix.save(buf, "PNG")
+    png_bytes = bytes(buf.data())
+
+    class FakeResp:
+        def __init__(self):
+            self.status_code = 200
+            self.headers = {"content-length": str(len(png_bytes))}
+
+        def raise_for_status(self):
+            return
+
+        def iter_content(self, chunk_size=8192):
+            yield png_bytes
+
+        def close(self):
+            return
+
+    class FakeSession:
+        def get(self, url, headers=None, stream=None):
+            return FakeResp()
+
+    monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: FakeSession())
+
+    url = "https://kemono.cr/uploads/1.png"
+    cache_dir = str(tmp_path / "cache")
+    thread = cd.PreviewThread(url, cache_dir)
+    sig = DummySignal()
+    thread.preview_ready = sig
+    thread.run()
+
+    # Ensure preview_ready emitted and cache file exists
+    assert sig.emitted is True
+    cache_key = hashlib.md5(url.encode()).hexdigest() + os.path.splitext(url)[1]
+    assert os.path.exists(os.path.join(cache_dir, cache_key))
+
+
+def test_post_detection_thread_invalid_url_emits_error():
+    class DummySettings:
+        creator_posts_max_attempts = 1
+        settings_tab = None
+
+    # URL missing /user/ should trigger invalid_url_format
+    t = cd.PostDetectionThread("https://kemono.cr/bad/path", {}, DummySettings())
+    err = DummySignal()
+    t.error = err
+    t.run()
+    assert err.emitted is True
+
+
+def test_template_bad_placeholder_fallsback_and_logs(tmp_path, qapp):
+    """If the user-provided filename template raises during formatting,
+    the code should log a warning and fall back to a safe default."""
+    file_url = "https://kemono.cr/files/foo.png"
+    settings_tab = SimpleNamespace(
+        get_creator_filename_template=lambda: "{post_id}_{nonexistent}",
+        get_creator_folder_strategy=lambda: "per_post",
+    )
+    settings = SimpleNamespace(settings_tab=settings_tab)
+
+    post_titles = {("svc", "creator123", "1"): "My Post"}
+
+    th = cd.CreatorDownloadThread(
+        service="svc",
+        creator_id="creator123",
+        download_folder=str(tmp_path / "dl"),
+        selected_posts=["1"],
+        files_to_download=[file_url],
+        files_to_posts_map={file_url: "1"},
+        console=None,
+        other_files_dir=str(tmp_path / "other"),
+        post_titles_map=post_titles,
+        settings=settings,
+    )
+
+    # Capture log emits
+    th.log = SimpleNamespace(emit=MagicMock())
+
+    _target_folder, filename = th.generate_filename_and_folder(
+        file_url, str(tmp_path / "dl"), 0, 1, "1", "My Post", page_number=1
+    )
+
+    # Should fall back to post_id + original name (orig_name from URL 'foo')
+    assert filename.endswith("1_foo.png")
+    # Ensure a warning was emitted about template error
+    assert th.log.emit.called
+
+
+def test_template_format_exception_falls_back_without_a_prefix(tmp_path, qapp):
+    """A broken template falls back to post id + original name.
+
+    The fallback carries no number prefix any more: numbering is part of the
+    template now, so there is nothing to prepend.
+    """
+    file_url = "https://kemono.cr/files/bar.jpg"
+    settings_tab = SimpleNamespace(
+        get_creator_filename_template=lambda: "{missing_field}",
+        get_creator_folder_strategy=lambda: "per_post",
+    )
+    settings = SimpleNamespace(settings_tab=settings_tab)
+
+    post_titles = {("svc", "creatorX", "42"): "Some Post"}
+
+    th = cd.CreatorDownloadThread(
+        service="svc",
+        creator_id="creatorX",
+        download_folder=str(tmp_path / "dl2"),
+        selected_posts=["42"],
+        files_to_download=[file_url],
+        files_to_posts_map={file_url: "42"},
+        console=None,
+        other_files_dir=str(tmp_path / "other2"),
+        post_titles_map=post_titles,
+        settings=settings,
+    )
+
+    th.log = SimpleNamespace(emit=MagicMock())
+
+    _, fname1 = th.generate_filename_and_folder(
+        file_url, str(tmp_path / "dl2"), 0, 1, "42", "Some Post", page_number=1
+    )
+    assert fname1 == "42_bar.jpg"
+    assert th.log.emit.called
+
+
+def test_get_session_http_proxy_updates_proxies():
+    settings_tab = SimpleNamespace(
+        get_proxy_settings=lambda: {
+            "http": "http://127.0.0.1:3128",
+            "https": "http://127.0.0.1:3128",
+        }
+    )
+    session = get_session(settings_tab)
+    assert session is not None
+    assert session.proxies.get("http") == "http://127.0.0.1:3128"
+
+
+def test_get_session_socks_proxy_returns_socks_session():
+    settings_tab = SimpleNamespace(
+        get_proxy_settings=lambda: {"http": "socks5h://127.0.0.1:9050"}
+    )
+    session = get_session(settings_tab)
+    assert session is not None
+    # Socks session should have proxies updated
+    assert session.proxies.get("http") == "socks5h://127.0.0.1:9050"
+
+
+class FakeResponse__from_preview_thread:
+    def __init__(self, chunks):
+        self._chunks = chunks
+        self.status_code = 200
+        self.headers = {"content-length": str(sum(len(c) for c in chunks))}
+
+    def iter_content(self, chunk_size=8192):
+        for c in self._chunks:
+            yield c
+
+    def raise_for_status(self):
+        return None
+
+    def close(self):
+        return None
+
+
+class FakeSession__from_preview_thread:
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def get(self, *args, **kwargs):
+        return FakeResponse__from_preview_thread(self._chunks)
+
+
+def test_preview_thread_uses_cache(qtbot, tmp_path):
+    url = "https://example.com/img.png"
+    cache_dir = str(tmp_path / "cachep")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # Create a valid small PNG using QPixmap to avoid embedding bytes
+    cache_key = hashlib.md5(url.encode()).hexdigest() + ".png"
+    cache_path = os.path.join(cache_dir, cache_key)
+    pix = QPixmap(4, 4)
+    pix.fill(QColor("white"))
+    pix.save(cache_path)
+
+    called = []
+
+    def on_preview(u, pix):
+        called.append((u, isinstance(pix, QPixmap)))
+
+    thread = PreviewThread(url, cache_dir, settings_tab=None)
+    thread.preview_ready.connect(on_preview)
+    thread.run()
+
+    assert called and called[0][0] == url and called[0][1] is True
+
+
+def test_preview_thread_emits_error_for_invalid_data(qtbot, tmp_path, monkeypatch):
+    url = "https://example.com/bad.png"
+    cache_dir = str(tmp_path / "cacheb")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # Invalid image bytes
+    chunks = [b"notanimage"]
+    monkeypatch.setattr(
+        "kemonodownloader.creator_downloader.get_session",
+        lambda settings_tab=None: FakeSession__from_preview_thread(chunks),
+    )
+
+    errors = []
+
+    def on_error(msg):
+        errors.append(msg)
+
+    thread = PreviewThread(url, cache_dir, settings_tab=None)
+    thread.error.connect(on_error)
+    thread.run()
+
+    assert errors

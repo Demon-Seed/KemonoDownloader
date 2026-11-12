@@ -6,6 +6,7 @@
     "tests"
   ],
   "reportMissingImports": false,
+  "reportMissingModuleSource": false,
   "reportMissingTypeStubs": false,
   "reportOptionalMemberAccess": false,
   "reportAttributeAccessIssue": false,

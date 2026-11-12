@@ -5,8 +5,6 @@ document and threw the view back to the top on every tick. It now appends only
 the lines it has not drawn yet, so the scroll position survives.
 """
 
-from types import SimpleNamespace
-
 from PyQt6.QtWidgets import QWidget
 
 from kemonodownloader.creator_downloader import LogsWindow
@@ -107,22 +105,3 @@ def test_each_update_only_draws_the_new_lines(qtbot):
 
     window.close()
 
-
-def test_legacy_parent_without_a_store_still_works(qtbot):
-    class LegacyParent(QWidget):
-        """A parent that only exposes the old ``creator_console``."""
-
-        def __init__(self):
-            super().__init__()
-            self.creator_console = SimpleNamespace(
-                toHtml=lambda: "<span style='color:green'>legacy line</span>"
-            )
-
-    window = LogsWindow(LegacyParent())
-    qtbot.addWidget(window)
-
-    window.needs_update = True
-    window._do_update()
-
-    assert "legacy line" in window.logs_display.toPlainText()
-    window.deleteLater()

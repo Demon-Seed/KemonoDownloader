@@ -435,6 +435,9 @@ def test_removing_the_last_creator_forgets_its_types(qtbot, tmp_path, monkeypatc
     tab = make_tab(qtbot, tmp_path)
     url = "https://kemono.cr/patreon/user/1"
     tab.creator_queue = [(url, True)]
+    # Removing the creator you are viewing is what drops the view (and with it
+    # the filetypes collected for it).
+    tab.current_creator_url = url
     tab._found_type_counts = {".psd": 1}
     monkeypatch.setattr(tab, "append_log_to_console", lambda *a, **k: None)
     monkeypatch.setattr(tab, "filter_items", lambda *a, **k: None)
@@ -512,6 +515,8 @@ def test_detection_receives_the_required_filetypes(qtbot, tmp_path, monkeypatch)
     monkeypatch.setattr(cd, "FilterThread", FakeFilterThread)
     monkeypatch.setattr(cd, "PostDetectionThread", FakeDetectionThread)
     tab = make_tab(qtbot, tmp_path)
+    # A creator load re-applies a saved profile; that is covered elsewhere.
+    tab._load_config_for_creator = lambda: None
     tab.creator_ext_checks[".psd"].setChecked(True)
     tab.filter_no_selected_filetypes_check.setChecked(True)
 

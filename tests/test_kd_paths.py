@@ -1,9 +1,8 @@
-"""The app keeps its own working files away from the user's posts.
+"""Where the app keeps its own working data.
 
-Cache/ and Other Files/ hold thumbnails and the two SQLite databases. They must
-not live inside the Save Directory: pointing that at a library has to leave the
-folder holding only saved posts, and repointing it must not lose the
-duplicate/naming memory.
+Cache/ and Other Files/ hold thumbnails and the SQLite databases. They live in
+``extras`` next to the application - never inside the Save Directory, so a
+library folder only ever holds saved posts - and there is no setting for them.
 """
 
 import os
@@ -14,75 +13,105 @@ import pytest
 from kemonodownloader import kd_paths
 
 
-def test_windows_default_is_appdata(monkeypatch):
-    monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setenv("APPDATA", r"C:\Users\someone\AppData\Roaming")
+@pytest.fixture(autouse=True)
+def _fresh_resolution(monkeypatch, tmp_path):
+    """Every test resolves from scratch, inside the sandbox.
 
-    assert kd_paths.default_data_directory() == os.path.join(
-        r"C:\Users\someone\AppData\Roaming", "Kemono Downloader"
+    The application root is redirected too: otherwise the writability probe
+    would create the real ``extras`` folder in the checkout.
+    """
+    monkeypatch.delenv(kd_paths.DATA_DIR_ENV, raising=False)
+    monkeypatch.setattr(
+        kd_paths, "app_root_directory", lambda: str(tmp_path / "app")
+    )
+    kd_paths.reset_resolution()
+    yield
+    kd_paths.reset_resolution()
+
+
+def test_the_data_folder_sits_next_to_the_application():
+    expected = os.path.join(kd_paths.app_root_directory(), "extras")
+
+    assert kd_paths.default_data_directory() == expected
+    assert os.path.basename(kd_paths.default_data_directory()) == "extras"
+
+
+def test_a_read_only_install_falls_back_to_the_per_user_folder(monkeypatch):
+    """Program Files is not writable for standard users; the app still runs."""
+    monkeypatch.setattr(kd_paths, "_is_writable", lambda path: False)
+
+    assert kd_paths.default_data_directory() == kd_paths.per_user_directory()
+
+
+def test_per_user_directory_platforms(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
+    assert kd_paths.per_user_directory() == os.path.join(
+        str(tmp_path / "AppData"), "Kemono Downloader"
     )
 
-
-def test_macos_default_is_application_support(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
-
-    # The path is written with forward slashes, as macOS uses.
-    assert (
-        kd_paths.default_data_directory().replace("\\", "/")
-        .endswith("Library/Application Support/Kemono Downloader")
+    assert kd_paths.per_user_directory().replace("\\", "/").endswith(
+        "Library/Application Support/Kemono Downloader"
     )
 
-
-def test_linux_default_is_under_xdg_data_home(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setenv("XDG_DATA_HOME", "/home/user/.local/share")
-
-    assert kd_paths.default_data_directory() == os.path.join(
-        "/home/user/.local/share", "Kemono Downloader"
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    assert kd_paths.per_user_directory() == os.path.join(
+        str(tmp_path / "xdg"), "Kemono Downloader"
     )
 
 
-def test_configured_directory_wins_over_the_default(monkeypatch):
-    monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setenv("APPDATA", r"C:\Users\someone\AppData\Roaming")
-    monkeypatch.delenv(kd_paths.DATA_DIR_ENV, raising=False)
+def test_a_configured_path_is_ignored(monkeypatch, tmp_path):
+    """The old setting cannot move the data any more."""
+    monkeypatch.setattr(kd_paths, "_is_writable", lambda path: True)
 
-    assert kd_paths.data_directory("/media/library/appdata") == "/media/library/appdata"
+    assert kd_paths.data_directory(str(tmp_path / "elsewhere")) == (
+        kd_paths.default_data_directory()
+    )
 
 
-def test_environment_override_wins_over_the_setting(monkeypatch):
+def test_the_environment_override_still_wins(monkeypatch, tmp_path):
     """Tests rely on this to stay out of the real profile."""
-    monkeypatch.setenv(kd_paths.DATA_DIR_ENV, "/tmp/isolated")
+    monkeypatch.setenv(kd_paths.DATA_DIR_ENV, str(tmp_path / "isolated"))
 
-    assert kd_paths.data_directory("/media/library/appdata") == "/tmp/isolated"
-
-
-def test_a_blank_setting_falls_back_to_the_default(monkeypatch):
-    monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setenv("APPDATA", r"C:\Users\someone\AppData\Roaming")
-    monkeypatch.delenv(kd_paths.DATA_DIR_ENV, raising=False)
-
-    assert kd_paths.data_directory("") == kd_paths.default_data_directory()
-    assert kd_paths.data_directory(None) == kd_paths.default_data_directory()
+    assert kd_paths.data_directory(str(tmp_path / "elsewhere")) == str(
+        tmp_path / "isolated"
+    )
 
 
-def test_cache_and_other_files_sit_inside_the_data_directory(monkeypatch):
-    monkeypatch.delenv(kd_paths.DATA_DIR_ENV, raising=False)
+def test_cache_and_other_files_sit_inside_the_data_directory():
+    resolved = kd_paths.data_directory()
 
-    assert kd_paths.cache_dir("/data") == os.path.join("/data", "Cache")
-    assert kd_paths.other_files_dir("/data") == os.path.join("/data", "Other Files")
-    # Never inside the Save Directory: the two settings are independent.
-    assert not kd_paths.cache_dir("/data").startswith("/posts")
-    assert not kd_paths.other_files_dir("/data").startswith("/posts")
+    assert kd_paths.cache_dir() == os.path.join(resolved, "Cache")
+    assert kd_paths.other_files_dir() == os.path.join(resolved, "Other Files")
 
 
-@pytest.mark.parametrize("name", ["Cache", "Other Files"])
-def test_data_directories_are_named_as_before(monkeypatch, name):
-    monkeypatch.delenv(kd_paths.DATA_DIR_ENV, raising=False)
+def test_migrate_copies_the_old_profile_once(monkeypatch, tmp_path):
+    """Moving the folder must not mean losing the databases."""
+    legacy = tmp_path / "legacy"
+    (legacy / "Other Files").mkdir(parents=True)
+    (legacy / "Other Files" / "file_hashes.db").write_bytes(b"hash-db")
+    target = tmp_path / "extras"
+    target.mkdir()
 
-    resolved = {
-        "Cache": kd_paths.cache_dir("/data"),
-        "Other Files": kd_paths.other_files_dir("/data"),
-    }[name]
+    assert kd_paths.migrate_legacy_data(str(target), legacy_directory=str(legacy)) is True
+    copied = target / "Other Files" / "file_hashes.db"
+    assert copied.read_bytes() == b"hash-db"
+    # The original stays where it was: this copies, it never moves.
+    assert (legacy / "Other Files" / "file_hashes.db").exists()
 
-    assert os.path.basename(resolved) == name
+    # Second run is a no-op.
+    assert kd_paths.migrate_legacy_data(str(target), legacy_directory=str(legacy)) is False
+
+
+def test_migrate_leaves_an_existing_target_alone(monkeypatch, tmp_path):
+    legacy = tmp_path / "legacy"
+    (legacy / "Other Files").mkdir(parents=True)
+    (legacy / "Other Files" / "file_hashes.db").write_bytes(b"old")
+    target = tmp_path / "extras"
+    (target / "Other Files").mkdir(parents=True)
+    (target / "Other Files" / "file_hashes.db").write_bytes(b"new")
+
+    assert kd_paths.migrate_legacy_data(str(target), legacy_directory=str(legacy)) is False
+    assert (target / "Other Files" / "file_hashes.db").read_bytes() == b"new"

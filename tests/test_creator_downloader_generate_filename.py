@@ -31,21 +31,6 @@ def test_sanitize_filename_various():
     assert cd.sanitize_filename("  spaced name  ") == "spaced_name"
 
 
-def test_get_user_agent_fallback(monkeypatch):
-    orig_UserAgent = cd.UserAgent
-
-    class BadUA:
-        def __init__(self):
-            raise Exception("no UA")
-
-    monkeypatch.setattr(cd, "UserAgent", BadUA)
-    cd._user_agent = None
-    ua = cd.get_user_agent()
-    assert "Mozilla/5.0" in ua
-    # restore (monkeypatch will revert automatically, but be explicit)
-    monkeypatch.setattr(cd, "UserAgent", orig_UserAgent)
-
-
 def test_generate_filename_and_folder(tmp_path):
     settings_tab = DummySettingsTab(
         template="{post_id}_{orig_name}", strategy="per_post"
@@ -676,3 +661,4 @@ def test_download_file_retries_and_succeeds(monkeypatch, tmp_path):
     assert entry["file_path"] == full_path
     # file_completed True should have been emitted
     assert any(True in args for (_sig, args) in calls)
+

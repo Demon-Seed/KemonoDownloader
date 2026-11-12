@@ -64,20 +64,8 @@ def test_get_proxy_settings_custom_and_tor(monkeypatch, tmp_path):
         importlib.util, "find_spec", lambda name: object() if name == "socks" else None
     )
     res2 = ks.SettingsTab.get_proxy_settings(fake_self2)
+    assert res2 is not None
     assert res2["http"].startswith("socks5h://") or res2["http"].startswith("http://")
-
-
-def test_get_user_agent_fallback(monkeypatch):
-    # Force UserAgent to raise to exercise fallback
-    class BadUA:
-        def __init__(self):
-            raise Exception("no ua")
-
-    monkeypatch.setattr(cd, "UserAgent", BadUA)
-    # Reset cached agent
-    monkeypatch.setattr(cd, "_user_agent", None)
-    ua = cd.get_user_agent()
-    assert isinstance(ua, str) and "Mozilla" in ua
 
 
 def test_get_domain_config_coomer_and_default():
@@ -85,3 +73,4 @@ def test_get_domain_config_coomer_and_default():
     assert co["domain"] == "coomer.st"
     km = cd.get_domain_config("https://kemono.cr/some/path")
     assert km["domain"] == "kemono.cr"
+

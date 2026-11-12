@@ -11,7 +11,13 @@ from kemonodownloader.creator_downloader import (
 )
 
 
+def log_text(tab):
+    """Return the tab's log lines as plain text (there is no console)."""
+    return "\n".join(message for message, _colour in tab.log_lines_from(0))
+
+
 class _FakeParent:
+
     def __init__(self, base_path):
         self.cache_folder = os.path.join(base_path, "cache")
         self.other_files_folder = os.path.join(base_path, "other")
@@ -30,18 +36,6 @@ def test_create_thread_settings_defaults(tmp_path):
     assert ts.settings_tab is None
 
 
-def test_category_checks_not_locked_after_fast_mode_removal(tmp_path):
-    parent = _FakeParent(str(tmp_path))
-    tab = CreatorDownloaderTab(parent)
-
-    # Fast Mode was removed from the Creator tab, so the download category
-    # checkboxes are never force-disabled.
-    assert not hasattr(tab, "toggle_fast_mode")
-    assert tab.creator_main_check.isEnabled()
-    assert tab.creator_attachments_check.isEnabled()
-    assert tab.creator_content_check.isEnabled()
-
-
 def test_add_multiple_creators_to_queue_and_duplicates_and_invalid(tmp_path):
     parent = _FakeParent(str(tmp_path))
     tab = CreatorDownloaderTab(parent)
@@ -57,8 +51,7 @@ def test_add_multiple_creators_to_queue_and_duplicates_and_invalid(tmp_path):
     # Input should be cleared after successful add
     assert tab.creator_multi_url_input.toPlainText() == ""
     # Summary message should be logged (open the minimised log panel first)
-    tab.set_log_panel_visible(True)
-    assert "Added 1 link(s) to queue" in tab.creator_console.toPlainText()
+    assert "Added 1 link(s) to queue" in log_text(tab)
 
 
 def test_create_remove_handler_prompts_and_removes(monkeypatch, tmp_path):

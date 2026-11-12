@@ -11,7 +11,7 @@ import threading
 import time
 from datetime import datetime
 from typing import NamedTuple, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import qtawesome as qta
 import requests
@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
 )
 from requests.adapters import HTTPAdapter  # type: ignore[import]
 
+from kemonodownloader.creator_config import CreatorConfigStore
 from kemonodownloader.domain_config import (
     clean_file_url,
     file_host_headers,
@@ -55,7 +56,12 @@ from kemonodownloader.download_history import (
 )
 from kemonodownloader.hash_db import HashDB
 from kemonodownloader.kd_language import translate
-from kemonodownloader.retry_policy import countdown_seconds, is_terminal_error
+from kemonodownloader.retry_policy import (
+    api_retry_delay,
+    countdown_seconds,
+    is_terminal_error,
+    is_terminal_status,
+)
 
 
 def _log_line_html(message, color):
@@ -89,12 +95,14 @@ LOG_LEVEL_COLORS = {
 LOG_DEFAULT_COLOR = "#D7E1F0"
 
 
-def get_post_published_date(post):
-    """Return the post's original publish date (NOT the import/scrape date)
-    as a `datetime.date`, or None if it can't be determined. Checks the
-    common field names used by the API for the original post date, and
-    deliberately ignores 'added'/'import*' style fields which represent
-    when the post was scraped/imported rather than when it was posted.
+def _post_published_datetime(post):
+    """Return the post's own publish datetime, or None.
+
+    Shared by the ``{post_date}`` and ``{post_time}`` placeholders so the two
+    can never disagree about a post. Checks the common field names used by the
+    API for the original post date, and deliberately ignores 'added' /
+    'import*' style fields, which represent when the post was scraped rather
+    than when it was posted.
     """
     if not isinstance(post, dict):
         return None
@@ -106,13 +114,37 @@ def get_post_published_date(post):
             text = str(raw).strip()
             if text.endswith("Z"):
                 text = text[:-1] + "+00:00"
-            return datetime.fromisoformat(text).date()
+            return datetime.fromisoformat(text)
         except Exception:
             try:
-                return datetime.strptime(str(raw)[:10], "%Y-%m-%d").date()
+                return datetime.strptime(str(raw)[:10], "%Y-%m-%d")
             except Exception:
                 continue
     return None
+
+
+def get_post_published_date(post):
+    """Return the post's original publish date (NOT the import/scrape date)
+    as a `datetime.date`, or None if it can't be determined.
+    """
+    published = _post_published_datetime(post)
+    return published.date() if published is not None else None
+
+
+def get_post_published_time(post):
+    """Return the post's own publish time as "HHMM" (zero padded), or "".
+
+    Kept apart from the date on purpose: ``{post_date}`` and ``{post_time}``
+    are separate placeholders, so the template decides how they join
+    (``{post_date}_{post_time}`` or ``{post_date}{post_time}``). Minute
+    precision is enough to order two posts published on the same day. A
+    payload that only carries a date gives "0000", which keeps the field's
+    width instead of shortening the name.
+    """
+    published = _post_published_datetime(post)
+    if published is None:
+        return ""
+    return published.strftime("%H%M")
 
 
 def _hash_file(path):
@@ -169,6 +201,51 @@ def normalize_extension(ext):
     """
     ext = str(ext or "").strip().lower()
     return ".jpg" if ext == ".jpeg" else ext
+
+
+def detect_extension(name_or_url):
+    """The extension a file is filtered and counted as, from a name or URL.
+
+    One helper for every caller: the fetch used to pull content-image
+    extensions straight out of the URL (query string and all), so
+    ``.../x.jpg?f=x.jpg`` counted as ``.jpg?f=x.jpg``, never matched a ticked
+    type, and the image was silently dropped even though the post filter had
+    counted it.
+    """
+    return normalize_extension(file_extension(name_or_url))
+
+
+# Characters that would end a ``?f=`` value or change the query's meaning.
+_QUERY_VALUE_BREAKERS = frozenset("&#+?=%")
+
+
+def filename_query_value(name):
+    """Encode a file name for use as a ``?f=`` value.
+
+    Only the characters that would otherwise break the query are escaped.
+    Everything else is left byte-identical on purpose: the URL is the hash
+    database's identity for a file, so re-encoding a name that already worked
+    would make every existing copy look new and download it again.
+    """
+    return "".join(
+        quote(char, safe="") if char in _QUERY_VALUE_BREAKERS else char
+        for char in str(name or "")
+    )
+
+
+def filename_from_query(url):
+    """The decoded ``f=`` value of *url*, or "" when the URL has none.
+
+    A real query parameter (``?f=name`` / ``&f=name``) wins; a bare ``f=`` in
+    the path is still accepted, which is the shape some callers and tests
+    build. The value stops at ``&`` and is percent-decoded, so a name that
+    contains ``&`` or ``f=`` no longer truncates or keeps ``%20``.
+    """
+    text = str(url or "")
+    match = re.search(r"[?&]f=([^&]*)", text) or re.search(r"f=([^&]*)", text)
+    if not match:
+        return ""
+    return unquote(match.group(1))
 
 
 def parse_filter_count(text):
@@ -494,16 +571,43 @@ def file_count_out_of_range(facts, filters):
     "Keep Archives" lets a post holding a ZIP/7Z/RAR bypass the range
     entirely, so archive posts are never filtered out.
     """
-    if not filters.file_count_min and not filters.file_count_max:
+    if filters.file_count_min is None and filters.file_count_max is None:
         return False
     if filters.keep_compressed and facts.get("has_compressed"):
         return False
     count = facts.get("file_count", 0)
-    if filters.file_count_min and count < filters.file_count_min:
+    if filters.file_count_min is not None and count < filters.file_count_min:
         return True
-    if filters.file_count_max and count > filters.file_count_max:
+    if filters.file_count_max is not None and count > filters.file_count_max:
         return True
     return False
+
+
+def _thread_post_file_count(thread, post_id):
+    """How many files the post has in this run, for {post_file_count}.
+
+    The tab decides the number once and hands it over (:attr:`post_file_counts`).
+    Falling back to the run's list keeps older callers working - but on a retry
+    that list holds only the failed files, so the stored count is what keeps
+    the placeholder (and the skip-post-folder rule) honest.
+    """
+    stored = (getattr(thread, "post_file_counts", None) or {}).get(post_id)
+    if stored:
+        return stored
+    return len((getattr(thread, "post_files_map", None) or {}).get(post_id, []))
+
+
+def _thread_run_files(thread):
+    """The run's file list as a set, built once (it is queried per file).
+
+    Built lazily rather than in ``__init__`` so a caller that fills
+    ``files_to_download`` after construction still gets the right set.
+    """
+    cached = getattr(thread, "_files_to_download_set", None)
+    if cached is None:
+        cached = set(getattr(thread, "files_to_download", None) or ())
+        thread._files_to_download_set = cached
+    return cached
 
 
 def filetypes_out_of_scope(facts, filters):
@@ -691,6 +795,15 @@ class _RetryableDownloadError(Exception):
     """Raised for download failures (e.g. size mismatch) that should go
     through the normal retry/backoff path in download_file(), rather than
     being treated as a fatal, non-retryable error."""
+
+
+class _Cancelled(Exception):
+    """Raised inside a worker when the user cancelled the run.
+
+    A distinct type so a cancelled transfer is not reported as an unexpected
+    failure and does not land in ``failed_files`` (which feeds Retry Failed
+    Downloads) - retrying what the user deliberately stopped is noise.
+    """
 
 
 HEADERS = None  # Built lazily via get_headers()
@@ -1292,10 +1405,12 @@ class PostDetectionThread(QThread):
 
         attempt = 1
         while attempt <= max_attempts and self.is_running:
-            # Construct query string suffix
+            # Construct query string suffix. The search term is re-encoded:
+            # parse_qs already decoded it, so pasting it back raw broke on
+            # names containing &, #, + or %.
             query_suffix = f"?o={offset}"
             if search_query:
-                query_suffix += f"&q={search_query}"
+                query_suffix += "&" + urlencode({"q": search_query})
 
             alternative_urls = [
                 f"{self.domain_config['api_base']}/{service}/user/{creator_id}/posts{query_suffix}",  # Try with /posts suffix
@@ -1307,7 +1422,7 @@ class PostDetectionThread(QThread):
             # For 4th option in original code:
             alt_suffix_4 = f"?offset={offset}&limit={page_size}"
             if search_query:
-                alt_suffix_4 += f"&q={search_query}"
+                alt_suffix_4 += "&" + urlencode({"q": search_query})
             alternative_urls.append(f"{base_api_url}{alt_suffix_4}")
 
             success = False
@@ -1984,9 +2099,10 @@ class FilePreparationThread(QThread):
         )
 
         def get_effective_extension(file_path, file_name):
-            name_ext = os.path.splitext(file_name)[1].lower()
-            path_ext = os.path.splitext(file_path)[1].lower()
-            return name_ext if name_ext else path_ext
+            # The name wins over the path, and both are normalised: the
+            # filter, the tally and the grid have to agree on a type.
+            name_ext = detect_extension(file_name)
+            return name_ext if name_ext else detect_extension(file_path)
 
         # Main file detection
         main_file = post.get("file")
@@ -2000,7 +2116,7 @@ class FilePreparationThread(QThread):
             file_ext = get_effective_extension(file_path, file_name)
             file_url = clean_file_url(file_path, domain_config)
             if "f=" not in file_url and file_name:
-                file_url += f"?f={file_name}"
+                file_url += "?f=" + filename_query_value(file_name)
             self.log.emit(
                 translate(
                     "log_debug", translate("checking_main_file", file_name, file_ext)
@@ -2039,7 +2155,7 @@ class FilePreparationThread(QThread):
                     )
                     attachment_url = clean_file_url(attachment_path, domain_config)
                     if "f=" not in attachment_url and attachment_name:
-                        attachment_url += f"?f={attachment_name}"
+                        attachment_url += "?f=" + filename_query_value(attachment_name)
                     self.log.emit(
                         translate(
                             "log_debug",
@@ -2086,8 +2202,14 @@ class FilePreparationThread(QThread):
             soup = BeautifulSoup(post["content"], "html.parser")
             for img in soup.select("img[src]"):
                 img_url = clean_file_url(str(img.get("src")), domain_config)
-                img_ext = os.path.splitext(img_url)[1].lower()
-                img_name = os.path.basename(img_url)
+                # Extension and name come from the path only: a query string
+                # ("?f=x.jpg") used to become part of the extension, so the
+                # image never matched a ticked type and was dropped, and the
+                # query leaked into the name.
+                img_ext = detect_extension(img_url)
+                img_name = os.path.basename(urlparse(img_url).path) or os.path.basename(
+                    img_url.split("?")[0]
+                )
                 self.log.emit(
                     translate(
                         "log_debug",
@@ -2195,11 +2317,13 @@ class FilePreparationThread(QThread):
                             )
                         delay = countdown_seconds(attempt, retry_delay_seconds)
                         for i in range(delay, 0, -1):
+                            if not self.is_running:
+                                return None
                             self.log.emit(
                                 translate("log_info", translate("trying_again_in", i)),
                                 "INFO",
                             )
-                            time.sleep(1)
+                            self._interruptible_sleep(1)
                         continue
                     self.log.emit(
                         translate(
@@ -2256,10 +2380,40 @@ class FilePreparationThread(QThread):
                 )
                 delay = countdown_seconds(attempt, retry_delay_seconds)
                 for i in range(delay, 0, -1):
+                    if not self.is_running:
+                        return None
                     self.log.emit(
                         translate("log_info", translate("trying_again_in", i)), "INFO"
                     )
-                    time.sleep(1)
+                    self._interruptible_sleep(1)
+
+    def _interruptible_sleep(self, seconds):
+        """Sleep *seconds*, waking early when the run is stopped.
+
+        A flat ``time.sleep`` here meant Cancel had to wait out every retry
+        countdown before the worker noticed, and the preparation phase could
+        outlive the wait the tab gave its workers.
+        """
+        remaining = float(seconds or 0)
+        while remaining > 0 and self.is_running:
+            step = min(remaining, 0.2)
+            time.sleep(step)
+            remaining -= step
+
+    def _worker_wait_budget(self):
+        """How long to wait for one preparation worker to finish.
+
+        A worker may be sleeping through per-post retry countdowns, so the
+        wait scales with the retry budget. The old single 30 s deadline was
+        shorter than one slow post's countdowns, and whatever stragglers had
+        not queued yet was then dropped with nothing but a warning.
+        """
+        try:
+            retries = int(getattr(self.settings, "post_data_max_retries", 1) or 1)
+        except (TypeError, ValueError):
+            retries = 1
+        # Each retry can spend up to COUNTDOWN_MAX_SECONDS in its countdown.
+        return min(600, 30 + retries * 6)
 
     def run(self):
         if not self.is_running:
@@ -2377,10 +2531,13 @@ class FilePreparationThread(QThread):
         # Wait for all workers so none outlive the QThread C++ object.
         # Thread.join() internally uses Event.wait() which triggers
         # Condition.notify() access violations on Python 3.14 + Windows,
-        # so poll is_alive() instead.
-        _deadline = time.monotonic() + 30
+        # so poll is_alive() instead. The wait is per worker and scaled to the
+        # retry budget: one global 30 s deadline silently stranded any post
+        # still working through its countdowns.
+        budget = self._worker_wait_budget()
         for w in workers:
-            while w.is_alive() and time.monotonic() < _deadline:
+            deadline = time.monotonic() + budget
+            while w.is_alive() and time.monotonic() < deadline:
                 time.sleep(0.05)
 
         # Whatever those stragglers were about to queue is lost, so say it
@@ -2470,6 +2627,9 @@ class CreatorDownloadThread(QThread):
         skip_folder_threshold=1,
         force_folder_for_compressed=False,
         post_dates_map=None,
+        post_times_map=None,
+        file_numbers=None,
+        post_file_counts=None,
     ):
         super().__init__()
         self.service = service
@@ -2493,6 +2653,16 @@ class CreatorDownloadThread(QThread):
         # filename templates; the download thread only sees file URLs, so the
         # tab hands the dates over rather than the whole post JSON.
         self.post_dates_map = post_dates_map or {}
+        # Publish time per post id ("HHMM") for {post_time}, handed over
+        # the same way as the dates; the template joins the two.
+        self.post_times_map = post_times_map or {}
+        # File position inside its post (url -> number) and the post's real
+        # file count (post_id -> count). Both are decided once, when the run's
+        # file list is built: recomputing them here counted only the files
+        # passed in, so a retry renamed page 3 to 1 and shrank its post's
+        # count - which also flipped the skip-post-folder decision.
+        self.file_numbers = dict(file_numbers or {})
+        self.post_file_counts = dict(post_file_counts or {})
         self.creator_name = None
         self.skip_folder_enabled = skip_folder_enabled
         self.skip_folder_threshold = skip_folder_threshold
@@ -2509,6 +2679,10 @@ class CreatorDownloadThread(QThread):
         # the same name cannot both write it (the "append a number" guard).
         self._reserved_paths = set()
         self._reserved_paths_lock = threading.Lock()
+        # Post folder names this run has already claimed (creator folder,
+        # name), so two posts with the same title cannot share a folder.
+        self._reserved_folder_names = set()
+        self._reserved_folder_names_lock = threading.Lock()
         # Post ids already stamped after a real download in this run, so a
         # multi-file post writes one row instead of one row per file.
         self._history_lock = threading.Lock()
@@ -2553,8 +2727,14 @@ class CreatorDownloadThread(QThread):
         profile_url = f"{self.domain_config['api_base']}/{self.service}/user/{self.creator_id}/profile"
         # The creator name becomes a folder name, so a single blip must not
         # rename it: falling back to "Unknown_Creator" split a creator's files
-        # across two folders. Retry before accepting the fallback.
-        profile_attempts = 3
+        # across two folders. Retry before accepting the fallback, using the
+        # "API Request Max Retries" setting (this was the knob's only user
+        # left unwired - the count was hard-coded to 3).
+        attempts = getattr(self.settings, "api_request_max_retries", 3)
+        if not isinstance(attempts, int) or attempts < 1:
+            # Stub settings (mocks) and junk fall back to the old default.
+            attempts = 3
+        profile_attempts = attempts
         for attempt in range(1, profile_attempts + 1):
             try:
                 headers = get_headers().copy()
@@ -2568,7 +2748,9 @@ class CreatorDownloadThread(QThread):
                         profile_data.get("name", "Unknown_Creator")
                     )
                     break
-                if attempt < profile_attempts:
+                # A 404/401 will never succeed: stop retrying it.
+                terminal = is_terminal_status(profile_response.status_code)
+                if attempt < profile_attempts and not terminal:
                     self._safe_emit(
                         self.log,
                         translate(
@@ -2580,7 +2762,7 @@ class CreatorDownloadThread(QThread):
                         ),
                         "DEBUG",
                     )
-                    time.sleep(1)
+                    time.sleep(api_retry_delay(attempt, profile_response))
                     continue
                 self.creator_name = "Unknown_Creator"
                 self._safe_emit(
@@ -2602,7 +2784,7 @@ class CreatorDownloadThread(QThread):
                         ),
                         "DEBUG",
                     )
-                    time.sleep(1)
+                    time.sleep(api_retry_delay(attempt))
                     continue
                 self._safe_emit(
                     self.log,
@@ -2671,6 +2853,34 @@ class CreatorDownloadThread(QThread):
         except RuntimeError:
             pass
 
+    def _post_folder_is_known(self, post_id, folder_path):
+        """True when one of this post's files is recorded in *folder_path*.
+
+        A folder template without ``{post_id}`` renders the same name on
+        every run, so the second run of a post finds its own folder on
+        disk. Without this check it took its own folder for someone
+        else's and downloaded into "Title_1", then "Title_2", scattering
+        the post across folders. The hash database remembers where each
+        file went, so the post can be asked directly.
+        """
+        wanted = os.path.normcase(os.path.normpath(folder_path))
+        for file_url in self.post_files_map.get(post_id, []):
+            try:
+                entry = self.hash_db.lookup(
+                    hashlib.md5(file_url.encode()).hexdigest()
+                )
+            except Exception:
+                return False
+            recorded = (entry or {}).get("file_path")
+            if not recorded:
+                continue
+            recorded_folder = os.path.normcase(
+                os.path.normpath(os.path.dirname(recorded))
+            )
+            if recorded_folder == wanted:
+                return True
+        return False
+
     def get_post_folder_name(self, post_id, post_title, creator_folder):
         """Render the per-post folder name using the configurable
         ``creator_folder_name_template`` setting (default
@@ -2680,9 +2890,10 @@ class CreatorDownloadThread(QThread):
         guaranteed unique and no disk-collision check is performed.
 
         For templates without ``{post_id}``, a disk-existence check
-        appends ``_1``, ``_2``, ... until a free name is found. The result
-        is cached per post_id so repeated calls (once per file in the post)
-        always resolve to the same folder.
+        appends ``_1``, ``_2``, ... until a free name is found, except for
+        the folder this post already writes to, which it keeps. The result
+        is cached per post_id so repeated calls (once per file in the
+        post) always resolve to the same folder.
         """
         with self._post_folder_names_lock:
             if post_id in self._post_folder_names:
@@ -2728,22 +2939,48 @@ class CreatorDownloadThread(QThread):
             base_name = sanitize_filename(rendered)
 
             # Short-circuit: if the template includes {post_id}, the
-            # rendered folder name is guaranteed unique. Skip the
-            # disk-collision check entirely.
+            # rendered folder name is guaranteed unique within the creator.
             if "{post_id}" in template:
                 candidate = base_name
-            else:
-                # Simple disk-existence check — append _1, _2, ... until
-                # a free name is found. No marker files, no cross-session
-                # tracking; just a basic collision guard.
+            elif not self._folder_dedup_enabled():
+                # Folder names are not deduped: two posts with the same title
+                # share their folder, which is what the setting asks for.
                 candidate = base_name
-                counter = 1
-                while os.path.exists(os.path.join(creator_folder, candidate)):
-                    candidate = f"{base_name}_{counter}"
-                    counter += 1
+            else:
+                candidate = self._claim_post_folder(post_id, base_name, creator_folder)
 
             self._post_folder_names[post_id] = candidate
             return candidate
+
+    def _claim_post_folder(self, post_id, base_name, creator_folder):
+        """A folder name for this post that no other post of the run uses.
+
+        The disk check alone could not see a folder another post of the *same
+        run* had claimed but not created yet, so two posts with the same title
+        merged their files. The reserved set closes that window; the post's
+        own folder from an earlier run is still kept, so a re-download does
+        not scatter a post across ``Title`` and ``Title_1``.
+        """
+        candidate = base_name
+        counter = 1
+        while True:
+            path = os.path.join(creator_folder, candidate)
+            key = (
+                os.path.normcase(os.path.normpath(creator_folder)),
+                os.path.normcase(candidate),
+            )
+            with self._reserved_folder_names_lock:
+                claimed = key in self._reserved_folder_names
+                if not claimed and not os.path.exists(path):
+                    self._reserved_folder_names.add(key)
+                    return candidate
+            if not claimed and self._post_folder_is_known(post_id, path):
+                # This post's own folder from an earlier run: keep it.
+                with self._reserved_folder_names_lock:
+                    self._reserved_folder_names.add(key)
+                return candidate
+            candidate = f"{base_name}_{counter}"
+            counter += 1
 
     def generate_filename_and_folder(
         self, file_url, folder, file_index, total_files, post_id, post_title,
@@ -2755,12 +2992,13 @@ class CreatorDownloadThread(QThread):
 
         Returns (target_folder, filename)
         """
-        # Determine raw filename from URL
-        raw_filename = (
-            file_url.split("f=")[-1]
-            if "f=" in file_url
-            else file_url.split("/")[-1].split("?")[0]
-        )
+        # Determine raw filename from URL. The "f=" value is percent-decoded
+        # and stops at "&": it used to be everything after the last "f=", which
+        # truncated names that themselves contain "f=" and left "%20" in the
+        # name instead of a space.
+        raw_filename = filename_from_query(file_url) or file_url.split("/")[-1].split(
+            "?"
+        )[0]
         # The extension is appended to the already-sanitized name, so scrub it
         # on its own: a URL can carry anything after "?f=", including the
         # control characters Windows rejects in a path.
@@ -2782,8 +3020,9 @@ class CreatorDownloadThread(QThread):
             "file_index": file_index + 1,
             "file_number": page_number,
             "total_files": total_files,
-            "post_file_count": len(self.post_files_map.get(post_id, [])),
+            "post_file_count": _thread_post_file_count(self, post_id),
             "post_date": getattr(self, "post_dates_map", {}).get(str(post_id), ""),
+            "post_time": getattr(self, "post_times_map", {}).get(str(post_id), ""),
             "service": self.service,
         }
 
@@ -2845,7 +3084,7 @@ class CreatorDownloadThread(QThread):
             target_folder = os.path.join(creator_folder, ext_folder)
         else:  # per_post (default)
             # Check if skip-folder toggle is on and this post has few enough files
-            post_file_count = len(self.post_files_map.get(post_id, []))
+            post_file_count = _thread_post_file_count(self, post_id)
             is_compressed_file = file_ext.lower() in COMPRESSED_EXTENSIONS
             skip_folder_applies = (
                 self.skip_folder_enabled
@@ -2915,7 +3154,7 @@ class CreatorDownloadThread(QThread):
             # the file rule exactly: an archive forces the post folder, so the
             # description belongs there rather than in the creator root.
             post_files = self.post_files_map.get(post_id, [])
-            post_file_count = len(post_files)
+            post_file_count = _thread_post_file_count(self, post_id)
             post_has_archive = any(
                 file_extension(urlparse(url).path) in COMPRESSED_EXTENSIONS
                 for url in post_files
@@ -3056,6 +3295,22 @@ class CreatorDownloadThread(QThread):
         except Exception:
             return True
 
+    def _folder_dedup_enabled(self):
+        """Whether a post folder name is checked for collisions.
+
+        The check used to be unconditional; it now follows the "Dedup when name
+        is taken" setting. A settings tab without the new getter keeps the old
+        behaviour (on), so mocks and older callers are unaffected.
+        """
+        tab = getattr(self.settings, "settings_tab", None)
+        getter = getattr(tab, "get_creator_folder_dedup", None)
+        if getter is None:
+            return True
+        try:
+            return bool(getter())
+        except Exception:
+            return True
+
     def _discard_part_file(self, part_path):
         """Delete a partial transfer, logging what happened.
 
@@ -3086,7 +3341,7 @@ class CreatorDownloadThread(QThread):
             pass
 
     async def download_file(self, file_url, folder, file_index, total_files, page_number):
-        if not self.is_running or file_url not in self.files_to_download:
+        if not self.is_running or file_url not in _thread_run_files(self):
             self._safe_emit(
                 self.log, translate("log_info", f"Skipping {file_url}"), "INFO"
             )
@@ -3257,7 +3512,7 @@ class CreatorDownloadThread(QThread):
                     # concurrent SSL access violations on Windows.
                     with self._ssl_lock:
                         if not self.is_running:
-                            raise Exception("Download cancelled before connection")
+                            raise _Cancelled("Download cancelled before connection")
 
                         # Warm up the file host once per thread/session so
                         # DDoS-Guard issues its clearance cookie for that
@@ -3317,7 +3572,7 @@ class CreatorDownloadThread(QThread):
                         try:
                             for chunk in response.iter_content(chunk_size=8192):
                                 if not self.is_running:
-                                    raise Exception("Download interrupted by user")
+                                    raise _Cancelled("Download interrupted by user")
                                 if chunk:
                                     file_handle.write(chunk)
                                     hasher.update(chunk)
@@ -3462,6 +3717,13 @@ class CreatorDownloadThread(QThread):
                         "WARNING",
                     )
                     await asyncio.sleep(delay)
+            except _Cancelled:
+                # The user stopped the run. Nothing failed, so nothing is
+                # recorded and nothing is offered for retry.
+                self._discard_part_file(part_path)
+                self._safe_emit(self.file_progress, file_index, 0)
+                self._safe_emit(self.file_completed, file_index, file_url, False)
+                return
             except Exception as e:
                 self._safe_emit(
                     self.log,
@@ -3546,6 +3808,9 @@ class CreatorDownloadThread(QThread):
     def run(self):
         try:
             if not self.is_running:
+                # Emit anyway: this signal is what runs the tab's cleanup, and
+                # without it the page stays locked in the downloading state.
+                self.finished.emit()
                 return
             self._safe_emit(
                 self.log,
@@ -3565,6 +3830,9 @@ class CreatorDownloadThread(QThread):
                 pass
             # Ensure we exit cleanly
             self.is_running = False
+            # The tab's cleanup runs off this signal; an early exit that emits
+            # nothing left the page busy until Cancel was pressed.
+            self.finished.emit()
             return
         total_posts = len(self.selected_posts)
         self._safe_emit(
@@ -3612,7 +3880,10 @@ class CreatorDownloadThread(QThread):
                 for i, file_url in enumerate(self.files_to_download):
                     pid = self.files_to_posts_map.get(file_url, self.creator_id)
                     post_order_counts[pid] = post_order_counts.get(pid, 0) + 1
-                    queue.put_nowait((i, file_url, post_order_counts[pid]))
+                    # A number decided when the file list was built wins, so a
+                    # retry reuses the name the first run would have used.
+                    number = self.file_numbers.get(file_url, post_order_counts[pid])
+                    queue.put_nowait((i, file_url, number))
 
                 async def main():
                     tasks = [
@@ -3821,9 +4092,6 @@ class LogsWindow(QDialog):
                         self.logs_display.setUpdatesEnabled(True)
             # Absolute index, so trimming the parent's store never stalls us.
             self._shown = self._parent.log_next_index()
-        elif hasattr(self._parent, "creator_console"):
-            # Legacy parent (no shared store): full rebuild, scroll restored.
-            self.logs_display.setHtml(self._parent.creator_console.toHtml())
 
         bar.setValue(bar.maximum() if at_bottom else old_value)
         self.needs_update = False
@@ -3845,8 +4113,6 @@ class LogsWindow(QDialog):
         self._shown = 0
         if self._parent and hasattr(self._parent, "clear_log"):
             self._parent.clear_log()
-        elif self._parent and hasattr(self._parent, "creator_console"):
-            self._parent.creator_console.clear()
 
     def download_logs(self):
         """Download logs as a txt file"""
@@ -3903,6 +4169,9 @@ class CreatorDownloaderTab(QWidget):
         self.checked_urls = {}
         self.current_file_index = -1
         self.active_threads = []
+        # Threads that were stopped but were still running when their last
+        # other reference went away; held here until Qt reports them finished.
+        self._lingering_threads = []
         self.completed_posts = set()
         self.total_posts_to_download = 0
         self.total_files_to_download = 0
@@ -3942,6 +4211,14 @@ class CreatorDownloaderTab(QWidget):
         self._history_db_instance = None
         self._history_db_dir = None
         self._history_db_failed_dir = None
+        # Lazily opened config-profile store (see _config_store()).
+        self._config_store_instance = None
+        self._config_store_dir = None
+        self._config_store_failed_dir = None
+        # The built-in page state, captured after setup_ui() and before any
+        # stored profile is applied, so "back to default" works even with
+        # nothing saved. Empty until then.
+        self._builtin_config: dict = {}
         self.post_widget_cache = (
             {}
         )  # Maps post_title -> (item, widget) for O(1) lookups
@@ -3973,9 +4250,12 @@ class CreatorDownloaderTab(QWidget):
         # Per-keyword skip counts (post level and file level) for the tooltip.
         self._post_keyword_skip_counts = {}
         self._file_keyword_skip_counts = {}
-        # Canonical log store: (message, colour) pairs. The inline console and
-        # the full LogsWindow are views over this list, so logging never
-        # touches a widget (and therefore never invalidates the layout).
+        # True once the fetch in flight has delivered its first batch, so a
+        # refetch replaces the cached post list instead of appending to it.
+        self._fetch_batches_started = False
+        # Canonical log store: (message, colour) pairs. The full LogsWindow is
+        # the only view over this list, so logging never touches a widget (and
+        # therefore never invalidates the layout).
         self._log_lines = []
         self._log_line_limit = LOG_LINE_LIMIT
         # Debug lines are only kept when the Settings switch is on; refreshed
@@ -3984,12 +4264,12 @@ class CreatorDownloaderTab(QWidget):
         # Count of lines dropped from the front of the store, so view indices
         # stay absolute even after the cap starts trimming.
         self._log_dropped = 0
-        self._log_visible = False
-        self._log_console_shown = 0
+        # The log button's line count is the only live UI logging touches, so
+        # it is refreshed on a short timer instead of once per line.
         self._log_counter_timer = QTimer(self)
         self._log_counter_timer.setSingleShot(True)
         self._log_counter_timer.setInterval(500)
-        self._log_counter_timer.timeout.connect(self._update_log_toggle_text)
+        self._log_counter_timer.timeout.connect(self._update_log_button_text)
         # Cached skip breakdown: those counters cannot change during a
         # download, so rebuilding them per completed file is wasted work.
         self._skip_summary_cache = None
@@ -3998,6 +4278,11 @@ class CreatorDownloaderTab(QWidget):
         self._last_run_failed_files = {}
         self._last_run_files_to_posts_map = {}
         self._last_run_creator_url = None
+        # {file_number} (url -> position in its post) and {post_file_count}
+        # (post_id -> files), decided when a run's file list is built so a
+        # retry of the failures keeps the same names and folder rules.
+        self._last_run_file_numbers = {}
+        self._last_run_post_file_counts = {}
         # Creator folder of the run in flight (or the last one that produced
         # files), for the "open folder" button. None until it is confirmed.
         self._current_creator_folder = None
@@ -4016,6 +4301,12 @@ class CreatorDownloaderTab(QWidget):
             )
         self._refresh_verbose_logging()
         self._refresh_show_only_found_filetypes()
+        # Capture the built-in page state before a stored profile can touch
+        # it: that snapshot is what a creator without a config falls back to
+        # when nothing was ever saved, and it tracks new widgets for free.
+        self._builtin_config = self._config_snapshot()
+        self._load_page_config()
+        self._refresh_config_buttons()
 
     def _refresh_verbose_logging(self):
         """Pick up the Settings switch, tolerating a parent without settings."""
@@ -4734,42 +5025,60 @@ class CreatorDownloaderTab(QWidget):
         self.background_task_progress.setValue(0)
         right_layout.addWidget(self.background_task_progress)
 
-        # Minimised log panel: it fills the space under the progress bar and
-        # only touches its widget while open, so logging stays cheap.
-        log_header_layout = QHBoxLayout()
-        log_header_layout.setContentsMargins(0, 0, 0, 0)
-        self.creator_log_toggle_btn = QPushButton(
+        # Log + config row: the log button opens the full log window (there is
+        # no inline console any more), and the two config buttons save the
+        # page's options and filters as profiles. A plain row, not a group box:
+        # the box's title and border clipped the buttons on narrow windows.
+        self.log_config_group = QWidget()
+        log_config_layout = QHBoxLayout(self.log_config_group)
+        log_config_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.creator_log_btn = QPushButton(
             qta.icon("fa5s.chevron-right", color="white"), ""
         )
-        self.creator_log_toggle_btn.setCheckable(True)
-        self.creator_log_toggle_btn.setChecked(False)
-        self.creator_log_toggle_btn.clicked.connect(self.toggle_log_panel)
-        self.creator_log_toggle_btn.setStyleSheet(
+        self.creator_log_btn.clicked.connect(self.open_logs)
+        self.creator_log_btn.setStyleSheet(
             "background: #4A5B7A; padding: 6px; border-radius: 5px;"
         )
-        log_header_layout.addWidget(self.creator_log_toggle_btn)
+        log_config_layout.addWidget(self.creator_log_btn)
 
-        # Full-log window button lives beside the toggle, matching its height.
-        self.creator_expand_logs_btn = QPushButton(
-            qta.icon("fa5s.expand", color="white"), ""
+        # Saved page state, first for every creator, then for this one only.
+        self.creator_save_config_btn = QPushButton(
+            qta.icon("fa5s.save", color="white"), ""
         )
-        self.creator_expand_logs_btn.clicked.connect(self.expand_logs)
-        self.creator_expand_logs_btn.setStyleSheet(
+        self.creator_save_config_btn.clicked.connect(self.save_page_config)
+        self.creator_save_config_btn.setStyleSheet(
             "background: #4A5B7A; padding: 6px; border-radius: 5px;"
         )
-        log_header_layout.addWidget(self.creator_expand_logs_btn)
-        log_header_layout.addStretch()
-        right_layout.addLayout(log_header_layout)
+        log_config_layout.addWidget(self.creator_save_config_btn)
 
-        self.creator_console = QTextEdit()
-        self.creator_console.setReadOnly(True)
-        self.creator_console.setStyleSheet(
-            "background: #2A3B5A; border-radius: 5px; padding: 5px;"
+        self.creator_save_creator_config_btn = QPushButton(
+            qta.icon("fa5s.user-shield", color="white"), ""
         )
-        self.creator_console.document().setMaximumBlockCount(LOG_LINE_LIMIT)
-        self.creator_console.setFixedHeight(180)
-        self.creator_console.setVisible(False)
-        right_layout.addWidget(self.creator_console)
+        self.creator_save_creator_config_btn.clicked.connect(self.save_creator_config)
+        self.creator_save_creator_config_btn.setStyleSheet(
+            "background: #4A5B7A; padding: 6px; border-radius: 5px;"
+        )
+        # Nothing to attach a creator profile to until a creator is loaded.
+        self.creator_save_creator_config_btn.setEnabled(False)
+        log_config_layout.addWidget(self.creator_save_creator_config_btn)
+
+        # What the two save buttons write, right next to them: the difference
+        # between a page default and a per-creator profile is not visible
+        # anywhere else.
+        self.creator_config_info_btn = QPushButton(
+            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+        )
+        self.creator_config_info_btn.setFixedSize(26, 26)
+        self.creator_config_info_btn.setStyleSheet(
+            "background: #4A5B7A; border-radius: 5px;"
+        )
+        self.creator_config_info_btn.clicked.connect(self.show_config_save_help)
+        log_config_layout.addWidget(self.creator_config_info_btn)
+
+        log_config_layout.addStretch()
+
+        right_layout.addWidget(self.log_config_group)
 
         layout.addWidget(right_widget, stretch=1)
 
@@ -4900,18 +5209,28 @@ class CreatorDownloaderTab(QWidget):
         self.creator_overall_progress_label.setText(
             translate("overall_progress", 0, 0, 0, 0)
         )
-        self.creator_post_count_label.setText(translate("posts_count", 0))
+        self.creator_post_count_label.setText(
+            translate("posts_count", len(self.posts_to_download))
+        )
         self._update_last_download_label()
         self.background_task_label.setText(translate("idle"))
 
         self.creator_download_btn.setText(translate("download"))
         self.creator_cancel_btn.setText(translate("cancel"))
-        self.creator_expand_logs_btn.setText(translate("expand_logs"))
-        self.creator_expand_logs_btn.setToolTip(translate("expand_logs"))
+        self.creator_save_config_btn.setText(translate("save_config_btn"))
+        self.creator_save_config_btn.setToolTip(translate("save_config_btn_tooltip"))
+        self.creator_save_creator_config_btn.setText(
+            translate("save_creator_config_btn")
+        )
+        self.creator_save_creator_config_btn.setToolTip(
+            translate("save_creator_config_btn_tooltip")
+        )
+        self.creator_config_info_btn.setToolTip(translate("config_save_info_title"))
         self._refresh_retry_button()
         self._refresh_open_folder_button()
+        self._refresh_config_buttons()
         self._update_download_summary()
-        self._update_log_toggle_text()
+        self._update_log_button_text()
 
         self.creator_search_input.setPlaceholderText(translate("search_posts"))
 
@@ -4980,6 +5299,363 @@ class CreatorDownloaderTab(QWidget):
             self.background_task_label.setText(translate("idle"))
 
     # ------------------------------------------------------------------
+    # Page config profiles ("Save Config" / "Save Creator Config")
+    #
+    # A profile is the page's options and post filters, never its post ticks:
+    # ticks are a momentary choice, and a stored selection would only be a
+    # list of post ids that may not exist any more. The default profile is
+    # applied when the tab is built; a creator profile replaces it wholesale
+    # whenever that creator is loaded, so switching creators is a switch
+    # between two independent profiles rather than a merge of them.
+    # ------------------------------------------------------------------
+
+    def _config_store(self):
+        """Return the profile store, or None when it cannot be opened.
+
+        Opened on first need (which includes construction, where the default
+        profile is applied) and re-opened if the "Other Files" folder changes.
+        A failed open is remembered so it is not retried — and re-logged — on
+        every save.
+        """
+        if not self.other_files_dir:
+            return None
+        if self._config_store_dir != self.other_files_dir:
+            if self._config_store_failed_dir == self.other_files_dir:
+                return None
+            try:
+                self._config_store_instance = CreatorConfigStore(self.other_files_dir)
+                self._config_store_dir = self.other_files_dir
+                self._config_store_failed_dir = None
+            except Exception as e:
+                self._config_store_instance = None
+                self._config_store_failed_dir = self.other_files_dir
+                self.append_log_to_console(
+                    translate("log_warning", f"Saved configs unavailable: {e}"),
+                    "WARNING",
+                )
+        return self._config_store_instance
+
+    def _config_snapshot(self):
+        """Return the page's options and filters as a JSON-ready dict.
+
+        Reads the widgets only, so it is safe to call at any point in the
+        page's life — including at startup, before anything is loaded.
+        """
+        return {
+            "options": {
+                "main": self.creator_main_check.isChecked(),
+                "attachments": self.creator_attachments_check.isChecked(),
+                "content": self.creator_content_check.isChecked(),
+                "download_text": self.creator_download_text_check.isChecked(),
+                "skip_folder": self.creator_skip_folder_check.isChecked(),
+                "skip_folder_max": int(
+                    self.creator_skip_folder_combo.currentData()
+                    or (self.creator_skip_folder_combo.currentIndex() + 1)
+                ),
+                "force_compressed_folder": (
+                    self.creator_force_compressed_folder_check.isChecked()
+                ),
+                "skip_images_if_compressed": (
+                    self.creator_skip_images_check.isChecked()
+                ),
+                "filetypes": self._selected_extensions(),
+            },
+            "filters": {
+                "skip_keywords": self.skip_keywords_edit.text(),
+                "skip_scopes": sorted(
+                    scope
+                    for scope, box in self.skip_scope_checkboxes.items()
+                    if box.isChecked()
+                ),
+                "file_skip_keywords": self.file_skip_keywords_edit.text(),
+                "date_from": self.date_from_edit.text(),
+                "date_to": self.date_to_edit.text(),
+                "file_count_from": self.file_count_from_edit.text(),
+                "file_count_to": self.file_count_to_edit.text(),
+                "keep_compressed": (
+                    self.file_count_keep_compressed_check.isChecked()
+                ),
+                "filter_no_selected_filetypes": (
+                    self.filter_no_selected_filetypes_check.isChecked()
+                ),
+            },
+            "search_scopes": sorted(
+                scope
+                for scope, box in self.search_scope_checkboxes.items()
+                if box.isChecked()
+            ),
+        }
+
+    @staticmethod
+    def _set_config_checkbox(checkbox, value):
+        """Set a tick without firing the live-filter pass behind it."""
+        checkbox.blockSignals(True)
+        checkbox.setChecked(bool(value))
+        checkbox.blockSignals(False)
+
+    @staticmethod
+    def _set_config_text(editor, value):
+        """Set a filter field without starting a debounced filter pass."""
+        editor.blockSignals(True)
+        editor.setText("" if value is None else str(value))
+        editor.blockSignals(False)
+
+    def _set_config_scopes(self, checkboxes, values):
+        """Tick exactly the named scopes of a ``{scope: checkbox}`` mapping."""
+        wanted = {str(value) for value in (values or ())}
+        for scope, checkbox in checkboxes.items():
+            self._set_config_checkbox(checkbox, scope in wanted)
+
+    def _apply_config(self, config):
+        """Apply a profile to the page's widgets.
+
+        Signals are blocked on every widget written, so restoring six filter
+        fields cannot fire six filter passes; one pass runs at the end when a
+        post list is already loaded. A key the profile does not contain is
+        left alone, so a profile written by an older version only restores
+        what it actually describes.
+        """
+        if not config:
+            return
+        options = config.get("options") or {}
+        filters = config.get("filters") or {}
+
+        ticks = (
+            ("main", self.creator_main_check),
+            ("attachments", self.creator_attachments_check),
+            ("content", self.creator_content_check),
+            ("download_text", self.creator_download_text_check),
+            ("skip_folder", self.creator_skip_folder_check),
+            ("force_compressed_folder", self.creator_force_compressed_folder_check),
+            ("skip_images_if_compressed", self.creator_skip_images_check),
+        )
+        for key, checkbox in ticks:
+            if key in options:
+                self._set_config_checkbox(checkbox, options[key])
+
+        if "skip_folder_max" in options:
+            try:
+                wanted = int(options["skip_folder_max"])
+            except (TypeError, ValueError):
+                wanted = 1
+            index = self.creator_skip_folder_combo.findData(wanted)
+            self.creator_skip_folder_combo.blockSignals(True)
+            self.creator_skip_folder_combo.setCurrentIndex(index if index >= 0 else 0)
+            self.creator_skip_folder_combo.blockSignals(False)
+
+        if "filetypes" in options:
+            wanted_types = {
+                str(ext).lower() for ext in (options.get("filetypes") or ())
+            }
+            for ext, checkbox in self.creator_ext_checks.items():
+                self._set_config_checkbox(checkbox, ext in wanted_types)
+
+        text_fields = (
+            ("skip_keywords", self.skip_keywords_edit),
+            ("file_skip_keywords", self.file_skip_keywords_edit),
+            ("date_from", self.date_from_edit),
+            ("date_to", self.date_to_edit),
+            ("file_count_from", self.file_count_from_edit),
+            ("file_count_to", self.file_count_to_edit),
+        )
+        for key, editor in text_fields:
+            if key in filters:
+                self._set_config_text(editor, filters[key])
+
+        if "skip_scopes" in filters:
+            self._set_config_scopes(self.skip_scope_checkboxes, filters["skip_scopes"])
+        if "keep_compressed" in filters:
+            self._set_config_checkbox(
+                self.file_count_keep_compressed_check, filters["keep_compressed"]
+            )
+        if "filter_no_selected_filetypes" in filters:
+            self._set_config_checkbox(
+                self.filter_no_selected_filetypes_check,
+                filters["filter_no_selected_filetypes"],
+            )
+        if "search_scopes" in config:
+            self._set_config_scopes(
+                self.search_scope_checkboxes, config["search_scopes"]
+            )
+
+        # A restored filetype tick has to stay visible even when only the
+        # types this creator has are shown.
+        self._render_creator_ext_checks()
+        if self.all_detected_posts:
+            self.filter_items()
+
+    def _load_page_config(self):
+        """Apply the saved default profile, if there is one."""
+        store = self._config_store()
+        config = None
+        if store is not None:
+            try:
+                config = store.get_page_default()
+            except Exception as e:
+                self.append_log_to_console(
+                    translate("log_warning", translate("config_load_failed", e)),
+                    "WARNING",
+                )
+        self._apply_config(config)
+
+    def _load_config_for_creator(self):
+        """Switch the page to the loaded creator's profile, or back to default.
+
+        Called when a creator is loaded and before the fetch reads the Filters
+        box, so the restored filters are the ones the fetch actually uses. A
+        creator profile replaces the default rather than being layered on it;
+        with no creator profile the default is what the page returns to, and
+        with neither the built-in page state is.
+        """
+        store = self._config_store()
+        service, creator_id = self._current_creator_identity()
+        config = None
+        from_creator = False
+        if store is not None and self.current_creator_url:
+            try:
+                config = store.get_creator_config(service, creator_id)
+            except Exception as e:
+                self.append_log_to_console(
+                    translate("log_warning", translate("config_load_failed", e)),
+                    "WARNING",
+                )
+            if config is not None:
+                from_creator = True
+            else:
+                try:
+                    config = store.get_page_default()
+                except Exception:
+                    config = None
+        if from_creator:
+            self.append_log_to_console(
+                translate("log_info", translate("creator_config_loaded", creator_id)),
+                "INFO",
+            )
+        self._apply_config(config or self._builtin_config)
+        self._refresh_config_buttons()
+
+    def _refresh_config_buttons(self):
+        """Enable the config buttons when pressing one would mean something.
+
+        "Save Creator Config" needs a creator to attach the profile to. Both
+        are off during a run: the download already snapshotted the options it
+        is using, so a save now would describe something nothing reads.
+        """
+        default_btn = getattr(self, "creator_save_config_btn", None)
+        creator_btn = getattr(self, "creator_save_creator_config_btn", None)
+        if default_btn is None or creator_btn is None:
+            return
+        busy = bool(getattr(self, "downloading", False)) or self._download_in_progress()
+        default_btn.setEnabled(not busy)
+        creator_btn.setEnabled(bool(self.current_creator_url) and not busy)
+
+    def _config_warnings(self):
+        """Return the translation keys of filter entries a save cannot store."""
+        _filters, warnings = self._post_filters_from_widgets()
+        return warnings
+
+    def _warn_config_warnings(self, warnings):
+        """Name the entries that stopped a save; nothing is stored."""
+        lines = "\n".join(translate(key) for key in warnings)
+        QMessageBox.warning(
+            self,
+            translate("config_save_invalid_title"),
+            translate("config_save_invalid_text", lines),
+        )
+
+    def _store_config(self, payload, service=None, creator_id=None):
+        """Write a profile and report the outcome. Returns True on success."""
+        warnings = self._config_warnings()
+        if warnings:
+            self._warn_config_warnings(warnings)
+            return False
+        for_creator = bool(service) and bool(creator_id)
+        if (service is not None or creator_id is not None) and not for_creator:
+            # A creator save with no usable identity must never fall through
+            # to the page default, and must never claim success: the store
+            # refuses such a key, so a success message would be a lie.
+            self.append_log_to_console(
+                translate("log_warning", translate("config_no_creator_text")),
+                "WARNING",
+            )
+            return False
+        store = self._config_store()
+        if store is None:
+            self.append_log_to_console(
+                translate("log_warning", translate("config_unavailable")), "WARNING"
+            )
+            return False
+        try:
+            if for_creator:
+                store.set_creator_config(service, creator_id, payload)
+            else:
+                store.set_page_default(payload)
+        except Exception as e:
+            self.append_log_to_console(
+                translate("log_error", translate("config_save_failed", e)), "ERROR"
+            )
+            return False
+
+        options = len(payload.get("options") or {})
+        filters = len(payload.get("filters") or {})
+        if for_creator:
+            self.append_log_to_console(
+                translate(
+                    "log_info", translate("creator_config_saved_log", creator_id)
+                ),
+                "INFO",
+            )
+            QMessageBox.information(
+                self,
+                translate("creator_config_saved_title"),
+                translate("creator_config_saved_text", options, filters, creator_id),
+            )
+        else:
+            self.append_log_to_console(
+                translate("log_info", translate("config_saved_log")), "INFO"
+            )
+            QMessageBox.information(
+                self,
+                translate("config_saved_title"),
+                translate("config_saved_text", options, filters),
+            )
+        return True
+
+    def show_config_save_help(self):
+        """Explain what the two save buttons next to this one write."""
+        try:
+            QMessageBox.information(
+                self,
+                translate("config_save_info_title"),
+                translate("config_save_info_text"),
+            )
+        except Exception:
+            QMessageBox.information(
+                self,
+                "Saved configs",
+                "Save Config stores this page (options and filters) as the "
+                "default for every creator. Save Creator Config stores it for "
+                "the creator that is loaded, and that profile replaces the "
+                "default whenever the creator is loaded again. Both live in "
+                "creator_configs.db inside the app's Other Files folder.",
+            )
+
+    def save_page_config(self):
+        """Store the page as the default profile for every creator."""
+        return self._store_config(self._config_snapshot())
+
+    def save_creator_config(self):
+        """Store the page as the loaded creator's profile."""
+        if not self.current_creator_url:
+            self.append_log_to_console(
+                translate("log_warning", translate("config_no_creator_text")),
+                "WARNING",
+            )
+            return False
+        service, creator_id = self._current_creator_identity()
+        return self._store_config(self._config_snapshot(), service, creator_id)
+
+    # ------------------------------------------------------------------
     # Download history ("last downloaded") tracking
     # ------------------------------------------------------------------
 
@@ -5003,11 +5679,10 @@ class CreatorDownloaderTab(QWidget):
             except Exception as e:
                 self._history_db_instance = None
                 self._history_db_failed_dir = self.other_files_dir
-                if hasattr(self, "creator_console"):
-                    self.append_log_to_console(
-                        translate("log_warning", f"Download history unavailable: {e}"),
-                        "WARNING",
-                    )
+                self.append_log_to_console(
+                    translate("log_warning", f"Download history unavailable: {e}"),
+                    "WARNING",
+                )
         return self._history_db_instance
 
     def _current_creator_identity(self):
@@ -5195,7 +5870,12 @@ class CreatorDownloaderTab(QWidget):
                     self.append_log_to_console(
                         translate("log_info", translate("link_removed", url)), "INFO"
                     )
-                    if not any(c for _, c in self.creator_queue):
+                    # Clear the view only when the creator being viewed is the
+                    # one that was removed. Removing a different link used to
+                    # clear (or keep) the list based on the queue's processed
+                    # flags, which left a removed creator's posts on screen and
+                    # downloadable.
+                    if url.rstrip("/") == (self.current_creator_url or "").rstrip("/"):
                         self.creator_post_list.clear()
                         self.post_widget_cache.clear()
                         self.all_detected_posts = []
@@ -5293,7 +5973,15 @@ class CreatorDownloaderTab(QWidget):
         self.post_url_map = {}  # Clear previous creator's post URL mapping
         self.post_dates_map = {}  # Clear previous creator's post dates
         self.post_search_index = {}  # Clear previous creator's search index
+        # A refetch of the same creator must not append to the cached copy of
+        # its previous fetch (on_posts_batch_received replaces it on the first
+        # batch instead).
+        self._fetch_batches_started = False
         self._reset_found_extensions()
+        # Switch to this creator's saved profile (or back to the default)
+        # before the fetch reads the Filters box below, so the fetch uses the
+        # restored filters rather than whatever the previous page left behind.
+        self._load_config_for_creator()
         # The skip breakdown describes one creator's posts, so start it at
         # zero instead of showing the previous creator's numbers until the
         # first filter pass of the new one lands.
@@ -5365,10 +6053,43 @@ class CreatorDownloaderTab(QWidget):
         self.post_detection_thread.start()
 
     def cleanup_post_detection_thread(self):
-        """Clean up the post detection thread after it finishes."""
-        if self.post_detection_thread in self.active_threads:
-            self.active_threads.remove(self.post_detection_thread)
+        """Drop the tab's reference to the fetch thread once it is done.
+
+        A *stopped* thread can still be running for a moment, and Qt destroys
+        a QThread whose last Python reference goes away while it runs
+        ("Destroyed while thread is still running"). Such a thread is parked in
+        ``_lingering_threads`` - the reference is what keeps it alive - and
+        reaped the next time this runs.
+        """
+        thread = self.post_detection_thread
+        if thread is None:
+            return
+        if thread in self.active_threads:
+            self.active_threads.remove(thread)
         self.post_detection_thread = None
+        self._hold_thread_reference(thread)
+
+    def _hold_thread_reference(self, thread):
+        """Keep *thread* alive until it has really finished."""
+        try:
+            if thread.isRunning():
+                self._lingering_threads.append(thread)
+        except (AttributeError, RuntimeError):  # stub or deleted object
+            pass
+        self._reap_lingering_threads()
+
+    def _reap_lingering_threads(self):
+        """Forget (and dispose of) parked threads that have finished."""
+        still_running = []
+        for thread in self._lingering_threads:
+            try:
+                if thread.isRunning():
+                    still_running.append(thread)
+                else:
+                    thread.deleteLater()
+            except (AttributeError, RuntimeError):
+                pass
+        self._lingering_threads = still_running
 
     def on_post_detection_finished(self, detected_posts):
         # Only update if we haven't been receiving incremental batches
@@ -5390,10 +6111,17 @@ class CreatorDownloaderTab(QWidget):
         # Append new posts to the existing list
         self.all_detected_posts.extend(batch_posts)
 
-        # Update all_files_map incrementally
-        if self.current_creator_url not in self.all_files_map:
-            self.all_files_map[self.current_creator_url] = []
-        self.all_files_map[self.current_creator_url].extend(batch_posts)
+        # The first batch of a fetch replaces the copy the previous view left
+        # in all_files_map; later batches append to it. Extending from the
+        # first batch onwards is what duplicated a creator's posts on every
+        # refetch (the cached fallback then held every post twice).
+        if not self._fetch_batches_started:
+            self.all_files_map[self.current_creator_url] = list(batch_posts)
+            self._fetch_batches_started = True
+        else:
+            self.all_files_map.setdefault(self.current_creator_url, []).extend(
+                batch_posts
+            )
 
         # Update checked_urls for new posts
         for post_title, (post_id, thumbnail_url) in batch_posts:
@@ -5624,6 +6352,9 @@ class CreatorDownloaderTab(QWidget):
         # Pagination
         self.prev_page_btn.setEnabled(enabled and self.current_page > 1)
         self.next_page_btn.setEnabled(enabled and self.current_page < self.total_pages)
+
+        # The config buttons describe the page, not the run in flight.
+        self._refresh_config_buttons()
 
         # Tabs: disable all other tabs (keep current) + settings tab
         if self._parent and hasattr(self._parent, "tabs"):
@@ -6104,25 +6835,40 @@ class CreatorDownloaderTab(QWidget):
         )
         return
 
-    def _post_dates_map(self):
-        """Publish date ("YYYY-MM-DD") per post id, for the {post_date} placeholder.
+    def _post_stamp_maps(self):
+        """{post_date} and {post_time} values per post id.
 
-        The download thread only ever sees file URLs, so the dates come from the
-        posts the tab already holds.
+        The download thread only ever sees file URLs, so the stamps come from
+        the search index the fetch already filled: each post's parsed publish
+        datetime sits under ``"published"``. Both maps are built in one pass so
+        the two placeholders cannot drift apart.
+
+        The post list itself is (title, (post_id, thumb)) tuples, so reading
+        the posts there yielded no stamps at all — the placeholders rendered
+        empty for every file.
         """
         dates = {}
-        for post in self.all_detected_posts or ():
-            if not isinstance(post, dict):
+        times = {}
+        index = self.post_search_index or {}
+        for post_id, facts in index.items():
+            if not isinstance(facts, dict):
                 continue
-            post_id = post.get("id")
-            if post_id is None:
+            published = facts.get("published")
+            if not hasattr(published, "strftime"):
+                # No usable datetime: leave the stamps out so the placeholders
+                # render empty rather than carrying "Unknown date" into a name.
                 continue
-            published = get_post_published_date(post)
-            dates[str(post_id)] = published.isoformat() if published else ""
-        return dates
+            dates[str(post_id)] = published.strftime("%Y-%m-%d")
+            times[str(post_id)] = published.strftime("%H%M")
+        return dates, times
 
     def _start_download_thread(
-        self, files_to_download, files_to_posts_map, creator_url=None
+        self,
+        files_to_download,
+        files_to_posts_map,
+        creator_url=None,
+        file_numbers=None,
+        post_file_counts=None,
     ):
         """Create and start a CreatorDownloadThread for the current creator.
 
@@ -6136,6 +6882,21 @@ class CreatorDownloaderTab(QWidget):
         self._refresh_open_folder_button()
         self.files_to_posts_map = dict(files_to_posts_map)
         selected_posts = list(dict.fromkeys(files_to_posts_map.values()))
+
+        # {file_number} and {post_file_count} are decided once, here, from the
+        # full file list. A retry passes the previous run's maps so the failed
+        # files keep the numbers (and the post's real count) they had; deriving
+        # them inside the thread counted only what was handed to it.
+        if file_numbers is None:
+            counts = {}
+            file_numbers = {}
+            for file_url in files_to_download:
+                post_id = files_to_posts_map.get(file_url)
+                counts[post_id] = counts.get(post_id, 0) + 1
+                file_numbers[file_url] = counts[post_id]
+            post_file_counts = dict(counts)
+        self._last_run_file_numbers = dict(file_numbers)
+        self._last_run_post_file_counts = dict(post_file_counts or {})
 
         url = (creator_url or "").rstrip("/")
         parts = url.split("/")
@@ -6162,6 +6923,7 @@ class CreatorDownloaderTab(QWidget):
             )
         )
         settings = self._create_thread_settings()
+        post_dates, post_times = self._post_stamp_maps()
         thread = CreatorDownloadThread(
             service,
             creator_id,
@@ -6186,7 +6948,10 @@ class CreatorDownloaderTab(QWidget):
             force_folder_for_compressed=(
                 self.creator_force_compressed_folder_check.isChecked()
             ),
-            post_dates_map=self._post_dates_map(),
+            post_dates_map=post_dates,
+            post_times_map=post_times,
+            file_numbers=file_numbers,
+            post_file_counts=post_file_counts,
         )
         thread.file_progress.connect(self.update_creator_file_progress)
         thread.file_completed.connect(self.update_file_completion)
@@ -6311,6 +7076,9 @@ class CreatorDownloaderTab(QWidget):
         # The run's thread is really gone now, so the retry button may unlock
         # even when creator_download_finished() already ran and bailed out.
         self._refresh_retry_button()
+        # Same beat for the config buttons: they are greyed while a run owns
+        # the page, and this is the moment that is reliably over.
+        self._refresh_config_buttons()
 
     def cancel_creator_download(self):
         if not self.active_threads:
@@ -6690,15 +7458,20 @@ class CreatorDownloaderTab(QWidget):
             translate("filter_no_selected_filetypes_help_text"),
         )
 
-    def expand_logs(self):
-        """Open the full logs window"""
-        if not hasattr(self, "logs_window") or not self.logs_window.isVisible():
+    def open_logs(self):
+        """Open the full logs window, reusing it when it is already open.
+
+        The window is the only view of the log — the tab keeps no console of
+        its own — so opening always replays the buffered lines from the start.
+        """
+        window = getattr(self, "logs_window", None)
+        if window is None or not window.isVisible():
             self.logs_window = LogsWindow(self)
             self.logs_window.show()
         else:
-            self.logs_window.raise_()
-            self.logs_window.activateWindow()
-            self.logs_window.update_logs_content()
+            window.raise_()
+            window.activateWindow()
+            window.update_logs_content()
 
     def toggle_check_all(self, state):
         if (
@@ -6714,13 +7487,22 @@ class CreatorDownloaderTab(QWidget):
             )
             return
 
-        # Get the currently visible posts from cache
+        # Get the currently visible posts. The rows themselves carry the post
+        # id (two posts can share a title and date, and the title-keyed caches
+        # then hold only the last of them), so build the list from the list
+        # widget rather than from post_widget_cache.
         visible_posts = []
-        for post_title, (item, widget) in self.post_widget_cache.items():
-            if not item.isHidden():  # Only include visible items
-                post_id, thumbnail_url = self.post_url_map.get(post_title, (None, None))
-                if post_id:
-                    visible_posts.append((post_title, (post_id, thumbnail_url)))
+        for index in range(self.creator_post_list.count()):
+            item = self.creator_post_list.item(index)
+            if item is None or item.isHidden():
+                continue
+            widget = self.creator_post_list.itemWidget(item)
+            post_id = getattr(widget, "post_id", None) if widget is not None else None
+            if not post_id:
+                continue
+            post_title = getattr(widget, "post_key", None) or item.text()
+            _pid, thumbnail_url = self.post_url_map.get(post_title, (None, None))
+            visible_posts.append((post_title, (post_id, thumbnail_url)))
 
         if not visible_posts:
             self.append_log_to_console(
@@ -6908,6 +7690,12 @@ class CreatorDownloaderTab(QWidget):
                 translate("log_debug", translate("discarded_stale_filter_pass")),
                 "DEBUG",
             )
+            # This pass owned the busy indicator ("Filtering…"). Since it is
+            # being thrown away, nothing else will clear it, and the bar would
+            # sit there spinning for the rest of the session.
+            self.background_task_progress.setRange(0, 100)
+            self.background_task_progress.setValue(0)
+            self.background_task_label.setText(translate("idle"))
             return
         # Store filtered posts for pagination
         self.filtered_posts = filtered_items
@@ -6918,7 +7706,9 @@ class CreatorDownloaderTab(QWidget):
 
         # Only reset to page 1 if we have more than one page, otherwise keep current page
         if self.current_page > self.total_pages:
-            self.current_page = 1
+            # Clamp, do not jump to the first page: the current one may still
+            # be valid after a filter change.
+            self.current_page = self.total_pages
 
         # FilterThread snapshots checked_urls when it starts, so the rows it
         # produces can miss a selection made while it was running (batch
@@ -7280,10 +8070,10 @@ class CreatorDownloaderTab(QWidget):
     # ------------------------------------------------------------------
     # Logging
     #
-    # Lines go into ``self._log_lines`` (a plain list) and the inline console
-    # plus the full LogsWindow are views over it. While the inline panel is
-    # minimised nothing touches a widget at all, which is what used to make
-    # every resize crawl once the console had grown large.
+    # Lines go into ``self._log_lines`` (a plain list) and the full LogsWindow
+    # is the only view over it. Nothing touches a widget while logging except
+    # the button's line count, which is what used to make every resize crawl
+    # when a console held thousands of lines.
     # ------------------------------------------------------------------
 
     def log_line_count(self):
@@ -7307,37 +8097,19 @@ class CreatorDownloaderTab(QWidget):
         start = max(0, index - self._log_dropped)
         return list(self._log_lines[start:])
 
-    def _flush_log_to_console(self):
-        """Append every line the inline console has not shown yet."""
-        if not hasattr(self, "creator_console"):
-            return
-        pending = self.log_lines_from(self._log_console_shown)
-        if not pending:
-            return
-        # One repaint for the whole batch, but one paragraph per line so the
-        # block cap applies and toPlainText() stays line-based.
-        batched = len(pending) > 1
-        if batched:
-            self.creator_console.setUpdatesEnabled(False)
-        try:
-            for message, color in pending:
-                self.creator_console.append(_log_line_html(message, color))
-        finally:
-            if batched:
-                self.creator_console.setUpdatesEnabled(True)
-        self._log_console_shown = self.log_next_index()
-
     def clear_log(self):
-        """Drop the stored log and empty the inline console."""
+        """Drop the stored log and every view of it."""
         self._log_lines.clear()
         self._log_dropped = 0
-        self._log_console_shown = 0
-        if hasattr(self, "creator_console"):
-            self.creator_console.clear()
-        self._update_log_toggle_text()
+        window = getattr(self, "logs_window", None)
+        if window is not None:
+            window.logs_display.clear()
+            window._shown = 0
+        self._update_log_button_text()
 
-    def _update_log_toggle_text(self):
-        button = getattr(self, "creator_log_toggle_btn", None)
+    def _update_log_button_text(self):
+        """Re-text the log button: plain "Log", or a line count if it has one."""
+        button = getattr(self, "creator_log_btn", None)
         if button is None:
             return
         count = len(self._log_lines)
@@ -7346,37 +8118,7 @@ class CreatorDownloaderTab(QWidget):
             if count
             else translate("log_panel_toggle")
         )
-        button.setIcon(
-            qta.icon(
-                "fa5s.chevron-down" if self._log_visible else "fa5s.chevron-right",
-                color="white",
-            )
-        )
-        button.setToolTip(
-            translate(
-                "log_panel_tooltip_hide"
-                if self._log_visible
-                else "log_panel_tooltip_show"
-            )
-        )
-
-    def set_log_panel_visible(self, visible):
-        """Open/close the inline log; opening replays the buffered lines."""
-        self._log_visible = bool(visible)
-        if hasattr(self, "creator_log_toggle_btn"):
-            self.creator_log_toggle_btn.setChecked(self._log_visible)
-        if hasattr(self, "creator_console"):
-            self.creator_console.setVisible(self._log_visible)
-        if self._log_visible:
-            self._flush_log_to_console()
-            # Opening should land on the newest output, not the oldest.
-            bar = self.creator_console.verticalScrollBar()
-            bar.setValue(bar.maximum())
-        self._update_log_toggle_text()
-
-    def toggle_log_panel(self, *args):
-        """Toggle button handler."""
-        self.set_log_panel_visible(not self._log_visible)
+        button.setToolTip(translate("open_log_tooltip"))
 
     def append_log_to_console(self, message, level="INFO"):
         level = str(level).upper()
@@ -7390,18 +8132,18 @@ class CreatorDownloaderTab(QWidget):
             dropped = len(self._log_lines) - self._log_line_limit
             del self._log_lines[:dropped]
             self._log_dropped += dropped
-            self._log_console_shown = max(self._log_dropped, self._log_console_shown)
 
-        if self._log_visible:
-            self._flush_log_to_console()
-        elif (
+        # The button's count is the only live view logging touches, and a
+        # download can log hundreds of lines a second: throttle the relabel.
+        if (
             hasattr(self, "_log_counter_timer")
             and not self._log_counter_timer.isActive()
         ):
             self._log_counter_timer.start()
 
-        if hasattr(self, "logs_window") and self.logs_window.isVisible():
-            self.logs_window.update_logs_content()
+        window = getattr(self, "logs_window", None)
+        if window is not None and window.isVisible():
+            window.update_logs_content()
 
     # ------------------------------------------------------------------
     # Run summary + retry
@@ -8013,7 +8755,12 @@ class CreatorDownloaderTab(QWidget):
             "WARNING",
         )
         self._start_download_thread(
-            files_to_retry, files_map, getattr(self, "_last_run_creator_url", None)
+            files_to_retry,
+            files_map,
+            getattr(self, "_last_run_creator_url", None),
+            # Reuse the numbers the first run decided for these files.
+            file_numbers=dict(getattr(self, "_last_run_file_numbers", {})),
+            post_file_counts=dict(getattr(self, "_last_run_post_file_counts", {})),
         )
 
     def add_creators_from_file(self):

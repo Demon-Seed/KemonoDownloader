@@ -391,12 +391,18 @@ class TestLoadBundledFonts:
     """Tests for the load_bundled_fonts function."""
 
     def test_load_bundled_fonts_runs_without_error(self, qapp):
-        """Test that load_bundled_fonts does not raise."""
+        """Test that load_bundled_fonts does not raise and is idempotent."""
+        from PyQt6.QtGui import QFontDatabase
+
         from kemonodownloader.app import load_bundled_fonts
 
-        # Should not raise even if called multiple times
         load_bundled_fonts()
+        once = set(QFontDatabase.families())
+        # A second call must not register the same families again.
         load_bundled_fonts()
+        twice = set(QFontDatabase.families())
+
+        assert twice == once
 
     def test_bundled_fonts_dict_structure(self):
         """Test that BUNDLED_FONTS has the expected structure."""

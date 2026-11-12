@@ -3,6 +3,11 @@ from types import SimpleNamespace
 from kemonodownloader import creator_downloader as cd
 
 
+def log_text(tab):
+    """Return the tab's log lines as plain text (there is no console)."""
+    return "\n".join(message for message, _colour in tab.log_lines_from(0))
+
+
 def test_pagination_display_controls(qapp, tmp_path):
     parent = SimpleNamespace()
     parent.cache_folder = str(tmp_path)
@@ -74,8 +79,7 @@ def test_cancel_creator_download_no_active_threads(qapp, tmp_path):
 
     # Cancel downloads when none active should append a warning to console
     tab.cancel_creator_download()
-    tab.set_log_panel_visible(True)
-    text = tab.creator_console.toPlainText()
+    text = log_text(tab)
     assert text.strip() != ""
 
 

@@ -183,6 +183,13 @@ def test_run_emits_no_files_warning(tmp_path):
             logs.append(args[0])
 
     thread._safe_emit = _capture_safe_emit
-    # Call run directly; ensure it completes without raising
+    # Keep the test offline and on the branch it names: run() fetches creator
+    # info before it looks at the file list, so stub that step out.
+    thread.fetch_creator_and_post_info = lambda: None
+    # Call run directly; it must complete and say why it did nothing.
     thread.run()
-    assert True
+
+    from kemonodownloader import creator_downloader as cd
+
+    warning = cd.translate("log_warning", cd.translate("no_files_selected_for_download"))
+    assert warning in logs

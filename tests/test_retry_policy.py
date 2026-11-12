@@ -152,9 +152,14 @@ def test_creator_fetch_and_detect_uses_the_short_countdown(monkeypatch):
         # The extension snapshot __init__ normally takes on the GUI thread.
         allowed_extensions = []
         log = SimpleNamespace(emit=lambda *args, **kwargs: None)
+        is_running = True
 
         def detect_files(self, post, allowed_extensions, domain_config):
             return []
+
+        def _interruptible_sleep(self, seconds):
+            # One recorded wait per countdown tick, like the old flat sleep.
+            cd.time.sleep(seconds)
 
     result = cd.FilePreparationThread.fetch_and_detect_files(
         Stub(), "2", "https://kemono.cr/patreon/user/1"
@@ -163,3 +168,29 @@ def test_creator_fetch_and_detect_uses_the_short_countdown(monkeypatch):
     assert result == ("2", [])
     # 2 second countdown (two ticks) rather than the old five.
     assert sleeps == [1, 1]
+
+
+def test_A4_the_countdown_wakes_up_when_the_run_is_stopped(monkeypatch):
+    """Cancel must not wait out the retry countdowns."""
+    slept = []
+    monkeypatch.setattr(cd.time, "sleep", lambda seconds: slept.append(seconds))
+    thread = cd.FilePreparationThread.__new__(cd.FilePreparationThread)
+
+    thread.is_running = False
+    thread._interruptible_sleep(5)
+    assert slept == []
+
+    thread.is_running = True
+    thread._interruptible_sleep(0.5)
+    assert round(sum(slept), 3) == 0.5
+    assert max(slept) <= 0.2  # sliced, so a stop is noticed quickly
+
+
+def test_A4_the_worker_wait_scales_with_the_retry_budget(monkeypatch):
+    thread = cd.FilePreparationThread.__new__(cd.FilePreparationThread)
+
+    thread.settings = SimpleNamespace(post_data_max_retries=7)
+    assert thread._worker_wait_budget() > 30
+
+    thread.settings = SimpleNamespace(post_data_max_retries=50)
+    assert thread._worker_wait_budget() <= 600  # but never unbounded

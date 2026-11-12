@@ -22,18 +22,6 @@ def test_sanitize_and_domain_getters():
     assert cd.get_domain_config("https://kemono.cr/whatever")["domain"] == "kemono.cr"
 
 
-def test_get_user_agent_fallback(monkeypatch):
-    # Force UserAgent constructor to raise to exercise fallback
-    monkeypatch.setattr(
-        cd, "UserAgent", lambda: (_ for _ in ()).throw(Exception("no ua"))
-    )
-    # Reset cached value
-    monkeypatch.setattr(cd, "_user_agent", None)
-    ua = cd.get_user_agent()
-    assert isinstance(ua, str)
-    assert ua.startswith("Mozilla/")
-
-
 def test_get_headers(monkeypatch):
     # Provide a simple fake UserAgent object that has a .chrome attribute
     class FakeUA:
@@ -256,54 +244,6 @@ def test_fetch_and_detect_files_retry(monkeypatch):
     assert res is not None and res[0] == "9"
 
 
-def test_download_text_sync_writes_file(monkeypatch, qapp, tmp_path):
-    # Fake session returning a post with HTML content
-    class FakeResp:
-        status_code = 200
-
-        def json(self):
-            return {"content": "<p>Hello\n<br/>World</p>"}
-
-    def fake_get_session(tab=None):
-        class S:
-            def get(self, url, headers=None, timeout=None):
-                return FakeResp()
-
-        return S()
-
-    monkeypatch.setattr(cd, "get_session", fake_get_session)
-
-    class SettingsTab:
-        pass
-
-    class Settings:
-        settings_tab = SettingsTab()
-
-    download_folder = str(tmp_path)
-    thread = cd.CreatorDownloadThread(
-        "svc",
-        "creator",
-        download_folder,
-        ["1"],
-        [],
-        {},
-        object(),
-        download_folder,
-        {},
-        Settings(),
-        1,
-    )
-
-    post_folder = str(tmp_path)
-    # Call the synchronous text downloader
-    thread._download_text_sync("1", post_folder)
-    desc_path = os.path.join(post_folder, "desc_1.txt")
-    assert os.path.exists(desc_path)
-    with open(desc_path, "r", encoding="utf-8") as f:
-        data = f.read()
-    assert "Hello" in data
-
-
 def test_creator_download_thread_run_no_files(qapp, tmp_path):
     # Ensure run() handles case with no files (logs and exits cleanly)
     class SettingsTab:
@@ -328,8 +268,13 @@ def test_creator_download_thread_run_no_files(qapp, tmp_path):
     )
     # Avoid network calls
     thread.fetch_creator_and_post_info = lambda: None
-    # Should not raise
+    # Should not raise, and must say why it did nothing
+    emitted = []
+    thread._safe_emit = lambda signal, *args: emitted.append(args)
     thread.run()
+
+    warning = cd.translate("log_warning", cd.translate("no_files_selected_for_download"))
+    assert any(warning in str(args) for args in emitted)
 
 
 def test_check_post_completion_emits(qapp):
@@ -492,6 +437,4 @@ def test_post_detection_unexpected_and_json_error(monkeypatch, qapp):
     pdt2.run()
     # Expect an ERROR log emitted for JSON parsing failure
     assert any(lvl == "ERROR" for _, lvl in logs2)
-
-
 

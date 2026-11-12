@@ -320,12 +320,17 @@ def test_post_detection_invalid_posts_data_type(monkeypatch):
 
     settings = SimpleNamespace(creator_posts_max_attempts=1, settings_tab=None)
     thread = cd.PostDetectionThread("https://kemono.cr/fanbox/user/1", {}, settings)
-    thread.finished = SimpleNamespace(emit=lambda *a, **k: None)
-    thread.posts_batch = SimpleNamespace(emit=lambda *a, **k: None)
+    finished = []
+    batches = []
+    thread.finished = SimpleNamespace(emit=lambda *a, **k: finished.append(a))
+    thread.posts_batch = SimpleNamespace(emit=lambda *a, **k: batches.append(a))
     thread.log = SimpleNamespace(emit=lambda *a, **k: None)
     thread.error = SimpleNamespace(emit=lambda *a, **k: None)
 
     thread.run()
+
+    assert finished, "a run must finish even when the payload is the wrong type"
+    assert not batches, "an int payload must never be emitted as a post batch"
 
 
 def test_post_detection_skips_invalid_posts_and_sets_file_thumbnail(monkeypatch):
@@ -389,12 +394,18 @@ def test_post_detection_single_page_target(monkeypatch):
 
     settings = SimpleNamespace(creator_posts_max_attempts=2, settings_tab=None)
     thread = cd.PostDetectionThread("https://kemono.cr/fanbox/user/1?o=0", {}, settings)
-    thread.finished = SimpleNamespace(emit=lambda *a, **k: None)
-    thread.posts_batch = SimpleNamespace(emit=lambda *a, **k: None)
+    finished = []
+    batches = []
+    thread.finished = SimpleNamespace(emit=lambda *a, **k: finished.append(a))
+    thread.posts_batch = SimpleNamespace(emit=lambda *a, **k: batches.append(a))
     thread.log = SimpleNamespace(emit=lambda *a, **k: None)
     thread.error = SimpleNamespace(emit=lambda *a, **k: None)
 
     thread.run()
+
+    assert finished, "a single-page fetch must finish"
+    assert batches, "the page's post must reach the batch signal"
+    assert "p1" in str(batches)
 
 
 def test_post_detection_offset_increment_path(monkeypatch):
@@ -560,7 +571,8 @@ def test_file_prep_run_progress_emit_runtimeerror(monkeypatch):
         max_concurrent=1,
     )
     t.log = SimpleNamespace(emit=lambda *a, **k: None)
-    t.finished = SimpleNamespace(emit=lambda *a, **k: None)
+    finished = []
+    t.finished = SimpleNamespace(emit=lambda *a, **k: finished.append(a))
     t.fetch_and_detect_files = lambda *_a, **_k: ("1", [("f.jpg", "u")])
     t.progress = SimpleNamespace(
         emit=lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("dead"))
@@ -568,14 +580,22 @@ def test_file_prep_run_progress_emit_runtimeerror(monkeypatch):
 
     t.run()
 
+    assert finished, "a dead progress signal must not stop the run from finishing"
+
 
 def test_safe_emit_runtimeerror_is_ignored():
     dummy = SimpleNamespace(_destroyed=False)
-    signal = SimpleNamespace(
-        emit=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("deleted"))
-    )
+    attempts = []
+
+    def explode(*args, **kwargs):
+        attempts.append(args)
+        raise RuntimeError("deleted")
+
+    signal = SimpleNamespace(emit=explode)
 
     cd.CreatorDownloadThread._safe_emit(dummy, signal, "x")
+
+    assert attempts == [("x",)], "the message must be offered to the signal once"
 
 
 def test_get_desc_folder_strategy_exception_falls_back_per_post(tmp_path):
@@ -629,6 +649,8 @@ def test_download_text_sync_returns_when_description_exists(monkeypatch, tmp_pat
 
     thread._download_text_sync("1", str(post_folder))
 
+    assert (post_folder / "desc_1.txt").read_text(encoding="utf-8") == "already"
+
 
 def test_download_text_sync_exception_logs_warning(monkeypatch, tmp_path):
     monkeypatch.setattr(
@@ -669,15 +691,20 @@ def test_download_worker_handles_cancellederror_from_download_file():
         raise asyncio.CancelledError()
 
     dummy.download_file = fail_download
-    dummy._safe_emit = lambda *a, **k: None
+    events = []
+    dummy._safe_emit = lambda *a, **k: events.append(a)
     dummy.log = SimpleNamespace(emit=lambda *a, **k: None)
 
+    q = asyncio.Queue()
+
     async def main():
-        q = asyncio.Queue()
         await q.put((0, "u1", 1))
         await cd.CreatorDownloadThread.download_worker(dummy, q, "/tmp", 1)
 
     asyncio.run(main())
+
+    assert q.empty(), "the cancelled item must still be released from the queue"
+    assert not any("ERROR" in str(event) for event in events)
 
 
 def test_checkbox_toggle_thread_stop_and_early_return():
@@ -690,9 +717,6 @@ def test_checkbox_toggle_thread_stop_and_early_return():
 def test_creator_logs_window_download_empty_and_write_error(monkeypatch, tmp_path):
     parent_logs = []
     parent = QWidget()
-    parent.creator_console = SimpleNamespace(
-        toHtml=lambda: "<b>x</b>", clear=lambda: None
-    )
     parent.append_log_to_console = lambda msg, level: parent_logs.append((msg, level))
     window = cd.LogsWindow(parent)
 
@@ -750,14 +774,18 @@ def test_post_detection_nested_emit_failures_are_ignored(monkeypatch):
         cd, "urlparse", lambda *_a, **_k: (_ for _ in ()).throw(ValueError("bad"))
     )
 
-    thread.log = SimpleNamespace(
-        emit=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("gone-log"))
-    )
-    thread.error = SimpleNamespace(
-        emit=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("gone-error"))
-    )
+    attempts = []
+
+    def gone(*args, **kwargs):
+        attempts.append(args)
+        raise RuntimeError("gone-log")
+
+    thread.log = SimpleNamespace(emit=gone)
+    thread.error = SimpleNamespace(emit=gone)
 
     thread.run()
+
+    assert attempts, "the failure must be reported even if the signals are gone"
 
 
 def test_post_detection_fallback_creator_id_query_split(monkeypatch):
@@ -774,12 +802,17 @@ def test_post_detection_fallback_creator_id_query_split(monkeypatch):
 
     settings = SimpleNamespace(creator_posts_max_attempts=1, settings_tab=None)
     thread = cd.PostDetectionThread("https://kemono.cr/user/1?foo=bar", {}, settings)
-    thread.log = SimpleNamespace(emit=lambda *a, **k: None)
+    logged = []
+    thread.log = SimpleNamespace(emit=lambda msg, level: logged.append(level))
     thread.error = SimpleNamespace(emit=lambda *a, **k: None)
     thread.finished = SimpleNamespace(emit=lambda *a, **k: None)
     thread.posts_batch = SimpleNamespace(emit=lambda *a, **k: None)
 
     thread.run()
+
+    assert any(level in ("WARNING", "ERROR") for level in logged), (
+        "a 500 response must be reported, not swallowed"
+    )
 
 
 def test_post_detection_returns_when_stopped_inside_alt_url_loop(monkeypatch):
@@ -797,7 +830,10 @@ def test_post_detection_returns_when_stopped_inside_alt_url_loop(monkeypatch):
     settings = SimpleNamespace(creator_posts_max_attempts=1, settings_tab=None)
     thread = cd.PostDetectionThread("https://kemono.cr/fanbox/user/1", {}, settings)
 
+    levels = []
+
     def log_emit(_msg, level):
+        levels.append(level)
         if level == "DEBUG":
             thread.is_running = False
 
@@ -807,6 +843,8 @@ def test_post_detection_returns_when_stopped_inside_alt_url_loop(monkeypatch):
     thread.posts_batch = SimpleNamespace(emit=lambda *a, **k: None)
 
     thread.run()
+
+    assert "DEBUG" in levels
 
 
 def test_post_detection_final_fallback_thumbnail_path(monkeypatch):
@@ -907,7 +945,8 @@ def test_file_prep_worker_runtimeerror_from_log_emit_is_ignored(monkeypatch):
 
     t.log = SimpleNamespace(emit=log_emit)
     t.progress = SimpleNamespace(emit=lambda *a, **k: None)
-    t.finished = SimpleNamespace(emit=lambda *a, **k: None)
+    finished = []
+    t.finished = SimpleNamespace(emit=lambda *a, **k: finished.append(a))
     t.fetch_and_detect_files = lambda *_a, **_k: ("1", [("f.jpg", "u")])
 
     class ImmediateThread:
@@ -925,6 +964,8 @@ def test_file_prep_worker_runtimeerror_from_log_emit_is_ignored(monkeypatch):
 
     t.run()
 
+    assert finished, "a dead log signal must not stop the run from finishing"
+
 
 def test_file_prep_worker_exception_is_ignored(monkeypatch):
     checks = {".jpg": SimpleNamespace(isChecked=lambda: True)}
@@ -941,7 +982,8 @@ def test_file_prep_worker_exception_is_ignored(monkeypatch):
     )
     t.log = SimpleNamespace(emit=lambda *a, **k: None)
     t.progress = SimpleNamespace(emit=lambda *a, **k: None)
-    t.finished = SimpleNamespace(emit=lambda *a, **k: None)
+    finished = []
+    t.finished = SimpleNamespace(emit=lambda *a, **k: finished.append(a))
     t.fetch_and_detect_files = lambda *_a, **_k: (_ for _ in ()).throw(ValueError("x"))
 
     class ImmediateThread:
@@ -958,6 +1000,8 @@ def test_file_prep_worker_exception_is_ignored(monkeypatch):
     monkeypatch.setattr(cd.threading, "Thread", ImmediateThread)
 
     t.run()
+
+    assert finished, "a worker error must not stop the run from finishing"
 
 
 def test_file_prep_wait_polling_sleep_path(monkeypatch):
@@ -1134,7 +1178,10 @@ def test_download_file_cancellation_before_connection(monkeypatch, tmp_path):
 
     asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
 
-    assert file_url in thread.failed_files
+    # A user cancel is not a download failure, so it must not be offered for
+    # retry.
+    assert file_url not in thread.failed_files
+    assert file_url not in thread.completed_files
 
 
 def test_download_file_bad_content_length_header(monkeypatch, tmp_path):

@@ -50,11 +50,6 @@ def make_parent(tmp_path):
         setText=lambda s: setattr(parent, "_status", s)
     )
     parent.animate_button = lambda b, v: None
-    parent.creator_console = SimpleNamespace(
-        toHtml=lambda: "<b>log</b>",
-        clear=lambda: None,
-        append=lambda html: None,
-    )
     parent.append_log_to_console = lambda *a, **k: None
     return parent
 

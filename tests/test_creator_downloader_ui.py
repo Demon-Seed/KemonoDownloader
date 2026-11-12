@@ -41,9 +41,6 @@ def make_parent(tmp_path):
     parent.tabs = Tabs()
     parent.status_label = SimpleNamespace(setText=lambda s: None)
     parent.animate_button = lambda b, v: None
-    parent.creator_console = SimpleNamespace(
-        toHtml=lambda: "<b>log</b>", clear=lambda: None, append=lambda html: None
-    )
     parent.append_log_to_console = lambda *a, **k: None
     return parent
 
@@ -53,13 +50,10 @@ def test_append_log_and_multi_url_input(tmp_path):
     tab = cd.CreatorDownloaderTab(parent)
 
     tab.append_log_to_console("Test message", "INFO")
-    # The log panel is minimised by default; opening it replays the buffer.
-    assert tab.creator_console.toPlainText() == ""
-    tab.set_log_panel_visible(True)
-    assert "Test message" in tab.creator_console.toHtml()
+    # The log is a plain store now, and the window is the only view over it.
+    assert [message for message, _colour in tab.log_lines_from(0)] == ["Test message"]
 
-    # Fast Mode is gone; the multi-URL input is the only entry point.
-    assert not hasattr(tab, "toggle_fast_mode")
+    # The multi-URL input is the only entry point.
     assert tab.creator_multi_url_input.isVisibleTo(tab)
 
 
@@ -125,10 +119,26 @@ def test_pagination_and_display(tmp_path):
 def test_set_fetching_and_downloading_states(tmp_path):
     parent = make_parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
+
     tab.set_fetching_ui_state(True)
+    assert tab.creator_download_btn.isEnabled() is False
+    assert tab.creator_cancel_btn.isEnabled() is True
+    assert tab.creator_search_input.isEnabled() is False
+
     tab.set_fetching_ui_state(False)
+    assert tab.creator_download_btn.isEnabled() is True
+    assert tab.creator_cancel_btn.isEnabled() is False
+    assert tab.creator_search_input.isEnabled() is True
+
     tab.set_downloading_ui_state(True)
+    assert tab.creator_download_btn.isEnabled() is False
+    assert tab.creator_cancel_btn.isEnabled() is True
+    assert tab.creator_multi_url_input.isEnabled() is False
+
     tab.set_downloading_ui_state(False)
+    assert tab.creator_download_btn.isEnabled() is True
+    assert tab.creator_cancel_btn.isEnabled() is False
+    assert tab.creator_multi_url_input.isEnabled() is True
 
 
 def test_creator_tab_basic_interactions(tmp_path, monkeypatch):
@@ -144,7 +154,7 @@ def test_creator_tab_basic_interactions(tmp_path, monkeypatch):
     parent = Parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
 
-    # Category checkboxes are no longer locked by Fast Mode.
+    # Category checkboxes stay enabled: nothing locks them during a fetch.
     assert tab.creator_main_check.isEnabled()
 
     # Add a creator url via multi-url input

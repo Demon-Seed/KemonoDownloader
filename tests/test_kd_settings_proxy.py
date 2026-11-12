@@ -2,9 +2,10 @@ import importlib
 import importlib.util
 from types import SimpleNamespace
 
+import pytest
 from PyQt6.QtCore import QProcess
 
-from kemonodownloader.kd_settings import SettingsTab
+from kemonodownloader.kd_settings import ProxyUnavailableError, SettingsTab
 
 
 def test_get_proxy_settings_none_when_disabled():
@@ -35,12 +36,24 @@ def test_get_proxy_settings_custom():
 
 
 def test_get_proxy_settings_tor_not_running():
+    """Tor enabled but not running must fail, not connect directly."""
     fake = SimpleNamespace(
         settings={"use_proxy": True, "proxy_type": "tor"},
         temp_settings={"use_proxy": True, "proxy_type": "tor"},
         tor_process=None,
     )
-    assert SettingsTab.get_proxy_settings(fake) is None
+    with pytest.raises(ProxyUnavailableError):
+        SettingsTab.get_proxy_settings(fake)
+
+
+def test_get_proxy_settings_custom_without_url_fails():
+    fake = SimpleNamespace(
+        settings={"use_proxy": True, "proxy_type": "custom", "custom_proxy_url": ""},
+        temp_settings={"use_proxy": True, "proxy_type": "custom", "custom_proxy_url": ""},
+        tor_process=None,
+    )
+    with pytest.raises(ProxyUnavailableError):
+        SettingsTab.get_proxy_settings(fake)
 
 
 def test_get_proxy_settings_tor_fallback(monkeypatch):

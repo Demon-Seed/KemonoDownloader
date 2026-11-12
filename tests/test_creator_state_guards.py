@@ -319,6 +319,7 @@ def test_clearing_the_queue_untickes_the_filetypes(qtbot, tmp_path, monkeypatch)
     tab = make_tab(qtbot, tmp_path)
     url = "https://kemono.cr/artist/user/1"
     tab.creator_queue = [(url, True)]
+    tab.current_creator_url = url  # removing the creator being viewed
     tab.creator_ext_checks[".png"].setChecked(True)
     tab.filter_no_selected_filetypes_check.setChecked(True)
     monkeypatch.setattr(
@@ -331,6 +332,28 @@ def test_clearing_the_queue_untickes_the_filetypes(qtbot, tmp_path, monkeypatch)
     assert tab._selected_extensions() == []
     assert all(not box.isChecked() for box in tab.creator_ext_checks.values())
     assert tab.creator_queue == []
+
+
+def test_removing_another_creator_keeps_the_view(qtbot, tmp_path, monkeypatch):
+    """A14: only removing the creator being viewed drops its posts."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    tab = make_tab(qtbot, tmp_path)
+    viewed = "https://kemono.cr/artist/user/1"
+    other = "https://kemono.cr/artist/user/2"
+    tab.creator_queue = [(viewed, True), (other, True)]
+    tab.current_creator_url = viewed
+    tab.all_detected_posts = [("A post", ("1", None))]
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes
+    )
+    monkeypatch.setattr(tab, "filter_items", lambda: None)
+
+    tab.create_remove_handler(other)()
+
+    assert tab.creator_queue == [(viewed, True)]
+    assert tab.current_creator_url == viewed
+    assert tab.all_detected_posts == [("A post", ("1", None))]
 
 
 def test_download_thread_gets_each_post_once(qtbot, tmp_path, monkeypatch):

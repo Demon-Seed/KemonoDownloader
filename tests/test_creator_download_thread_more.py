@@ -115,19 +115,28 @@ def test_download_text_sync_writes_file(monkeypatch, tmp_path):
 
 def test_safe_emit_ignores_when_destroyed(tmp_path):
     t = make_thread(tmp_path)
+    calls = []
+    t.log = SimpleNamespace(emit=lambda *a, **k: calls.append(a))
     # mark destroyed and ensure no exception
     t._destroyed = True
     # should not raise
     t._safe_emit(t.log, "ignored")
 
+    assert calls == [], "a destroyed thread must not touch its signals"
+
 
 def test_download_file_skips_when_not_running(tmp_path):
     t = make_thread(tmp_path)
     t.is_running = False
+    file_url = t.files_to_download[0]
     # Should return quickly without raising (async method)
     import asyncio
 
-    asyncio.run(t.download_file(t.files_to_download[0], str(tmp_path), 0, 1, page_number=1))
+    asyncio.run(t.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
+
+    assert file_url not in t.completed_files
+    assert file_url not in t.failed_files
+    assert not [path for path in tmp_path.rglob("*.jpg") if path.is_file()]
 
 
 def test_shared_template_number_increments(tmp_path):

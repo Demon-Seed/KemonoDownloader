@@ -3,7 +3,10 @@ import os
 import subprocess
 from types import SimpleNamespace
 
+import pytest
 from PyQt6.QtCore import QByteArray, QProcess
+
+from kemonodownloader import kd_paths
 from PyQt6.QtWidgets import QMessageBox
 
 
@@ -61,76 +64,82 @@ def test_apply_uses_the_save_and_data_directories(qapp, monkeypatch, tmp_path):
 
     st = SettingsTab(parent)
     try:
-        # Use the configured folder, not the suite's isolation override.
-        monkeypatch.delenv(kd_paths.DATA_DIR_ENV, raising=False)
         save_dir = str(tmp_path / "posts")
-        data_dir = str(tmp_path / "appdata")
+        # A typed data folder is ignored now: the location is fixed.
         st.temp_settings["base_directory"] = save_dir
-        st.temp_settings["data_directory"] = data_dir
+        st.temp_settings["data_directory"] = str(tmp_path / "appdata")
 
         st.confirm_and_apply_settings()
 
         assert parent.download_folder == save_dir
-        assert parent.cache_folder == kd_paths.cache_dir(data_dir)
-        assert parent.other_files_folder == kd_paths.other_files_dir(data_dir)
-        assert st.settings["data_directory"] == data_dir
+        assert parent.cache_folder == kd_paths.cache_dir()
+        assert parent.other_files_folder == kd_paths.other_files_dir()
+        assert st.settings["data_directory"] == kd_paths.data_directory()
     finally:
         st.deleteLater()
 
 
-def test_data_directory_defaults_to_the_save_directory_default(qapp):
-    """A fresh install keeps both folders together; either can move later."""
+def test_A7_old_boolean_dedup_settings_are_migrated():
+    """True meant "files only" but the folder check used to run anyway."""
+    from kemonodownloader import kd_settings
+
+    assert kd_settings.normalize_name_dedup(True) == "both"
+    assert kd_settings.normalize_name_dedup(False) == "off"
+    assert kd_settings.normalize_name_dedup("file") == "file"
+    assert kd_settings.normalize_name_dedup("folder") == "folder"
+    assert kd_settings.normalize_name_dedup("true") == "both"
+    assert kd_settings.normalize_name_dedup("false") == "off"
+    assert kd_settings.normalize_name_dedup("nonsense") == "both"
+
+
+def test_the_data_directory_is_a_fixed_readout(qapp):
+    """A17: the folder lives next to the app and cannot be chosen."""
     from kemonodownloader.kd_settings import SettingsTab
 
     st = SettingsTab(make_parent())
     try:
-        assert (
-            st.default_settings["data_directory"]
-            == st.default_settings["base_directory"]
-        )
-        assert (
-            st.data_directory_input.text() == st.default_settings["data_directory"]
-        )
+        assert st.data_directory_input.isReadOnly() is True
+        assert st.data_directory_input.text() == kd_paths.data_directory()
+        # It is no longer the Save Directory default: posts and databases must
+        # not share a folder.
+        assert st.default_settings["data_directory"] != st.default_settings[
+            "base_directory"
+        ]
         assert st.data_directory_label.text() != ""
     finally:
         st.deleteLater()
 
 
-def test_typing_a_data_directory_is_remembered(qapp, tmp_path):
+def test_typing_into_the_data_field_changes_nothing(qapp, tmp_path):
     from kemonodownloader.kd_settings import SettingsTab
 
     st = SettingsTab(make_parent())
     try:
-        target = str(tmp_path / "program data")
-        st.data_directory_input.setText(target)
+        before = dict(st.temp_settings)
+        st.data_directory_input.setText(str(tmp_path / "somewhere"))
 
-        assert st.temp_settings["data_directory"] == target
+        # No signal is wired any more, so the setting cannot follow the field.
+        assert st.temp_settings == before
     finally:
         st.deleteLater()
 
 
-def test_browse_data_directory_uses_the_current_folder(qapp, tmp_path, monkeypatch):
-    from kemonodownloader import kd_paths
+def test_open_data_directory_opens_the_fixed_folder(qapp, monkeypatch):
     from kemonodownloader.kd_settings import SettingsTab
 
     st = SettingsTab(make_parent())
     try:
-        st.temp_settings["data_directory"] = str(tmp_path / "current")
-        seen = {}
-
-        def fake_picker(_parent, _title, start):
-            seen["start"] = start
-            return ""
-
+        opened = []
         monkeypatch.setattr(
-            "kemonodownloader.kd_settings.QFileDialog.getExistingDirectory", fake_picker
+            "kemonodownloader.kd_settings.QDesktopServices.openUrl",
+            lambda url: opened.append(url.toLocalFile()),
         )
 
-        st.browse_data_directory()
+        st.open_data_directory()
 
-        assert seen["start"] == kd_paths.data_directory(st.temp_settings["data_directory"])
-        # A cancelled pick changes nothing.
-        assert st.temp_settings["data_directory"] == str(tmp_path / "current")
+        assert [os.path.normpath(path) for path in opened] == [
+            os.path.normpath(kd_paths.data_directory())
+        ]
     finally:
         st.deleteLater()
 
@@ -187,24 +196,27 @@ def test_auto_detect_tor_finds_executable(qapp, monkeypatch):
 
 
 def test_get_proxy_settings_custom_and_tor(qapp, monkeypatch):
-    from kemonodownloader.kd_settings import SettingsTab
+    from kemonodownloader.kd_settings import ProxyUnavailableError, SettingsTab
 
     parent = make_parent()
     st = SettingsTab(parent)
 
     # Custom proxy
-    st.settings["use_proxy"] = True
-    st.settings["proxy_type"] = "custom"
-    st.settings["custom_proxy_url"] = "127.0.0.1:8080"
+    for settings in (st.settings, st.temp_settings):
+        settings["use_proxy"] = True
+        settings["proxy_type"] = "custom"
+        settings["custom_proxy_url"] = "127.0.0.1:8080"
     assert st.get_proxy_settings() == {
         "http": "127.0.0.1:8080",
         "https": "127.0.0.1:8080",
     }
 
-    # Tor proxy when Tor not running -> None
+    # Tor proxy when Tor not running -> error, never a direct connection
     st.settings["proxy_type"] = "tor"
+    st.temp_settings["proxy_type"] = "tor"
     st.tor_process = None
-    assert st.get_proxy_settings() is None
+    with pytest.raises(ProxyUnavailableError):
+        st.get_proxy_settings()
 
     # Tor running and socks available
     class FakeProcess:
@@ -216,6 +228,7 @@ def test_get_proxy_settings_custom_and_tor(qapp, monkeypatch):
         importlib.util, "find_spec", lambda name: object() if name == "socks" else None
     )
     proxies = st.get_proxy_settings()
+    assert proxies is not None
     assert proxies["http"].startswith("socks5h://")
 
 

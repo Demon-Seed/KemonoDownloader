@@ -2,9 +2,11 @@ import os
 import subprocess
 import sys
 
-from PyQt6.QtCore import QProcess, QSettings, Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QCursor
+from PyQt6.QtCore import QEvent, QObject, QProcess, QSettings, Qt, QThread, QUrl, pyqtSignal
+from PyQt6.QtGui import QCursor, QDesktopServices
 from PyQt6.QtWidgets import (
+    QAbstractSpinBox,
+    QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -36,6 +38,70 @@ GITHUB_REPO_URL = "https://github.com/VoxDroid/KemonoDownloader"
 # unknown state.
 SHOW_ONLY_FILETYPE_MODES = ("off", "on", "on_with_count")
 
+# "Dedup when name is taken": which kinds of name get a _1/_2 suffix instead of
+# overwriting (file names, post folder names, or both).
+NAME_DEDUP_MODES = ("off", "file", "folder", "both")
+
+# How each mode is labelled in the combo and in the apply summary.
+_NAME_DEDUP_LABEL_KEYS = {
+    "off": "option_off",
+    "file": "option_on_file",
+    "folder": "option_on_folder",
+    "both": "option_on_both",
+}
+
+
+def normalize_name_dedup(value):
+    """Coerce a stored "dedup when name is taken" value to a known mode.
+
+    Older settings stored a boolean: ``True`` meant "dedupe file names" and
+    ``False`` meant "never". They map to ``both`` and ``off`` - the folder half
+    of the check used to run unconditionally, so ``both`` keeps a returning
+    user's behaviour instead of silently merging same-title posts.
+    """
+    if isinstance(value, bool):
+        return "both" if value else "off"
+    text = str(value or "").strip().lower()
+    if text in NAME_DEDUP_MODES:
+        return text
+    if text in ("true", "1", "yes", "on"):
+        return "both"
+    if text in ("false", "0", "no"):
+        return "off"
+    return "both"
+
+
+class ProxyUnavailableError(RuntimeError):
+    """Raised when a proxy is enabled but cannot be used.
+
+    ``get_proxy_settings`` returns None only for "no proxy configured". Going
+    ahead without a proxy the user asked for would put their real address on
+    the wire, so an unusable proxy is an error the download reports rather
+    than a silent downgrade to a direct connection.
+    """
+
+
+class _WheelGuard(QObject):
+    """Keeps the mouse wheel from changing values on the Settings page.
+
+    Qt hands the wheel to spin boxes, combo boxes and sliders, so scrolling
+    the page with the cursor over one of them changed the setting under it.
+    Those events are swallowed here and re-sent to the scroll area, so the
+    page still scrolls and no value moves.
+    """
+
+    def __init__(self, scroll_area, parent=None):
+        super().__init__(parent)
+        self._scroll_area = scroll_area
+
+    def eventFilter(self, obj, event):
+        if event.type() != QEvent.Type.Wheel:
+            return False
+        viewport = self._scroll_area.viewport() if self._scroll_area else None
+        if viewport is not None:
+            QApplication.sendEvent(viewport, event)
+        return True
+
 
 class SettingsTab(QWidget):
     settings_applied = pyqtSignal()
@@ -59,7 +125,9 @@ class SettingsTab(QWidget):
             # Where the app's own working files live (cache, databases). Defaults
             # to the same folder as the Save Directory, so a fresh install keeps
             # them together until the user splits them.
-            "data_directory": kd_paths.default_data_directory(),
+            # A readout, not a setting: filled in from kd_paths at load time so
+            # that importing this module never probes (or creates) the folder.
+            "data_directory": "",
             "simultaneous_downloads": 5,
             "language": "english",
             "creator_posts_max_attempts": 200,
@@ -69,7 +137,7 @@ class SettingsTab(QWidget):
             # Debug lines (internal bookkeeping and per-item detail the UI
             # already summarises) stay out of the log unless this is on.
             "verbose_logging": False,
-            "show_only_found_filetypes": "off",
+            "show_only_found_filetypes": "on_with_count",
             "use_proxy": False,
             "proxy_type": "tor",  # "custom", "tor"
             "custom_proxy_url": "",
@@ -78,13 +146,14 @@ class SettingsTab(QWidget):
             # templates replace the old "Rename & Sort" prefix: one for files
             # inside a post's own folder, one for files pooled in a folder
             # shared with other posts (single creator folder, filetype
-            # subfolders, or a post whose folder was skipped). The defaults
-            # reproduce the old auto-rename output.
-            "creator_filename_template": "{file_number}_{post_id}_{orig_name}",
+            # subfolders, or a post whose folder was skipped). Both lead with
+            # the post id and the file number, so a post's files stay grouped
+            # and in order wherever they land.
+            "creator_filename_template": "{post_id}_{file_number}_{orig_name}",
             "creator_filename_template_shared": "{post_id}_{file_number}_{orig_name}",
             # Safety net for templates that drop the placeholders that keep
             # names apart: never overwrite a file that is already there.
-            "creator_unique_filenames": True,
+            "creator_unique_filenames": "both",
             "creator_folder_strategy": "per_post",  # per_post|single_folder|by_file_type
             "creator_folder_name_template": "{post_id}_{post_title}",
             # Font setting
@@ -97,19 +166,23 @@ class SettingsTab(QWidget):
         self.tor_process = None
         self.tor_data_dir = None
         self.tor_config_file = None
+        # Worker-visible proxy state, refreshed on the GUI thread whenever the
+        # proxy settings or the Tor process change (see get_proxy_settings).
+        self._proxy_cache = None
 
         language_manager.set_language(self.settings["language"])
 
         self.setup_ui()
+        self._refresh_proxy_cache()
 
     def get_default_base_directory(self):
         """Return the platform-appropriate default Save Directory.
 
-        Shares the program-data default so a fresh install keeps the posts and
-        the app's own files in one place; the two are separate settings, so
-        either can be pointed elsewhere later.
+        Posts go to the per-user folder, NOT to the app's own data folder:
+        ``extras`` holds the databases and the thumbnail cache, and a library
+        must never be mixed with those.
         """
-        return kd_paths.default_data_directory()
+        return kd_paths.per_user_directory()
 
     def load_settings(self):
         settings_dict = {}
@@ -119,12 +192,8 @@ class SettingsTab(QWidget):
         settings_dict["base_directory"] = self.qsettings.value(
             "base_directory", self.default_settings["base_directory"], type=str
         )
-        settings_dict["data_directory"] = self.qsettings.value(
-            "data_directory",
-            self.default_settings.get("data_directory")
-            or kd_paths.default_data_directory(),
-            type=str,
-        )
+        # Fixed location: the row is a readout, so a stored value is ignored.
+        settings_dict["data_directory"] = kd_paths.data_directory()
         settings_dict["simultaneous_downloads"] = self.qsettings.value(
             "simultaneous_downloads",
             self.default_settings["simultaneous_downloads"],
@@ -188,7 +257,7 @@ class SettingsTab(QWidget):
         settings_dict["creator_filename_template"] = self.qsettings.value(
             "creator_filename_template",
             self.default_settings.get(
-                "creator_filename_template", "{file_number}_{post_id}_{orig_name}"
+                "creator_filename_template", "{post_id}_{file_number}_{orig_name}"
             ),
             type=str,
         )
@@ -200,10 +269,12 @@ class SettingsTab(QWidget):
             ),
             type=str,
         )
-        settings_dict["creator_unique_filenames"] = self.qsettings.value(
-            "creator_unique_filenames",
-            self.default_settings.get("creator_unique_filenames", True),
-            type=bool,
+        settings_dict["creator_unique_filenames"] = normalize_name_dedup(
+            self.qsettings.value(
+                "creator_unique_filenames",
+                self.default_settings.get("creator_unique_filenames", "both"),
+                type=str,
+            )
         )
         settings_dict["creator_folder_strategy"] = self.qsettings.value(
             "creator_folder_strategy",
@@ -227,7 +298,7 @@ class SettingsTab(QWidget):
         self.qsettings.setValue("base_folder_name", self.settings["base_folder_name"])
         self.qsettings.setValue("base_directory", self.settings["base_directory"])
         self.qsettings.setValue(
-            "data_directory", self.settings.get("data_directory") or ""
+            "data_directory", kd_paths.data_directory()
         )
         self.qsettings.setValue(
             "simultaneous_downloads", self.settings["simultaneous_downloads"]
@@ -250,7 +321,7 @@ class SettingsTab(QWidget):
         )
         self.qsettings.setValue(
             "show_only_found_filetypes",
-            self.settings.get("show_only_found_filetypes", "off"),
+            self.settings.get("show_only_found_filetypes", "on_with_count"),
         )
         self.qsettings.setValue("proxy_type", self.settings["proxy_type"])
         self.qsettings.setValue("custom_proxy_url", self.settings["custom_proxy_url"])
@@ -259,7 +330,7 @@ class SettingsTab(QWidget):
         self.qsettings.setValue(
             "creator_filename_template",
             self.settings.get(
-                "creator_filename_template", "{file_number}_{post_id}_{orig_name}"
+                "creator_filename_template", "{post_id}_{file_number}_{orig_name}"
             ),
         )
         self.qsettings.setValue(
@@ -271,7 +342,7 @@ class SettingsTab(QWidget):
         )
         self.qsettings.setValue(
             "creator_unique_filenames",
-            bool(self.settings.get("creator_unique_filenames", True)),
+            normalize_name_dedup(self.settings.get("creator_unique_filenames", "both")),
         )
         self.qsettings.setValue(
             "creator_folder_strategy",
@@ -316,19 +387,16 @@ class SettingsTab(QWidget):
         self.browse_button.clicked.connect(self.browse_directory)
         folder_layout.addWidget(self.browse_button, 0, 2)
 
-        # Where the app keeps its own working files. Separate from the Save
-        # Directory so a library folder only ever holds saved posts.
+        # The app's own working files live next to the application, in
+        # "extras" - there is no setting for them any more, so the row is a
+        # read-only readout of where they are (see kd_paths).
         self.data_directory_label = QLabel()
         folder_layout.addWidget(self.data_directory_label, 1, 0)
-        self.data_directory_input = QLineEdit(
-            self.temp_settings.get("data_directory")
-            or kd_paths.default_data_directory()
-        )
-        self.data_directory_input.setStyleSheet("padding: 5px; border-radius: 5px;")
-        self.data_directory_input.textChanged.connect(
-            lambda: self.update_temp_setting(
-                "data_directory", self.data_directory_input.text()
-            )
+        self.data_directory_input = QLineEdit(kd_paths.data_directory())
+        self.data_directory_input.setReadOnly(True)
+        self.data_directory_input.setEnabled(False)
+        self.data_directory_input.setStyleSheet(
+            "padding: 5px; border-radius: 5px; color: #C8D4E8;"
         )
         folder_layout.addWidget(self.data_directory_input, 1, 1)
 
@@ -336,7 +404,9 @@ class SettingsTab(QWidget):
         self.browse_data_button.setStyleSheet(
             "background: #4A5B7A; padding: 5px; border-radius: 5px;"
         )
-        self.browse_data_button.clicked.connect(self.browse_data_directory)
+        # It cannot choose the folder any more, so it opens it instead: that is
+        # what people actually wanted (to back up or clear the databases).
+        self.browse_data_button.clicked.connect(self.open_data_directory)
         folder_layout.addWidget(self.browse_data_button, 1, 2)
 
         self.folder_group.setLayout(folder_layout)
@@ -457,7 +527,7 @@ class SettingsTab(QWidget):
         # are no presets to keep in step, and any separator works.
         self.creator_filename_input = QLineEdit(
             self.temp_settings.get(
-                "creator_filename_template", "{file_number}_{post_id}_{orig_name}"
+                "creator_filename_template", "{post_id}_{file_number}_{orig_name}"
             )
         )
         self.creator_filename_input.setStyleSheet(
@@ -504,35 +574,8 @@ class SettingsTab(QWidget):
         )
         creator_custom_layout.addWidget(self.creator_shared_template_help_btn, 1, 2)
 
-        # Safety net for templates that drop the placeholders keeping names
-        # apart: never overwrite a file that is already there. Off/On like the
-        # other option rows.
-        self.creator_unique_filenames_label = QLabel()
-        creator_custom_layout.addWidget(self.creator_unique_filenames_label, 2, 0)
-
-        self.creator_unique_filenames_combo = QComboBox()
-        self.creator_unique_filenames_combo.addItem(translate("option_off"), False)
-        self.creator_unique_filenames_combo.addItem(translate("option_on"), True)
-        self.creator_unique_filenames_combo.setStyleSheet(
-            "padding: 5px; border-radius: 5px;"
-        )
-        current_unique = bool(self.temp_settings.get("creator_unique_filenames", True))
-        for i in range(self.creator_unique_filenames_combo.count()):
-            if bool(self.creator_unique_filenames_combo.itemData(i)) == current_unique:
-                self.creator_unique_filenames_combo.setCurrentIndex(i)
-                break
-        self.creator_unique_filenames_combo.currentIndexChanged.connect(
-            lambda index: self.update_temp_setting(
-                "creator_unique_filenames",
-                bool(self.creator_unique_filenames_combo.itemData(index)),
-            )
-        )
-        creator_custom_layout.addWidget(
-            self.creator_unique_filenames_combo, 2, 1, 1, 2
-        )
-
         self.creator_folder_name_label = QLabel(translate("folder_name_template"))
-        creator_custom_layout.addWidget(self.creator_folder_name_label, 3, 0)
+        creator_custom_layout.addWidget(self.creator_folder_name_label, 2, 0)
 
         # Folder name template: free text, same placeholder style.
         self.creator_folder_name_input = QLineEdit(
@@ -548,7 +591,7 @@ class SettingsTab(QWidget):
                 "creator_folder_name_template", text
             )
         )
-        creator_custom_layout.addWidget(self.creator_folder_name_input, 3, 1)
+        creator_custom_layout.addWidget(self.creator_folder_name_input, 2, 1)
 
         self.creator_folder_name_help_btn = QPushButton("?")
         self.creator_folder_name_help_btn.setStyleSheet(
@@ -557,7 +600,43 @@ class SettingsTab(QWidget):
         self.creator_folder_name_help_btn.clicked.connect(
             self.show_folder_name_template_help
         )
-        creator_custom_layout.addWidget(self.creator_folder_name_help_btn, 3, 2)
+        creator_custom_layout.addWidget(self.creator_folder_name_help_btn, 2, 2)
+
+        # Safety net for templates that drop the placeholders keeping names
+        # apart. File names and post folder names are deduped independently:
+        # a folder needs it for same-title posts, a file needs it when the
+        # template omits {file_number}/{post_id}. It follows the folder
+        # template because it is the folder template's safety net.
+        self.creator_unique_filenames_label = QLabel()
+        creator_custom_layout.addWidget(self.creator_unique_filenames_label, 3, 0)
+
+        self.creator_unique_filenames_combo = QComboBox()
+        for label_key, mode in (
+            ("option_off", "off"),
+            ("option_on_file", "file"),
+            ("option_on_folder", "folder"),
+            ("option_on_both", "both"),
+        ):
+            self.creator_unique_filenames_combo.addItem(translate(label_key), mode)
+        self.creator_unique_filenames_combo.setStyleSheet(
+            "padding: 5px; border-radius: 5px;"
+        )
+        current_unique = normalize_name_dedup(
+            self.temp_settings.get("creator_unique_filenames", "both")
+        )
+        for i in range(self.creator_unique_filenames_combo.count()):
+            if self.creator_unique_filenames_combo.itemData(i) == current_unique:
+                self.creator_unique_filenames_combo.setCurrentIndex(i)
+                break
+        self.creator_unique_filenames_combo.currentIndexChanged.connect(
+            lambda index: self.update_temp_setting(
+                "creator_unique_filenames",
+                self.creator_unique_filenames_combo.itemData(index),
+            )
+        )
+        creator_custom_layout.addWidget(
+            self.creator_unique_filenames_combo, 3, 1, 1, 2
+        )
 
         self.creator_folder_strategy_label = QLabel()
         creator_custom_layout.addWidget(self.creator_folder_strategy_label, 4, 0)
@@ -908,6 +987,13 @@ class SettingsTab(QWidget):
         main_layout.addWidget(self.scroll_area)
         self.setLayout(main_layout)
 
+        # The wheel scrolls this page; it never changes the value under it.
+        self._wheel_guard = _WheelGuard(self.scroll_area, self)
+        for widget in self.scroll_area.findChildren(
+            (QAbstractSpinBox, QComboBox, QSlider)
+        ):
+            widget.installEventFilter(self._wheel_guard)
+
         self.update_ui_text()
 
         # Initialize Tor button states
@@ -961,16 +1047,14 @@ class SettingsTab(QWidget):
             self.directory_input.setText(directory)
             self.update_temp_setting("base_directory", directory)
 
-    def browse_data_directory(self):
-        """Pick where the app keeps its own working files."""
-        directory = QFileDialog.getExistingDirectory(
-            self,
-            translate("browse"),
-            kd_paths.data_directory(self.temp_settings.get("data_directory")),
-        )
-        if directory:
-            self.data_directory_input.setText(directory)
-            self.update_temp_setting("data_directory", directory)
+    def open_data_directory(self):
+        """Open the app's own data folder (it can no longer be chosen)."""
+        path = kd_paths.data_directory()
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError:
+            pass
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def browse_tor_executable(self):
         """Browse for Tor executable file."""
@@ -1003,7 +1087,6 @@ class SettingsTab(QWidget):
             # Windows common paths
             common_paths.extend(
                 [
-                    r"C:\Users\Drei\Downloads\Kemono Downloader\Tor\tor\tor.exe",  # User's known location
                     os.path.join(
                         os.getenv("PROGRAMFILES", "C:\\Program Files"),
                         "Tor Browser",
@@ -1188,6 +1271,37 @@ class SettingsTab(QWidget):
 
     def update_temp_setting(self, key, value):
         self.temp_settings[key] = value
+        if key in ("use_proxy", "proxy_type", "custom_proxy_url", "tor_path"):
+            # Proxy state is read by download threads, which must never touch
+            # QProcess themselves: keep the cached answer current here, on the
+            # GUI thread.
+            self._refresh_proxy_cache()
+
+    def _proxy_signature(self):
+        """What the cached proxy answer depends on, without asking Qt."""
+        merged = dict(self.settings)
+        merged.update(self.temp_settings)
+        return (
+            bool(merged.get("use_proxy")),
+            merged.get("proxy_type"),
+            merged.get("custom_proxy_url"),
+            id(getattr(self, "tor_process", None)),
+        )
+
+    def _refresh_proxy_cache(self):
+        """Snapshot the proxy answer (GUI thread only - it reads QProcess)."""
+        signature = self._proxy_signature()
+        try:
+            proxies = SettingsTab._compute_proxy_settings(self)
+        except ProxyUnavailableError as error:
+            self._proxy_cache = (signature, "error", error)
+            return
+        except Exception as error:  # never let a cache refresh raise
+            self._proxy_cache = (signature, "error", ProxyUnavailableError(str(error)))
+            return
+        self._proxy_cache = (
+            (signature, "proxies", proxies) if proxies else (signature, "none", None)
+        )
 
     def update_simultaneous_downloads(self, value):
         self.temp_settings["simultaneous_downloads"] = value
@@ -1218,7 +1332,7 @@ class SettingsTab(QWidget):
             "off": "filetype_filter_off",
             "on": "filetype_filter_on",
             "on_with_count": "filetype_filter_on_with_count",
-        }.get(values.get("show_only_found_filetypes", "off"), "filetype_filter_off")
+        }.get(values.get("show_only_found_filetypes", "on_with_count"), "filetype_filter_off")
         strategy_key = {
             "per_post": "per_post_folders",
             "single_folder": "single_creator_folder",
@@ -1289,9 +1403,10 @@ class SettingsTab(QWidget):
             ),
             (
                 translate("unique_filenames"),
-                translate("option_on")
-                if values.get("creator_unique_filenames", True)
-                else translate("option_off"),
+                translate(_NAME_DEDUP_LABEL_KEYS.get(
+                    normalize_name_dedup(values.get("creator_unique_filenames")),
+                    "option_off",
+                )),
                 "creator_unique_filenames",
             ),
             (
@@ -1368,6 +1483,9 @@ class SettingsTab(QWidget):
         font_changed = self.settings.get("font") != self.temp_settings.get("font")
 
         self.settings = self.temp_settings.copy()
+        # The data folder is fixed: a value left in temp_settings (stale INI,
+        # older build) must not survive Apply.
+        self.settings["data_directory"] = kd_paths.data_directory()
         self.settings["use_proxy"] = (
             False  # Always keep proxy disabled in saved settings
         )
@@ -1426,10 +1544,7 @@ class SettingsTab(QWidget):
 
         # Update UI elements to reflect default values
         self.directory_input.setText(self.temp_settings["base_directory"])
-        self.data_directory_input.setText(
-            self.temp_settings.get("data_directory")
-            or kd_paths.default_data_directory()
-        )
+        self.data_directory_input.setText(kd_paths.data_directory())
         self.download_slider.setValue(self.temp_settings["simultaneous_downloads"])
         self.download_spinbox.setValue(self.temp_settings["simultaneous_downloads"])
         self.creator_posts_max_attempts_spinbox.setValue(
@@ -1447,7 +1562,7 @@ class SettingsTab(QWidget):
         self.verbose_logging_checkbox.setChecked(
             bool(self.temp_settings.get("verbose_logging", False))
         )
-        mode = self.temp_settings.get("show_only_found_filetypes", "off")
+        mode = self.temp_settings.get("show_only_found_filetypes", "on_with_count")
         self.show_only_found_filetypes_combo.blockSignals(True)
         for i in range(self.show_only_found_filetypes_combo.count()):
             if self.show_only_found_filetypes_combo.itemData(i) == mode:
@@ -1476,6 +1591,27 @@ class SettingsTab(QWidget):
                 self.font_combo.setCurrentIndex(i)
                 break
         self.font_combo.blockSignals(False)
+
+        # Creator-tab templates and the two layout dropdowns are part of the
+        # defaults too: without them the page would keep showing the old
+        # values while Apply saved the default ones.
+        self.creator_filename_input.setText(
+            self.temp_settings["creator_filename_template"]
+        )
+        self.creator_shared_filename_input.setText(
+            self.temp_settings["creator_filename_template_shared"]
+        )
+        self.creator_folder_name_input.setText(
+            self.temp_settings["creator_folder_name_template"]
+        )
+        for combo, key in (
+            (self.creator_folder_strategy_combo, "creator_folder_strategy"),
+            (self.creator_unique_filenames_combo, "creator_unique_filenames"),
+        ):
+            combo.blockSignals(True)
+            index = combo.findData(self.temp_settings.get(key))
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            combo.blockSignals(False)
 
         QMessageBox.information(
             self, translate("reset_to_defaults"), translate("settings_reset_message")
@@ -1545,10 +1681,11 @@ class SettingsTab(QWidget):
                 translate("unique_filenames_tooltip")
             )
             self.creator_unique_filenames_combo.blockSignals(True)
-            self.creator_unique_filenames_combo.setItemText(
-                0, translate("option_off")
-            )
-            self.creator_unique_filenames_combo.setItemText(1, translate("option_on"))
+            for index in range(self.creator_unique_filenames_combo.count()):
+                mode = self.creator_unique_filenames_combo.itemData(index)
+                self.creator_unique_filenames_combo.setItemText(
+                    index, translate(_NAME_DEDUP_LABEL_KEYS.get(mode, "option_off"))
+                )
             self.creator_unique_filenames_combo.blockSignals(False)
 
         # Ensure folder strategy combo labels are localized
@@ -1640,13 +1777,13 @@ class SettingsTab(QWidget):
         One of "off", "on" or "on_with_count"; anything unrecognised falls
         back to "off" so a stale settings file cannot break the tab.
         """
-        mode = str(self.settings.get("show_only_found_filetypes", "off"))
+        mode = str(self.settings.get("show_only_found_filetypes", "on_with_count"))
         return mode if mode in SHOW_ONLY_FILETYPE_MODES else "off"
 
     def get_creator_filename_template(self):
         """Template for files that land in a folder of their own (post folder)."""
         return self.settings.get(
-            "creator_filename_template", "{file_number}_{post_id}_{orig_name}"
+            "creator_filename_template", "{post_id}_{file_number}_{orig_name}"
         )
 
     def get_creator_filename_template_shared(self):
@@ -1658,7 +1795,17 @@ class SettingsTab(QWidget):
 
     def get_creator_unique_filenames(self):
         """True when a taken filename should get a _1/_2 suffix, not be replaced."""
-        return bool(self.settings.get("creator_unique_filenames", True))
+        return normalize_name_dedup(self.settings.get("creator_unique_filenames")) in (
+            "file",
+            "both",
+        )
+
+    def get_creator_folder_dedup(self):
+        """True when a post folder name is checked for same-run collisions."""
+        return normalize_name_dedup(self.settings.get("creator_unique_filenames")) in (
+            "folder",
+            "both",
+        )
 
     def get_creator_folder_strategy(self):
         return self.settings.get("creator_folder_strategy", "per_post")
@@ -1683,7 +1830,12 @@ class SettingsTab(QWidget):
         )
 
     def on_use_proxy_changed(self, state):
-        enabled = state == Qt.CheckState.Checked.value
+        # Called both from the checkbox (an int/Qt state) and from code (a
+        # bool, e.g. reset_to_defaults), so normalise before comparing.
+        if isinstance(state, bool):
+            enabled = state
+        else:
+            enabled = state == Qt.CheckState.Checked.value
         self.update_temp_setting("use_proxy", enabled)
 
         # Show/hide the proxy settings group (checkbox stays visible)
@@ -1954,8 +2106,12 @@ GeoIPExcludeUnknown 1
         self.tor_process.readyReadStandardOutput.connect(self.handle_tor_output)
         self.tor_process.readyReadStandardError.connect(self.handle_tor_error)
         self.tor_process.finished.connect(self.handle_tor_finished)
+        # Tor's state is part of the proxy answer, and only the GUI thread may
+        # ask for it.
+        self.tor_process.stateChanged.connect(lambda *_: self._refresh_proxy_cache())
 
         self.tor_process.start()
+        self._refresh_proxy_cache()
 
         # Update UI
         self.tor_status_label.setText(translate("tor_status_starting"))
@@ -1986,6 +2142,9 @@ GeoIPExcludeUnknown 1
             self.tor_process.waitForFinished(2000)
 
         self.tor_process = None
+        # Tor is gone, so a Tor proxy suddenly cannot be used any more: update
+        # the worker-visible answer immediately rather than on the next change.
+        self._refresh_proxy_cache()
 
         # Clean up temporary data directory
         if self.tor_data_dir and os.path.exists(self.tor_data_dir):
@@ -2174,8 +2333,8 @@ GeoIPExcludeUnknown 1
                 scrollbar.setValue(scrollbar.maximum())
 
     def handle_tor_finished(self, exit_code, exit_status):
-        print(f"Tor finished with exit code: {exit_code}")
         self.tor_process = None
+        self._refresh_proxy_cache()
 
         # Clean up temporary data directory
         if self.tor_data_dir and os.path.exists(self.tor_data_dir):
@@ -2204,46 +2363,70 @@ GeoIPExcludeUnknown 1
         )
 
     def get_proxy_settings(self):
-        """Return proxy settings for use with requests"""
-        # Check both saved settings and temp settings (in case settings haven't been applied yet)
-        settings_to_check = (
-            self.settings if self.settings.get("use_proxy") else self.temp_settings
-        )
+        """Return proxy settings for use with requests.
 
-        if not settings_to_check["use_proxy"]:
+        Safe to call from a download thread: the answer is cached on the GUI
+        thread whenever proxy state changes, because deciding it here used to
+        mean touching ``QProcess.state()`` off the GUI thread (undefined
+        behaviour) and re-running ``importlib`` on every request.
+
+        ``None`` means "no proxy is configured", which is the only case where
+        a direct connection is correct. When a proxy *is* enabled but cannot be
+        used, this raises ``ProxyUnavailableError``: returning None there made
+        the session drop its proxy and talk to the network on the user's real
+        address, which is the opposite of what enabling a proxy asks for.
+        """
+        cached = getattr(self, "_proxy_cache", None)
+        if cached is not None and cached[0] == self._proxy_signature():
+            kind, value = cached[1], cached[2]
+            if kind == "error":
+                raise value
+            return value
+        # Settings or the Tor process changed since the snapshot was taken
+        # (a direct mutation, or a mock): answer from live state instead.
+        return SettingsTab._compute_proxy_settings(self)
+
+    @staticmethod
+    def _compute_proxy_settings(settings_tab):
+        """Resolve the configured proxy. GUI thread, or a mock, only."""
+        # temp_settings is the live copy - every widget edit lands there,
+        # while self.settings only changes on Apply. Reading the saved copy
+        # first made an edited custom-proxy URL invisible until Apply.
+        settings_to_check = dict(settings_tab.settings)
+        settings_to_check.update(settings_tab.temp_settings)
+
+        if not settings_to_check.get("use_proxy"):
             return None
 
         if settings_to_check["proxy_type"] == "custom":
-            proxy_url = settings_to_check["custom_proxy_url"]
+            proxy_url = (settings_to_check.get("custom_proxy_url") or "").strip()
             if proxy_url:
                 return {"http": proxy_url, "https": proxy_url}
+            raise ProxyUnavailableError(translate("proxy_custom_url_empty_error"))
         elif settings_to_check["proxy_type"] == "tor":
             # Check if Tor is actually running
+            tor_process = getattr(settings_tab, "tor_process", None)
             if (
-                not self.tor_process
-                or self.tor_process.state() != QProcess.ProcessState.Running
+                not tor_process
+                or tor_process.state() != QProcess.ProcessState.Running
             ):
-                print("Tor proxy requested but Tor is not running")
-                return None
+                raise ProxyUnavailableError(translate("proxy_tor_not_running_error"))
 
             # For Tor, we need to use SOCKS5h proxy (resolves DNS through Tor)
             # Note: This requires requests[socks] or PySocks to be installed
             import importlib.util
 
             if importlib.util.find_spec("socks") is not None:
-                proxies = {
+                return {
                     "http": "socks5h://127.0.0.1:9050",
                     "https": "socks5h://127.0.0.1:9050",
                 }
-                print(f"Returning Tor proxy settings: {proxies}")
-                return proxies
-            else:
-                print("PySocks not available, falling back to HTTP proxy")
-                # Fallback to HTTP proxy if socks not available
-                return {
-                    "http": "http://127.0.0.1:8118",  # Privoxy default
-                    "https": "http://127.0.0.1:8118",
-                }
+            # Privoxy-style HTTP fallback. It fails closed on its own: nothing
+            # answers there unless Privoxy is actually running.
+            return {
+                "http": "http://127.0.0.1:8118",  # Privoxy default
+                "https": "http://127.0.0.1:8118",
+            }
         return None
 
 

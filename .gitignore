@@ -76,3 +76,6 @@ debug_*.py
 
 # database
 *.db*
+
+# The app's own working data (created next to the app at run time)
+/extras/

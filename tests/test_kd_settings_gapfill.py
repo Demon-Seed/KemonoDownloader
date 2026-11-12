@@ -2,6 +2,8 @@ import builtins
 import os
 from types import SimpleNamespace
 
+import pytest
+
 from kemonodownloader import kd_settings as ks
 from kemonodownloader.kd_settings import DownloadTorThread, SettingsTab
 
@@ -157,6 +159,10 @@ def test_update_ui_text_folder_strategy_exception_is_ignored(tmp_path, qapp):
     tab.creator_folder_strategy_combo = BadCombo()
 
     tab.update_ui_text()
+
+    # The broken combo must not stop the rest of the page being relabelled.
+    assert tab.directory_label.text() == ks.translate("save_directory")
+    assert tab.retry_group.title() == ks.translate("retry_settings")
 
 
 def test_settings_getters_and_is_tor_running(tmp_path, qapp):
@@ -339,7 +345,10 @@ def test_download_tor_windows_and_macos_intel_branches(tmp_path, monkeypatch, qa
     tab = make_tab(tmp_path)
     tab.temp_settings["base_directory"] = str(tmp_path)
     tab.temp_settings["base_folder_name"] = "KD"
-    monkeypatch.setattr(ks.QMessageBox, "warning", lambda *a, **k: None)
+    warnings = []
+    monkeypatch.setattr(
+        ks.QMessageBox, "warning", lambda *a, **k: warnings.append(a)
+    )
     monkeypatch.setattr(ks.QMessageBox, "information", lambda *a, **k: None)
 
     monkeypatch.setattr(
@@ -360,6 +369,9 @@ def test_download_tor_windows_and_macos_intel_branches(tmp_path, monkeypatch, qa
     # Linux branch
     monkeypatch.setattr(ks.sys, "platform", "linux")
     tab.download_tor()
+
+    # Each platform picked its bundle, then reported the mkdir failure once.
+    assert len(warnings) == 3
 
 
 def test_update_tor_button_states_running_branch(tmp_path, monkeypatch, qapp):
@@ -397,8 +409,14 @@ def test_get_proxy_settings_custom_empty_returns_none(tmp_path, qapp):
     tab.settings["use_proxy"] = True
     tab.settings["proxy_type"] = "custom"
     tab.settings["custom_proxy_url"] = ""
+    tab.temp_settings["use_proxy"] = True
+    tab.temp_settings["proxy_type"] = "custom"
+    tab.temp_settings["custom_proxy_url"] = ""
 
-    assert tab.get_proxy_settings() is None
+    # An enabled proxy with no address is an error, not a silent direct
+    # connection.
+    with pytest.raises(ks.ProxyUnavailableError):
+        tab.get_proxy_settings()
 
 
 def test_download_tor_thread_commonpath_exception_and_tor_exe_found(
