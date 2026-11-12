@@ -39,6 +39,7 @@ test_requires = [
     "pytest",
     "types-requests",
     "pytest-qt",
+    "pytest-cov",
 ]
 
 [tool.mypy]
@@ -140,6 +141,18 @@ supported = false
 # Web deployments
 [tool.briefcase.app.kemonodownloader.web]
 supported = false
+
+[tool.coverage.run]
+source = ["kemonodownloader"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+# Mutation testing for refactors: `mutmut run --paths-to-mutate <module>`.
+[tool.mutmut]
+paths_to_mutate = "src/kemonodownloader/"
+tests_dir = "tests/"
 
 [tool.pytest.ini_options]
 filterwarnings = [

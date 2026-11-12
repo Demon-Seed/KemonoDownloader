@@ -32,3 +32,9 @@ repos:
         pass_filenames: false
         types: [python]
         additional_dependencies: ["pyright"]
+      - id: test-assertions
+        name: test assertions did not shrink without a src change
+        entry: python tools/check_test_assertions.py --staged
+        language: system
+        files: ^tests/test_.*\.py$
+        pass_filenames: false

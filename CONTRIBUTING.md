@@ -76,6 +76,25 @@ Before starting work, check the [Issues page](https://github.com/VoxDroid/Kemono
 - Ensure the app works as expected (e.g., downloading posts, archiving creators, UI functionality).
 - Verify that your changes don’t break existing features or introduce new bugs.
 - **Tests must never touch real app settings.** `SettingsTab` opens `QSettings("VoxDroid", "KemonoDownloader")`, which on Windows is the live registry key (`HKCU\Software\VoxDroid\KemonoDownloader`). The autouse `isolate_qsettings` fixture in `tests/conftest.py` redirects every such instance to a temporary INI, so keep it autouse and never construct `QSettings("VoxDroid", "KemonoDownloader")` in a test. If you suspect a leak, snapshot the key before and after the suite with `reg query "HKCU\Software\VoxDroid\KemonoDownloader"` and compare.
+- **Never weaken an assertion to make a failure pass.** An assertion may only
+  change together with the source behaviour it describes. If the behaviour did
+  not change, the test is right and the code is wrong. (Near-miss example: a
+  cancellation test changing `file_url in failed_files` to `not in` is only
+  correct because `download_file` never records a cancel as a failure — that
+  had to be checked in `src/`, not assumed.)
+- **A test change needs its source change.** When behaviour changes on purpose,
+  change `src/` and the tests in the same commit, and name the behaviour in the
+  commit message (e.g. "cancel is no longer recorded as a failure"). The
+  `assert-guard` CI job fails a change that lowers the suite's assertion count
+  without touching `src/`; a deliberate test-only cleanup must set
+  `ALLOW_ASSERT_DROP=1` and say why in the message.
+- **Coverage floor.** `python -m pytest -q --cov=kemonodownloader
+  --cov-fail-under=90` (CI runs it on Ubuntu/3.11). Add tests for new behaviour
+  instead of lowering the floor.
+- **Refactoring a module?** Run mutation testing on it before and after:
+  `mutmut run --paths-to-mutate src/kemonodownloader/<module>.py`. A surviving
+  mutant is a missing or vacuous assertion — exactly the kind of test that
+  passes without testing anything.
 
 ### Push and Submit a Pull Request
 1. Push your branch to your fork:

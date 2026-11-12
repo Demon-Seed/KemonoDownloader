@@ -15,4 +15,5 @@ mypy
 pyright
 pytest
 pytest-qt
+pytest-cov
 chardet<6
