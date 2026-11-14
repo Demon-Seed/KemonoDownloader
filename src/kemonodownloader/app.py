@@ -6,7 +6,7 @@ import warnings
 
 import qtawesome as qta
 from bs4 import MarkupResemblesLocatorWarning
-from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, Qt
+from PyQt6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation, QTimer, Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontDatabase, QIcon, QPalette
 from PyQt6.QtWidgets import (
     QApplication,
@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
     QTabWidget,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -264,9 +265,97 @@ class KemonoDownloader(QMainWindow):
         self.status_label.setText(message)
 
 
+# Qt 6.10's tooltips expire after 10 s plus 40 ms per character past 100, so
+# hover help stays on screen far too long. The style hints that used to tune
+# this (SH_ToolTip_WakeUpDelay / FallAsleepDelay) are no longer read by
+# QToolTip, so the lifetime is capped with an application event filter.
+TOOLTIP_DISPLAY_TIME = 1800  # ms
+
+
+class _TooltipLifetimeFilter(QObject):
+    """Cap a tooltip's display time and hide it the moment it is left."""
+
+    # QTipLabel gives itself this object name; hiding it directly skips Qt's
+    # 300 ms fade-out timer, which made tooltips trail behind the pointer.
+    TOOLTIP_OBJECT_NAME = "qtooltip_label"
+
+    def __init__(self, parent=None, hide=QToolTip.hideText):
+        super().__init__(parent)
+        self._hide = hide
+        self._owner = None
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(TOOLTIP_DISPLAY_TIME)
+        self._timer.timeout.connect(self._hide_now)
+
+    def _hide_now(self):
+        """Hide the tooltip without waiting for Qt's fade-out timer."""
+        self._timer.stop()
+        self._hide()
+        for widget in QApplication.topLevelWidgets():
+            if (
+                widget.objectName() == self.TOOLTIP_OBJECT_NAME
+                and widget.isVisible()
+            ):
+                widget.hide()
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind == QEvent.Type.ToolTip:
+            # A new tip is about to be shown: give it the full display time.
+            self._owner = obj if isinstance(obj, QWidget) else None
+            self._timer.start()
+        elif kind == QEvent.Type.Leave and obj is self._owner:
+            # Moving off the widget means the tip should vanish immediately.
+            self._hide_now()
+        elif kind in (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonDblClick,
+            QEvent.Type.Wheel,
+            QEvent.Type.KeyPress,
+        ):
+            self._hide_now()
+        elif kind == QEvent.Type.Hide and obj is self._owner:
+            self._timer.stop()
+            self._owner = None
+        return False
+
+
+def install_tooltip_lifetime(app):
+    """Cap how long hover help stays on screen."""
+    if not isinstance(app, QObject):
+        # Tests replace QApplication with a stub; there is nothing to filter.
+        return None
+    event_filter = _TooltipLifetimeFilter(app)
+    app.installEventFilter(event_filter)
+    # Keep the Python wrapper alive next to its C++ parent.
+    app._tooltip_lifetime_filter = event_filter
+    return event_filter
+
+
+def disable_ui_effects():
+    """Turn off Qt's popup and tooltip animations.
+
+    The combo popup animation and the tooltip fades made the hover help feel
+    flickery and delayed; the widgets are instant without them.
+    """
+    setter = getattr(QApplication, "setEffectEnabled", None)
+    if not callable(setter):
+        # Tests replace QApplication with a stub; there is nothing to toggle.
+        return
+    for effect in (
+        Qt.UIEffect.UI_AnimateCombo,
+        Qt.UIEffect.UI_AnimateTooltip,
+        Qt.UIEffect.UI_FadeTooltip,
+    ):
+        setter(effect, False)
+
+
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    disable_ui_effects()
+    install_tooltip_lifetime(app)
     load_bundled_fonts()
     window = KemonoDownloader()
     window.show()

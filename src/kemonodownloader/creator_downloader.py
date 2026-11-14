@@ -163,6 +163,15 @@ def parse_filter_date(text):
 COMPRESSED_EXTENSIONS = (".zip", ".7z", ".rar")
 # Extensions treated as images by the "Skip Images if Compressed" option.
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".jpe", ".png", ".gif", ".webp")
+# Punctuation that encloses a token, so it can act as the token's own delimiter
+# in keyword matching. Joiners (., -, _, +, /, #, @, *) are deliberately
+# absent: they sit inside names, numbers and URLs, where they are not
+# boundaries. ASCII, full-width and CJK bracket/quote pairs are all included.
+ENCLOSING_PUNCTUATION = frozenset(
+    "()[]{}<>\"'"
+    "（）［］｛｝〈〉《》「」『』【】〔〕〖〗〘〙〚〛｢｣"
+    "＂＇“”‘’〝〞"
+)
 
 
 def file_extension(name_or_path):
@@ -172,6 +181,20 @@ def file_extension(name_or_path):
     # A query string (".../file.zip?f=file.zip") must not be part of the ext.
     path = str(name_or_path).split("?")[0]
     return os.path.splitext(path.strip())[1].lower()
+
+
+def filename_without_extension(name):
+    """Return *name* without its final extension ("1_JP.png" -> "1_JP").
+
+    The keyword filters match against this instead of the raw name: a file's
+    type belongs to the filetype boxes, so a keyword like "png" must not drop
+    every PNG, and "zip" must not drop archives by accident. Only the final
+    suffix is removed, so "art.psd.png" keeps ".psd"; a name with no extension
+    is returned unchanged and a query string is ignored first.
+    """
+    path = str(name or "").split("?")[0].strip()
+    stem, _ = os.path.splitext(path)
+    return stem
 
 
 def normalize_extension(ext):
@@ -302,6 +325,7 @@ def analyze_post(post):
 
     Keys:
     - ``filenames``: lower-case main-file + attachment names, space joined
+      (full names, for the search bar)
     - ``description``: lower-case post body text
     - ``tags``: lower-case tag names, space joined
     - ``file_count``: main file + attachments + unique content images
@@ -310,7 +334,7 @@ def analyze_post(post):
       callers can ask which types a post actually holds
     - ``extension_counts``: extension -> how many files of that type it holds
     - ``filenames_list``: the same names, one per file, for per-file
-      keyword matching
+      keyword matching (the keyword filters drop each name's extension)
     - ``tag_list``: the post's tags one by one, for per-tag matching
     - ``description_glued``: lower-case body text with the separators
       BeautifulSoup injects between inline tags removed ("" when that
@@ -370,7 +394,7 @@ def analyze_post(post):
                 )
 
     # How many files of each type this post holds, main file and attachments
-    # first. These counts back the "On (With filecount)" extension labels.
+    # first. These counts back the "Show found only (with counts)" labels.
     extension_counts = {}
     for _, ext in names:
         ext = normalize_extension(ext)
@@ -469,6 +493,14 @@ class PostFilters(NamedTuple):
     # files at all still produces desc_<id>.txt when this is on, so it is not
     # "empty" from the download's point of view.
     download_post_text: bool = False
+    # Relaxed keyword matching: substring instead of whole-word. Mirrors the
+    # "Keyword Matching Rules" setting's Relaxed (Posts)/(Both) options, and
+    # reaches the fetch through this same value so both passes apply identical
+    # rules.
+    lenient_keywords: bool = False
+    # "Punctuation Matching Rules: Relaxed": any punctuation at a keyword edge
+    # is its own delimiter. False keeps the default enclosing-punctuation list.
+    lenient_punctuation: bool = False
 
 
 def keyword_skip_reason(post_title, facts, filters):
@@ -476,37 +508,52 @@ def keyword_skip_reason(post_title, facts, filters):
 
     Scopes are the ticked combination of title, filenames, description and
     tags; the post is dropped when a keyword matches as a whole word in ANY
-    enabled scope. The tag-glued description is only consulted after the
-    space-joined rendering misses, which is how the fetch has always
-    behaved.
+    enabled scope. File names are matched without their extension: a file's
+    type is the filetype filter's business, so "png" cannot drop every PNG.
+    ``filters.lenient_keywords`` switches every scope to substring matching.
+    The tag-glued description is only consulted after the space-joined
+    rendering misses, which is how the fetch has always behaved.
     """
     keywords = filters.skip_keywords or ()
     if not keywords:
         return ""
+    lenient = bool(filters.lenient_keywords)
+    punctuation_lenient = bool(filters.lenient_punctuation)
     # An empty set means no scope is ticked, so no post is dropped by
     # keyword; only a missing value falls back to the title.
     scopes = filters.skip_scopes
     if scopes is None:
         scopes = frozenset({"title"})
     if "title" in scopes and post_title:
-        matched = _first_matching_keyword(keywords, post_title)
+        matched = _first_matching_keyword(
+            keywords, post_title, lenient, punctuation_lenient
+        )
         if matched:
             return matched
     if "filenames" in scopes:
         for name in facts.get("filenames_list") or ():
-            matched = _first_matching_keyword(keywords, name)
+            matched = _first_matching_keyword(
+                keywords,
+                filename_without_extension(name),
+                lenient,
+                punctuation_lenient,
+            )
             if matched:
                 return matched
     if "description" in scopes:
         for text in (facts.get("description"), facts.get("description_glued")):
             if not text:
                 continue
-            matched = _first_matching_keyword(keywords, text)
+            matched = _first_matching_keyword(
+                keywords, text, lenient, punctuation_lenient
+            )
             if matched:
                 return matched
     if "tags" in scopes:
         for tag in facts.get("tag_list") or ():
-            matched = _first_matching_keyword(keywords, tag)
+            matched = _first_matching_keyword(
+                keywords, tag, lenient, punctuation_lenient
+            )
             if matched:
                 return matched
     return ""
@@ -523,10 +570,16 @@ def keyword_needed_rejoin(keyword, facts, filters):
         scopes = frozenset({"title"})
     if "description" not in scopes:
         return False
+    lenient = bool(filters.lenient_keywords)
+    punctuation_lenient = bool(filters.lenient_punctuation)
     glued = facts.get("description_glued")
-    if not glued or not _first_matching_keyword([keyword], glued):
+    if not glued or not _first_matching_keyword(
+        [keyword], glued, lenient, punctuation_lenient
+    ):
         return False
-    return not _first_matching_keyword([keyword], facts.get("description"))
+    return not _first_matching_keyword(
+        [keyword], facts.get("description"), lenient, punctuation_lenient
+    )
 
 
 def date_out_of_range(facts, filters):
@@ -1103,15 +1156,35 @@ def _tag_glued_text(soup):
     return "".join(parts)
 
 
-def _keyword_matches_text(keywords, text):
-    """Case-insensitive whole-word match of any keyword in *text*,
-    treating non-alphanumeric characters (including _, -, ., /, spaces,
-    curly braces, etc.) as valid word boundaries (in addition to string
-    start/end).  No normalization is performed — the keyword must appear
-    exactly (case-insensitive) as a whole word in the text.  This avoids
-    false positives from camelCase splitting (e.g. 'sketch' will NOT match
-    'SketchBook').  Shared by PostDetectionThread (post/title-level skip)
-    and FilePreparationThread (individual-file-level skip).
+def _is_word_edge(char):
+    """True when *char* is one of the ASCII characters [a-z0-9] the keyword
+    lookarounds treat as alphanumeric. Keywords reach this lower-cased."""
+    return char.isascii() and char.isalnum()
+
+
+def _keyword_matches_text(keywords, text, lenient=False, lenient_punctuation=False):
+    """Case-insensitive match of any keyword in *text*.
+
+    Strict (default) matching is whole-word: non-alphanumeric characters
+    (including _, -, ., /, spaces, curly braces, etc.) are valid word
+    boundaries in addition to string start/end. A keyword edge that is a
+    word character must be delimited by the text around it; a keyword edge
+    that is *enclosing* punctuation (brackets, braces, CJK brackets, quotes —
+    see :data:`ENCLOSING_PUNCTUATION`) is its own delimiter, so "[JP]"
+    matches "123[JP] art" and "【JP】" matches "123【JP】 art". Joiners such as
+    ".", "-", "_" or "+" stay inside a token: ".5" does not match "1.5" and
+    "zip-" does not match "zip-01.png". No normalization is performed — the
+    keyword must appear exactly (case-insensitive). This avoids false
+    positives from camelCase splitting (e.g. 'sketch' will NOT match
+    'SketchBook').
+
+    *lenient_punctuation* restores the wider rule where any punctuation at a
+    keyword edge is its own delimiter (".5" matches "1.5", "zip-" matches
+    "zip-01.png"). *lenient* drops the boundary rule entirely: a plain
+    substring hit is enough, so "bean" matches "beanstoast".
+
+    Shared by PostDetectionThread (post/title-level skip) and
+    FilePreparationThread (individual-file-level skip).
     """
     if not keywords or not text:
         return False
@@ -1124,22 +1197,40 @@ def _keyword_matches_text(keywords, text):
         keyword_lower = keyword.lower()
         if not keyword_lower:
             continue
+        if lenient:
+            # Lenient: any occurrence counts, boundaries ignored.
+            if keyword_lower in text_lower:
+                return True
+            continue
+        if lenient_punctuation:
+            lead = "" if not _is_word_edge(keyword_lower[0]) else r"(?<![a-z0-9])"
+            trail = "" if not _is_word_edge(keyword_lower[-1]) else r"(?![a-z0-9])"
+        else:
+            lead = (
+                "" if keyword_lower[0] in ENCLOSING_PUNCTUATION else r"(?<![a-z0-9])"
+            )
+            trail = (
+                "" if keyword_lower[-1] in ENCLOSING_PUNCTUATION else r"(?![a-z0-9])"
+            )
         # re.escape() cannot produce an invalid pattern, so this is a plain
         # whole-word search; the old re.error fallback was unreachable.
-        pattern = r"(?<![a-z0-9])" + re.escape(keyword_lower) + r"(?![a-z0-9])"
-        if re.search(pattern, text_lower):
+        if re.search(lead + re.escape(keyword_lower) + trail, text_lower):
             return True
     return False
 
 
-def _first_matching_keyword(keywords, text):
-    """Return the first keyword that occurs as a whole word in *text*.
+def _first_matching_keyword(keywords, text, lenient=False, lenient_punctuation=False):
+    """Return the first keyword that matches *text*, or "".
 
     Thin wrapper around :func:`_keyword_matches_text`, used purely so the
-    log line can name the keyword that matched.
+    log line and the counters can name the keyword that matched. Keywords
+    are tried in the order the user typed them, so overlapping keywords are
+    credited to the first one listed.
     """
     for keyword in keywords or []:
-        if keyword and _keyword_matches_text([keyword], text):
+        if keyword and _keyword_matches_text(
+            [keyword], text, lenient, lenient_punctuation
+        ):
             return keyword
     return ""
 
@@ -1874,6 +1965,8 @@ class FilterThread(_StoppableThread, QThread):
         post_filters=None,
         creator_url=None,
         file_skip_keywords=None,
+        file_skip_lenient=False,
+        lenient_punctuation=False,
     ):
         super().__init__()
         self.all_detected_posts = all_detected_posts
@@ -1903,6 +1996,12 @@ class FilterThread(_StoppableThread, QThread):
         # File-keyword skips follow the listed posts, using the names stored
         # with each post, so the file row moves with the list too.
         self.file_skip_keywords = list(file_skip_keywords or ())
+        # Substring matching for the file list, from the "Keyword Matching
+        # Rules" setting (Relaxed (Files)/(Both)). Snapshotted with the
+        # keywords.
+        self.file_skip_lenient = bool(file_skip_lenient)
+        # "Punctuation Matching Rules: Relaxed" — snapshotted from Settings.
+        self.lenient_punctuation = bool(lenient_punctuation)
         self.file_keyword_skipped_count = 0
         self.file_keyword_skip_counts = {}
         self.is_running = True
@@ -1946,7 +2045,12 @@ class FilterThread(_StoppableThread, QThread):
                 continue
             if self.file_skip_keywords:
                 for name in (facts or {}).get("filenames_list") or ():
-                    matched = _first_matching_keyword(self.file_skip_keywords, name)
+                    matched = _first_matching_keyword(
+                        self.file_skip_keywords,
+                        filename_without_extension(name),
+                        self.file_skip_lenient,
+                        self.lenient_punctuation,
+                    )
                     if not matched:
                         continue
                     self.file_keyword_skipped_count += 1
@@ -1976,6 +2080,8 @@ class FilePreparationThread(_StoppableThread, QThread):
         file_skip_keywords=None,
         skip_images_if_compressed=False,
         allowed_extensions=None,
+        file_skip_lenient=False,
+        lenient_punctuation=False,
     ):
         super().__init__()
         self.post_ids = post_ids
@@ -2003,6 +2109,12 @@ class FilePreparationThread(_StoppableThread, QThread):
         self.file_skip_keywords = (
             file_skip_keywords if file_skip_keywords is not None else []
         )
+        # Substring matching for the file list, from the "Keyword Matching
+        # Rules" setting (Relaxed (Files)/(Both)). Snapshot on the GUI thread
+        # like the keywords.
+        self.file_skip_lenient = bool(file_skip_lenient)
+        # "Punctuation Matching Rules: Relaxed" — snapshotted from Settings.
+        self.lenient_punctuation = bool(lenient_punctuation)
         # Optional download option: when a post also offers a compressed
         # archive, its image files are dropped instead of downloaded.
         self.skip_images_if_compressed = skip_images_if_compressed
@@ -2053,11 +2165,18 @@ class FilePreparationThread(_StoppableThread, QThread):
         """Return the file-keyword that excludes *file_name*, or "" for none.
 
         Only file_skip_keywords are checked here -- these are always
-        matched against the filename, regardless of any other setting.
-        Whole-post skip keywords are handled upstream in
-        PostDetectionThread.
+        matched against the filename, regardless of any other setting. The
+        extension is left out of the match (a file's type is the filetype
+        filter's business), and ``file_skip_lenient`` switches the match to
+        a plain substring hit. Whole-post skip keywords are handled upstream
+        in PostDetectionThread.
         """
-        return _first_matching_keyword(self.file_skip_keywords, file_name)
+        return _first_matching_keyword(
+            self.file_skip_keywords,
+            filename_without_extension(file_name),
+            self.file_skip_lenient,
+            self.lenient_punctuation,
+        )
 
     def _record_file_skip(self, file_name):
         """Count a file dropped by the file-keyword filter.
@@ -3262,7 +3381,7 @@ class CreatorDownloadThread(_StoppableThread, QThread):
             return full_path
 
     def _name_dedup(self, getter_name):
-        """Ask the settings tab one "Dedup when name is taken" question.
+        """Ask the settings tab one "Name Dedup" question.
 
         Settings tabs built before the option existed (and mocked ones) have
         no getter; they keep the old unconditional behaviour (on).
@@ -4271,6 +4390,11 @@ class CreatorDownloaderTab(QWidget):
             self._parent.settings_tab.settings_applied.connect(
                 self._refresh_show_only_found_filetypes
             )
+            # Keyword matching lives in Settings now; a change must re-run the
+            # list pass so the rows and counters match the new rules.
+            self._parent.settings_tab.settings_applied.connect(
+                self._on_keyword_settings_applied
+            )
         self._refresh_verbose_logging()
         self._refresh_show_only_found_filetypes()
         # Capture the built-in page state before a stored profile can touch
@@ -4295,6 +4419,16 @@ class CreatorDownloaderTab(QWidget):
             mode = "off"
         self._found_filetypes_mode = mode
         self._render_creator_ext_checks()
+
+    def _on_keyword_settings_applied(self):
+        """Re-filter the loaded list after keyword-matching settings change."""
+        fetch = getattr(self, "post_detection_thread", None)
+        if fetch is not None and fetch.isRunning():
+            # The fetch owns the list and runs its own pass at the end.
+            return
+        if not self.all_detected_posts or self._download_in_progress():
+            return
+        self.filter_items()
 
     def _create_thread_settings(self):
         """Create a ThreadSettings object with current settings values"""
@@ -5029,19 +5163,6 @@ class CreatorDownloaderTab(QWidget):
         self.creator_save_creator_config_btn.setEnabled(False)
         log_config_layout.addWidget(self.creator_save_creator_config_btn)
 
-        # What the two save buttons write, right next to them: the difference
-        # between a page default and a per-creator profile is not visible
-        # anywhere else.
-        self.creator_config_info_btn = QPushButton(
-            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
-        )
-        self.creator_config_info_btn.setFixedSize(26, 26)
-        self.creator_config_info_btn.setStyleSheet(
-            "background: #4A5B7A; border-radius: 5px;"
-        )
-        self.creator_config_info_btn.clicked.connect(self.show_config_save_help)
-        log_config_layout.addWidget(self.creator_config_info_btn)
-
         log_config_layout.addStretch()
 
         right_layout.addWidget(self.log_config_group)
@@ -5163,7 +5284,6 @@ class CreatorDownloaderTab(QWidget):
         self.creator_save_creator_config_btn.setToolTip(
             translate("save_creator_config_btn_tooltip")
         )
-        self.creator_config_info_btn.setToolTip(translate("config_save_info_title"))
         self._refresh_retry_button()
         self._refresh_open_folder_button()
         self._refresh_config_buttons()
@@ -5554,25 +5674,6 @@ class CreatorDownloaderTab(QWidget):
                 translate("config_saved_text", options, filters),
             )
         return True
-
-    def show_config_save_help(self):
-        """Explain what the two save buttons next to this one write."""
-        try:
-            QMessageBox.information(
-                self,
-                translate("config_save_info_title"),
-                translate("config_save_info_text"),
-            )
-        except Exception:
-            QMessageBox.information(
-                self,
-                "Saved configs",
-                "Save Config stores this page (options and filters) as the "
-                "default for every creator. Save Creator Config stores it for "
-                "the creator that is loaded, and that profile replaces the "
-                "default whenever the creator is loaded again. Both live in "
-                "creator_configs.db inside the app's Other Files folder.",
-            )
 
     def save_page_config(self):
         """Store the page as the default profile for every creator."""
@@ -6642,6 +6743,9 @@ class CreatorDownloaderTab(QWidget):
             return
 
         file_skip_keywords = self._file_skip_keywords_from_widgets()
+        _lenient_posts, lenient_files, lenient_punctuation = (
+            self._keyword_matching_modes()
+        )
 
         self.file_preparation_thread = FilePreparationThread(
             post_ids,
@@ -6653,6 +6757,8 @@ class CreatorDownloaderTab(QWidget):
             self._create_thread_settings(),
             max_concurrent=5,
             file_skip_keywords=file_skip_keywords,
+            file_skip_lenient=lenient_files,
+            lenient_punctuation=lenient_punctuation,
             skip_images_if_compressed=(self.creator_skip_images_check.isChecked()),
             # Read on the GUI thread; the workers never touch the boxes.
             allowed_extensions=self._selected_extensions(),
@@ -7529,6 +7635,9 @@ class CreatorDownloaderTab(QWidget):
         self.background_task_progress.setRange(0, 0)
         post_filters, warnings = self._post_filters_from_widgets()
         self._log_filter_warnings(warnings)
+        _lenient_posts, lenient_files, lenient_punctuation = (
+            self._keyword_matching_modes()
+        )
         self.filter_thread = FilterThread(
             self.all_detected_posts,
             self.checked_urls,
@@ -7538,6 +7647,8 @@ class CreatorDownloaderTab(QWidget):
             post_filters=post_filters,
             creator_url=self.current_creator_url,
             file_skip_keywords=self._file_skip_keywords_from_widgets(),
+            file_skip_lenient=lenient_files,
+            lenient_punctuation=lenient_punctuation,
         )
         self.filter_thread.finished.connect(self.on_filter_finished)
         self.filter_thread.finished.connect(self.cleanup_filter_thread)
@@ -8143,6 +8254,26 @@ class CreatorDownloaderTab(QWidget):
             return []
         return [kw.strip() for kw in raw.split(",") if kw.strip()]
 
+    def _keyword_matching_modes(self):
+        """Return ``(posts_lenient, files_lenient, lenient_punctuation)``.
+
+        Both switches live in Settings now. A missing getter (tests, no
+        parent) falls back to the defaults, so the tab behaves exactly as it
+        did before the settings existed.
+        """
+        settings_tab = getattr(self._parent, "settings_tab", None)
+        mode_getter = getattr(settings_tab, "get_lenient_keyword_matching", None)
+        mode = mode_getter() if callable(mode_getter) else "off"
+        if mode not in ("off", "posts", "files", "both"):
+            mode = "off"
+        rules_getter = getattr(settings_tab, "get_punctuation_matching_rules", None)
+        rules = rules_getter() if callable(rules_getter) else "default"
+        return (
+            mode in ("posts", "both"),
+            mode in ("files", "both"),
+            rules == "lenient",
+        )
+
     def _post_filters_from_widgets(self):
         """Return ``(PostFilters, warnings)`` for the current Filters box.
 
@@ -8156,6 +8287,9 @@ class CreatorDownloaderTab(QWidget):
             skip_keywords = [kw.strip() for kw in raw_keywords.split(",") if kw.strip()]
         else:
             skip_keywords = []
+        lenient_posts, _lenient_files, lenient_punctuation = (
+            self._keyword_matching_modes()
+        )
 
         warnings = []
         date_after = parse_filter_date(self.date_from_edit.text())
@@ -8187,6 +8321,8 @@ class CreatorDownloaderTab(QWidget):
                 for scope, checkbox in self.skip_scope_checkboxes.items()
                 if checkbox.isChecked()
             ),
+            lenient_keywords=lenient_posts,
+            lenient_punctuation=lenient_punctuation,
             date_after=date_after,
             date_before=date_before,
             file_count_min=file_count_min,
@@ -8252,10 +8388,10 @@ class CreatorDownloaderTab(QWidget):
     def _render_creator_ext_checks(self):
         """Re-lay the file-extension boxes, hiding unused types.
 
-        With "Show only filetypes found in creator" set to on, boxes for
-        extensions this creator has no files of are dropped from the grid, so
-        the list reflects the creator instead of the whole catalogue; the
-        "On (With filecount)" mode also appends each type's file count. A
+        With "Filetype Display" set to "Show found only", boxes for extensions
+        this creator has no files of are dropped from the grid, so the list
+        reflects the creator instead of the whole catalogue; "Show found only
+        (with counts)" also appends each type's file count. A
         ticked box is always kept: hiding an active filter would silently
         change what gets downloaded. Before detection has filled the shared
         tally there is nothing to compare against, so every box stays visible.

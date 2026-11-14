@@ -42,12 +42,12 @@ from kemonodownloader.kd_language import language_manager, translate
 GITHUB_REPO_URL = "https://github.com/VoxDroid/KemonoDownloader"
 
 
-# Modes for "Show only filetypes found in creator". Kept as plain strings
+# Modes for "Filetype Display". Kept as plain strings
 # and validated on load so a hand-edited settings file cannot land on an
 # unknown state.
 SHOW_ONLY_FILETYPE_MODES = ("off", "on", "on_with_count")
 
-# "Dedup when name is taken": which kinds of name get a _1/_2 suffix instead of
+# "Name Dedup": which kinds of name get a _1/_2 suffix instead of
 # overwriting (file names, post folder names, or both).
 NAME_DEDUP_MODES = ("off", "file", "folder", "both")
 
@@ -59,9 +59,27 @@ _NAME_DEDUP_LABEL_KEYS = {
     "both": "option_on_both",
 }
 
+# "Keyword Matching Rules": which keyword filters drop the whole-word rule.
+LENIENT_KEYWORD_MODES = ("off", "posts", "files", "both")
+_KEYWORD_MATCHING_LABEL_KEYS = {
+    "off": "keyword_matching_default",
+    "posts": "keyword_matching_relaxed_posts",
+    "files": "keyword_matching_relaxed_files",
+    "both": "keyword_matching_relaxed_both",
+}
+
+# "Punctuation Matching Rules": "default" treats only enclosing punctuation
+# (brackets, braces, CJK brackets, quotes) as a keyword's own delimiter;
+# "lenient" treats any punctuation at a keyword edge as one.
+PUNCTUATION_MATCHING_MODES = ("default", "lenient")
+_PUNCTUATION_LABEL_KEYS = {
+    "default": "punctuation_rules_default",
+    "lenient": "punctuation_rules_relaxed",
+}
+
 
 def normalize_name_dedup(value):
-    """Coerce a stored "dedup when name is taken" value to a known mode.
+    """Coerce a stored "Name Dedup" value to a known mode.
 
     Older settings stored a boolean: ``True`` meant "dedupe file names" and
     ``False`` meant "never". They map to ``both`` and ``off`` - the folder half
@@ -165,6 +183,9 @@ class SettingsTab(QWidget):
             "creator_unique_filenames": "both",
             "creator_folder_strategy": "per_post",  # per_post|single_folder|by_file_type
             "creator_folder_name_template": "{post_id}_{post_title}",
+            # Keyword matching rules for the Creator tab's skip keywords.
+            "lenient_keyword_matching": "off",  # off|posts|files|both
+            "punctuation_matching_rules": "default",  # default|lenient
             # Font setting
             "font": "JetBrains Mono",  # "JetBrains Mono", "Poppins"
         }
@@ -297,6 +318,23 @@ class SettingsTab(QWidget):
             ),
             type=str,
         )
+        settings_dict["lenient_keyword_matching"] = self.qsettings.value(
+            "lenient_keyword_matching",
+            self.default_settings.get("lenient_keyword_matching", "off"),
+            type=str,
+        )
+        if settings_dict["lenient_keyword_matching"] not in LENIENT_KEYWORD_MODES:
+            settings_dict["lenient_keyword_matching"] = "off"
+        settings_dict["punctuation_matching_rules"] = self.qsettings.value(
+            "punctuation_matching_rules",
+            self.default_settings.get("punctuation_matching_rules", "default"),
+            type=str,
+        )
+        if (
+            settings_dict["punctuation_matching_rules"]
+            not in PUNCTUATION_MATCHING_MODES
+        ):
+            settings_dict["punctuation_matching_rules"] = "default"
         # Font setting
         settings_dict["font"] = self.qsettings.value(
             "font", self.default_settings.get("font", "JetBrains Mono"), type=str
@@ -358,6 +396,14 @@ class SettingsTab(QWidget):
         self.qsettings.setValue(
             "creator_folder_name_template",
             self.settings.get("creator_folder_name_template", "{post_id}_{post_title}"),
+        )
+        self.qsettings.setValue(
+            "lenient_keyword_matching",
+            self.settings.get("lenient_keyword_matching", "off"),
+        )
+        self.qsettings.setValue(
+            "punctuation_matching_rules",
+            self.settings.get("punctuation_matching_rules", "default"),
         )
         # Font setting
         self.qsettings.setValue(
@@ -541,7 +587,7 @@ class SettingsTab(QWidget):
         self.creator_filename_input.textChanged.connect(
             lambda text: self.update_temp_setting("creator_filename_template", text)
         )
-        creator_custom_layout.addWidget(self.creator_filename_input, 0, 1)
+        creator_custom_layout.addWidget(self.creator_filename_input, 0, 1, 1, 2)
 
         # Help button for template variables (covers both template rows)
         self.creator_template_help_btn = QPushButton("?")
@@ -549,7 +595,7 @@ class SettingsTab(QWidget):
             "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
         )
         self.creator_template_help_btn.clicked.connect(self.show_template_help)
-        creator_custom_layout.addWidget(self.creator_template_help_btn, 0, 2)
+        creator_custom_layout.addWidget(self.creator_template_help_btn, 0, 3)
 
         self.creator_shared_template_label = QLabel()
         creator_custom_layout.addWidget(self.creator_shared_template_label, 1, 0)
@@ -568,14 +614,14 @@ class SettingsTab(QWidget):
                 "creator_filename_template_shared", text
             )
         )
-        creator_custom_layout.addWidget(self.creator_shared_filename_input, 1, 1)
+        creator_custom_layout.addWidget(self.creator_shared_filename_input, 1, 1, 1, 2)
 
         self.creator_shared_template_help_btn = QPushButton("?")
         self.creator_shared_template_help_btn.setStyleSheet(
             "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
         )
         self.creator_shared_template_help_btn.clicked.connect(self.show_template_help)
-        creator_custom_layout.addWidget(self.creator_shared_template_help_btn, 1, 2)
+        creator_custom_layout.addWidget(self.creator_shared_template_help_btn, 1, 3)
 
         self.creator_folder_name_label = QLabel(translate("folder_name_template"))
         creator_custom_layout.addWidget(self.creator_folder_name_label, 2, 0)
@@ -592,7 +638,7 @@ class SettingsTab(QWidget):
         self.creator_folder_name_input.textChanged.connect(
             lambda text: self.update_temp_setting("creator_folder_name_template", text)
         )
-        creator_custom_layout.addWidget(self.creator_folder_name_input, 2, 1)
+        creator_custom_layout.addWidget(self.creator_folder_name_input, 2, 1, 1, 2)
 
         self.creator_folder_name_help_btn = QPushButton("?")
         self.creator_folder_name_help_btn.setStyleSheet(
@@ -601,7 +647,7 @@ class SettingsTab(QWidget):
         self.creator_folder_name_help_btn.clicked.connect(
             self.show_folder_name_template_help
         )
-        creator_custom_layout.addWidget(self.creator_folder_name_help_btn, 2, 2)
+        creator_custom_layout.addWidget(self.creator_folder_name_help_btn, 2, 3)
 
         # Safety net for templates that drop the placeholders keeping names
         # apart. File names and post folder names are deduped independently:
@@ -665,7 +711,7 @@ class SettingsTab(QWidget):
                 self.creator_folder_strategy_combo.itemData(idx),
             )
         )
-        creator_custom_layout.addWidget(self.creator_folder_strategy_combo, 4, 1)
+        creator_custom_layout.addWidget(self.creator_folder_strategy_combo, 4, 1, 1, 2)
 
         # Limit the Creator tab extension boxes to the filetypes a creator
         # really has: off, on, or on with a per-type filecount beside each box.
@@ -697,6 +743,97 @@ class SettingsTab(QWidget):
         creator_custom_layout.addWidget(
             self.show_only_found_filetypes_combo, 5, 1, 1, 2
         )
+
+        self.filetype_display_help_btn = QPushButton("?")
+        self.filetype_display_help_btn.setStyleSheet(
+            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+        )
+        self.filetype_display_help_btn.clicked.connect(self.show_filetype_display_help)
+        creator_custom_layout.addWidget(self.filetype_display_help_btn, 5, 3)
+
+        # Keyword matching rules: global switches for the Creator tab's two
+        # skip-keyword boxes. They live here rather than in the Filters box
+        # because they change how every keyword is matched, not which posts
+        # are listed.
+        self.lenient_keyword_matching_label = QLabel()
+        creator_custom_layout.addWidget(self.lenient_keyword_matching_label, 6, 0)
+
+        self.lenient_keyword_matching_combo = QComboBox()
+        for label_key, mode in (
+            ("keyword_matching_default", "off"),
+            ("keyword_matching_relaxed_posts", "posts"),
+            ("keyword_matching_relaxed_files", "files"),
+            ("keyword_matching_relaxed_both", "both"),
+        ):
+            self.lenient_keyword_matching_combo.addItem(translate(label_key), mode)
+        self.lenient_keyword_matching_combo.setStyleSheet(
+            "padding: 5px; border-radius: 5px;"
+        )
+        current_lenient = self.temp_settings.get("lenient_keyword_matching", "off")
+        for i in range(self.lenient_keyword_matching_combo.count()):
+            if self.lenient_keyword_matching_combo.itemData(i) == current_lenient:
+                self.lenient_keyword_matching_combo.setCurrentIndex(i)
+                break
+        self.lenient_keyword_matching_combo.currentIndexChanged.connect(
+            lambda idx: self.update_temp_setting(
+                "lenient_keyword_matching",
+                self.lenient_keyword_matching_combo.itemData(idx),
+            )
+        )
+        creator_custom_layout.addWidget(
+            self.lenient_keyword_matching_combo, 6, 1, 1, 2
+        )
+
+        self.lenient_keyword_matching_help_btn = QPushButton("?")
+        self.lenient_keyword_matching_help_btn.setStyleSheet(
+            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+        )
+        self.lenient_keyword_matching_help_btn.clicked.connect(
+            self.show_keyword_matching_rules_help
+        )
+        creator_custom_layout.addWidget(
+            self.lenient_keyword_matching_help_btn, 6, 3
+        )
+
+        self.punctuation_matching_rules_label = QLabel()
+        creator_custom_layout.addWidget(self.punctuation_matching_rules_label, 7, 0)
+
+        self.punctuation_matching_rules_combo = QComboBox()
+        for label_key, mode in (
+            ("punctuation_rules_default", "default"),
+            ("punctuation_rules_relaxed", "lenient"),
+        ):
+            self.punctuation_matching_rules_combo.addItem(
+                translate(label_key), mode
+            )
+        self.punctuation_matching_rules_combo.setStyleSheet(
+            "padding: 5px; border-radius: 5px;"
+        )
+        current_rules = self.temp_settings.get(
+            "punctuation_matching_rules", "default"
+        )
+        for i in range(self.punctuation_matching_rules_combo.count()):
+            if self.punctuation_matching_rules_combo.itemData(i) == current_rules:
+                self.punctuation_matching_rules_combo.setCurrentIndex(i)
+                break
+        self.punctuation_matching_rules_combo.currentIndexChanged.connect(
+            lambda idx: self.update_temp_setting(
+                "punctuation_matching_rules",
+                self.punctuation_matching_rules_combo.itemData(idx),
+            )
+        )
+        creator_custom_layout.addWidget(
+            self.punctuation_matching_rules_combo, 7, 1, 1, 2
+        )
+
+        self.punctuation_matching_help_btn = QPushButton("?")
+        self.punctuation_matching_help_btn.setStyleSheet(
+            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+        )
+        self.punctuation_matching_help_btn.clicked.connect(
+            self.show_punctuation_matching_help
+        )
+        creator_custom_layout.addWidget(self.punctuation_matching_help_btn, 7, 3)
 
         self.creator_custom_group.setLayout(creator_custom_layout)
         layout.addWidget(self.creator_custom_group)
@@ -1031,6 +1168,30 @@ class SettingsTab(QWidget):
                 "Example: {post_title} drops the post ID from the folder name. "
                 "Only applies when Folder Structure is 'Per-post folders'.",
             )
+
+    def show_filetype_display_help(self):
+        """Explain what the Filetype Display modes show."""
+        QMessageBox.information(
+            self,
+            translate("filetype_display_help_title"),
+            translate("filetype_display_help_text"),
+        )
+
+    def show_keyword_matching_rules_help(self):
+        """Explain what relaxed whole-word matching does."""
+        QMessageBox.information(
+            self,
+            translate("keyword_matching_rules_help_title"),
+            translate("keyword_matching_rules_help_text"),
+        )
+
+    def show_punctuation_matching_help(self):
+        """Explain how punctuation at a keyword edge is treated."""
+        QMessageBox.information(
+            self,
+            translate("punctuation_matching_help_title"),
+            translate("punctuation_matching_help_text"),
+        )
 
     def browse_directory(self):
         directory = QFileDialog.getExistingDirectory(
@@ -1420,6 +1581,26 @@ class SettingsTab(QWidget):
                 translate(mode_key),
                 "show_only_found_filetypes",
             ),
+            (
+                translate("keyword_matching_rules"),
+                translate(
+                    _KEYWORD_MATCHING_LABEL_KEYS.get(
+                        values.get("lenient_keyword_matching", "off"),
+                        "keyword_matching_default",
+                    )
+                ),
+                "lenient_keyword_matching",
+            ),
+            (
+                translate("punctuation_matching_rules"),
+                translate(
+                    _PUNCTUATION_LABEL_KEYS.get(
+                        values.get("punctuation_matching_rules", "default"),
+                        "punctuation_rules_default",
+                    )
+                ),
+                "punctuation_matching_rules",
+            ),
             (translate("font"), values.get("font", "JetBrains Mono"), "font"),
         ]
 
@@ -1603,6 +1784,8 @@ class SettingsTab(QWidget):
         for combo, key in (
             (self.creator_folder_strategy_combo, "creator_folder_strategy"),
             (self.creator_unique_filenames_combo, "creator_unique_filenames"),
+            (self.lenient_keyword_matching_combo, "lenient_keyword_matching"),
+            (self.punctuation_matching_rules_combo, "punctuation_matching_rules"),
         ):
             combo.blockSignals(True)
             index = combo.findData(self.temp_settings.get(key))
@@ -1650,9 +1833,32 @@ class SettingsTab(QWidget):
                 index, translate(label_key)
             )
         self.show_only_found_filetypes_combo.blockSignals(False)
-        self.show_only_found_filetypes_combo.setToolTip(
-            translate("show_only_found_filetypes_tooltip")
+
+        self.lenient_keyword_matching_label.setText(
+            translate("keyword_matching_rules")
         )
+        self.lenient_keyword_matching_combo.blockSignals(True)
+        for index in range(self.lenient_keyword_matching_combo.count()):
+            mode = self.lenient_keyword_matching_combo.itemData(index)
+            self.lenient_keyword_matching_combo.setItemText(
+                index,
+                translate(
+                    _KEYWORD_MATCHING_LABEL_KEYS.get(mode, "keyword_matching_default")
+                ),
+            )
+        self.lenient_keyword_matching_combo.blockSignals(False)
+
+        self.punctuation_matching_rules_label.setText(
+            translate("punctuation_matching_rules")
+        )
+        self.punctuation_matching_rules_combo.blockSignals(True)
+        for index in range(self.punctuation_matching_rules_combo.count()):
+            mode = self.punctuation_matching_rules_combo.itemData(index)
+            self.punctuation_matching_rules_combo.setItemText(
+                index,
+                translate(_PUNCTUATION_LABEL_KEYS.get(mode, "punctuation_rules_default")),
+            )
+        self.punctuation_matching_rules_combo.blockSignals(False)
 
         self.update_group.setTitle(translate("update_settings"))
         self.github_repo_link.setText(
@@ -1766,6 +1972,20 @@ class SettingsTab(QWidget):
         """
         mode = str(self.settings.get("show_only_found_filetypes", "on_with_count"))
         return mode if mode in SHOW_ONLY_FILETYPE_MODES else "off"
+
+    def get_lenient_keyword_matching(self):
+        """Which keyword filters drop the whole-word rule.
+
+        One of "off", "posts", "files" or "both"; anything unrecognised falls
+        back to "off" so a stale settings file cannot break matching.
+        """
+        mode = str(self.settings.get("lenient_keyword_matching", "off"))
+        return mode if mode in LENIENT_KEYWORD_MODES else "off"
+
+    def get_punctuation_matching_rules(self):
+        """Return "default" (enclosing punctuation only) or "lenient" (any)."""
+        mode = str(self.settings.get("punctuation_matching_rules", "default"))
+        return mode if mode in PUNCTUATION_MATCHING_MODES else "default"
 
     def get_creator_filename_template(self):
         """Template for files that land in a folder of their own (post folder)."""

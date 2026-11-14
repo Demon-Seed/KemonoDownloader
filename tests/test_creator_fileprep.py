@@ -265,3 +265,100 @@ def test_preparation_warns_when_the_deadline_drops_work(monkeypatch, qapp):
     assert any(
         level == "WARNING" and "timed out" in message.lower() for message, level in logs
     )
+
+
+def _domain_config():
+    return {
+        "base_url": "https://kemono.cr",
+        "referer": "https://kemono.cr/",
+        "api_base": "https://kemono.cr/api/v1",
+        "domain": "kemono.cr",
+    }
+
+
+def _file_thread(**overrides):
+    options = dict(
+        post_ids=[],
+        all_files_map={},
+        creator_ext_checks={},
+        creator_main_check=True,
+        creator_attachments_check=True,
+        creator_content_check=True,
+        settings=SimpleNamespace(post_data_max_retries=1, settings_tab=None),
+    )
+    options.update(overrides)
+    return cd.FilePreparationThread(**options)
+
+
+def test_file_keywords_ignore_the_file_extension(qapp):
+    thread = _file_thread(file_skip_keywords=["zip", "png"])
+    post = {
+        "id": "p1",
+        "file": {"path": "/m/pack.zip", "name": "pack.zip"},
+        "attachments": [{"path": "/a/1_JP.png", "name": "1_JP.png"}],
+    }
+
+    files = thread.detect_files(post, [".zip", ".png"], _domain_config())
+
+    assert sorted(name for name, _url in files) == ["1_JP.png", "pack.zip"]
+    assert thread._files_skipped_count == 0
+    assert thread._file_skip_counts == {}
+
+
+def test_file_keywords_match_the_name_without_its_extension(qapp):
+    thread = _file_thread(file_skip_keywords=["psd"])
+    post = {"id": "p1", "file": {"path": "/m/art.psd.png", "name": "art.psd.png"}}
+
+    files = thread.detect_files(post, [".png"], _domain_config())
+
+    assert files == []
+    assert thread._file_skip_counts == {"psd": 1}
+
+
+def test_file_keywords_with_punctuation_edges_are_matched(qapp):
+    thread = _file_thread(file_skip_keywords=["[JP]"])
+    post = {"id": "p1", "file": {"path": "/m/x.png", "name": "123[JP] art.png"}}
+
+    files = thread.detect_files(post, [".png"], _domain_config())
+
+    assert files == []
+    assert thread._file_skip_counts == {"[JP]": 1}
+
+
+def test_lenient_file_keywords_match_substrings(qapp):
+    strict = _file_thread(file_skip_keywords=["bean"])
+    lenient = _file_thread(file_skip_keywords=["bean"], file_skip_lenient=True)
+    post = {
+        "id": "p1",
+        "file": {"path": "/m/beanstoast_01.png", "name": "beanstoast_01.png"},
+    }
+
+    strict_files = strict.detect_files(post, [".png"], _domain_config())
+    lenient_files = lenient.detect_files(post, [".png"], _domain_config())
+
+    assert [name for name, _url in strict_files] == ["beanstoast_01.png"]
+    assert lenient_files == []
+    assert lenient._file_skip_counts == {"bean": 1}
+
+
+def test_file_punctuation_rules_default_to_enclosing_only(qapp):
+    thread = _file_thread(file_skip_keywords=["zip-", "【JP】"])
+    hyphen_post = {"id": "p1", "file": {"path": "/m/x.png", "name": "zip-01.png"}}
+    cjk_post = {"id": "p2", "file": {"path": "/m/y.png", "name": "123【JP】 art.png"}}
+
+    hyphen_files = thread.detect_files(hyphen_post, [".png"], _domain_config())
+    cjk_files = thread.detect_files(cjk_post, [".png"], _domain_config())
+
+    assert [name for name, _url in hyphen_files] == ["zip-01.png"]
+    assert cjk_files == []
+    assert thread._file_skip_counts == {"【JP】": 1}
+
+
+def test_file_punctuation_rules_can_be_lenient(qapp):
+    thread = _file_thread(file_skip_keywords=["zip-"], lenient_punctuation=True)
+    post = {"id": "p1", "file": {"path": "/m/x.png", "name": "zip-01.png"}}
+
+    files = thread.detect_files(post, [".png"], _domain_config())
+
+    assert files == []
+    assert thread._file_skip_counts == {"zip-": 1}

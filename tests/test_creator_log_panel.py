@@ -276,8 +276,6 @@ def test_log_and_config_keys_are_translated():
         "open_log_tooltip",
         "save_config_btn",
         "save_config_btn_tooltip",
-        "config_save_info_title",
-        "config_save_info_text",
         "save_creator_config_btn",
         "save_creator_config_btn_tooltip",
     )
@@ -295,34 +293,4 @@ def test_the_log_row_is_not_a_group_box(qtbot, tmp_path):
     assert tab.log_config_group.layout() is not None
     # The old "Log & Config" title is gone with the box.
     assert cd.translate("log_and_config", 1) in ("", "log_and_config")
-
-
-def test_the_info_box_sits_right_of_the_two_saves(qtbot, tmp_path):
-    tab = make_tab(qtbot, tmp_path)
-
-    row = tab.log_config_group.layout()
-    assert row.indexOf(tab.creator_config_info_btn) > row.indexOf(
-        tab.creator_save_config_btn
-    )
-    assert row.indexOf(tab.creator_config_info_btn) > row.indexOf(
-        tab.creator_save_creator_config_btn
-    )
-    assert tab.creator_config_info_btn.toolTip() == cd.translate("config_save_info_title")
-
-
-def test_the_info_box_explains_both_saves(qtbot, tmp_path, monkeypatch):
-    shown = {}
-    monkeypatch.setattr(
-        cd.QMessageBox,
-        "information",
-        lambda parent, title, text: shown.update(title=title, text=text),
-    )
-    tab = make_tab(qtbot, tmp_path)
-
-    tab.show_config_save_help()
-
-    assert shown["title"] == cd.translate("config_save_info_title")
-    assert "Save Config" in shown["text"]
-    assert "Save Creator Config" in shown["text"]
-    assert "creator_configs.db" in shown["text"]
 

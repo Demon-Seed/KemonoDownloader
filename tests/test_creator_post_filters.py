@@ -259,3 +259,133 @@ def test_posts_without_facts_are_kept():
     )
 
     assert cd.post_skip_reason("art bundle", None, filters) == (None, "")
+
+
+# ---------------------------------------------------------------------------
+# Keyword matching: extensions and lenient mode
+# ---------------------------------------------------------------------------
+
+
+def test_filenames_scope_ignores_the_file_extension():
+    post = facts(filenames_list=["123[JP] art.png", "pack.zip", "art.psd.png"])
+
+    def reason(keyword):
+        filters = cd.PostFilters(
+            skip_keywords=(keyword,), skip_scopes=frozenset({"filenames"})
+        )
+        return cd.keyword_skip_reason("Plain", post, filters)
+
+    assert reason("png") == ""
+    assert reason("zip") == ""
+    assert reason("psd") == "psd"
+    assert reason("art") == "art"
+
+
+def test_punctuation_edges_in_keywords_delimit_themselves():
+    post = facts(filenames_list=["123[JP] art.png"])
+    filters = cd.PostFilters(
+        skip_keywords=("[JP]",), skip_scopes=frozenset({"filenames"})
+    )
+
+    assert cd.keyword_skip_reason("Plain", post, filters) == "[JP]"
+
+
+def test_lenient_keywords_match_substrings():
+    post = facts(filenames_list=["beanstoast_01.png"])
+    strict = cd.PostFilters(
+        skip_keywords=("bean",), skip_scopes=frozenset({"filenames"})
+    )
+    lenient = cd.PostFilters(
+        skip_keywords=("bean",),
+        skip_scopes=frozenset({"filenames"}),
+        lenient_keywords=True,
+    )
+
+    assert cd.keyword_skip_reason("Plain", post, strict) == ""
+    assert cd.keyword_skip_reason("Plain", post, lenient) == "bean"
+
+
+def test_lenient_keywords_apply_to_every_post_scope():
+    post = facts(
+        filenames_list=["beanstoast.png"],
+        description="beanstoast",
+        tag_list=["beanstoast"],
+    )
+    title = cd.PostFilters(skip_keywords=("bean",), lenient_keywords=True)
+    description = cd.PostFilters(
+        skip_keywords=("bean",),
+        skip_scopes=frozenset({"description"}),
+        lenient_keywords=True,
+    )
+    tags = cd.PostFilters(
+        skip_keywords=("bean",),
+        skip_scopes=frozenset({"tags"}),
+        lenient_keywords=True,
+    )
+    filenames = cd.PostFilters(
+        skip_keywords=("bean",),
+        skip_scopes=frozenset({"filenames"}),
+        lenient_keywords=True,
+    )
+
+    assert cd.keyword_skip_reason("beanstoast", facts(), title) == "bean"
+    assert cd.keyword_skip_reason("Plain", post, description) == "bean"
+    assert cd.keyword_skip_reason("Plain", post, tags) == "bean"
+    assert cd.keyword_skip_reason("Plain", post, filenames) == "bean"
+    assert (
+        cd.keyword_skip_reason("Plain", post, cd.PostFilters(skip_keywords=("bean",)))
+        == ""
+    )
+
+
+def test_lenient_keywords_credit_the_first_match_only():
+    filters = cd.PostFilters(skip_keywords=("bean", "toast"), lenient_keywords=True)
+
+    assert cd.post_skip_reason("beanstoast", facts(), filters) == ("keywords", "bean")
+
+
+# ---------------------------------------------------------------------------
+# Punctuation matching rules
+# ---------------------------------------------------------------------------
+
+
+def test_default_rules_only_enclosing_punctuation_delimits_itself():
+    post = facts(filenames_list=["123[JP] art.png", "art.5_sketch.png", "zip-01.png"])
+
+    def reason(keyword, lenient_punctuation=False):
+        filters = cd.PostFilters(
+            skip_keywords=(keyword,),
+            skip_scopes=frozenset({"filenames"}),
+            lenient_punctuation=lenient_punctuation,
+        )
+        return cd.keyword_skip_reason("Plain", post, filters)
+
+    assert "[" in cd.ENCLOSING_PUNCTUATION and "【" in cd.ENCLOSING_PUNCTUATION
+    assert reason("[JP]") == "[JP]"
+    # Joiners stay inside the token in the default mode.
+    assert reason(".5") == ""
+    assert reason("zip-") == ""
+
+
+def test_lenient_punctuation_rules_accept_any_edge():
+    post = facts(filenames_list=["art.5_sketch.png", "zip-01.png"])
+
+    def reason(keyword):
+        filters = cd.PostFilters(
+            skip_keywords=(keyword,),
+            skip_scopes=frozenset({"filenames"}),
+            lenient_punctuation=True,
+        )
+        return cd.keyword_skip_reason("Plain", post, filters)
+
+    assert reason(".5") == ".5"
+    assert reason("zip-") == "zip-"
+
+
+def test_cjk_brackets_are_enclosing_punctuation():
+    post = facts(filenames_list=["123【JP】 art.png"])
+    filters = cd.PostFilters(
+        skip_keywords=("【JP】",), skip_scopes=frozenset({"filenames"})
+    )
+
+    assert cd.keyword_skip_reason("Plain", post, filters) == "【JP】"

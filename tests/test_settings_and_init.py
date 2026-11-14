@@ -19,6 +19,89 @@ def test___main_calls_app_main(monkeypatch):
     assert called
 
 
+def test_disable_ui_effects_turns_off_popup_and_tooltip_animations(qapp):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QApplication
+
+    from kemonodownloader import app as app_module
+
+    app_module.disable_ui_effects()
+
+    for effect in (
+        Qt.UIEffect.UI_AnimateCombo,
+        Qt.UIEffect.UI_AnimateTooltip,
+        Qt.UIEffect.UI_FadeTooltip,
+    ):
+        assert QApplication.isEffectEnabled(effect) is False
+
+
+def test_tooltip_lifetime_filter_uses_the_configured_display_time(qapp):
+    from kemonodownloader import app as app_module
+
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: None)
+
+    assert event_filter._timer.interval() == app_module.TOOLTIP_DISPLAY_TIME
+
+
+def test_tooltip_lifetime_filter_hides_after_the_display_time(qapp, qtbot):
+    from PyQt6.QtCore import QEvent
+
+    from kemonodownloader import app as app_module
+
+    hidden = []
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: hidden.append(True))
+    event_filter._timer.setInterval(10)
+
+    assert event_filter.eventFilter(None, QEvent(QEvent.Type.ToolTip)) is False
+    assert event_filter._timer.isActive()
+
+    qtbot.wait(60)
+
+    assert hidden == [True]
+
+
+def test_tooltip_lifetime_filter_stops_on_interaction(qapp):
+    from PyQt6.QtCore import QEvent
+
+    from kemonodownloader import app as app_module
+
+    hidden = []
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: hidden.append(True))
+    event_filter.eventFilter(None, QEvent(QEvent.Type.ToolTip))
+
+    event_filter.eventFilter(None, QEvent(QEvent.Type.MouseButtonPress))
+
+    assert not event_filter._timer.isActive()
+    assert hidden == [True]
+
+
+def test_tooltip_lifetime_filter_hides_when_the_owner_is_left(qapp):
+    from PyQt6.QtCore import QEvent, QObject
+    from PyQt6.QtWidgets import QWidget
+
+    from kemonodownloader import app as app_module
+
+    hidden = []
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: hidden.append(True))
+    owner = QWidget()
+    other = QObject()
+
+    event_filter.eventFilter(owner, QEvent(QEvent.Type.ToolTip))
+    event_filter.eventFilter(other, QEvent(QEvent.Type.Leave))
+    assert hidden == []
+
+    event_filter.eventFilter(owner, QEvent(QEvent.Type.Leave))
+    assert hidden == [True]
+
+
+def test_install_tooltip_lifetime_attaches_to_the_app(qapp):
+    from kemonodownloader import app as app_module
+
+    event_filter = app_module.install_tooltip_lifetime(qapp)
+
+    assert qapp._tooltip_lifetime_filter is event_filter
+
+
 def test_get_default_base_directory_various_platforms(monkeypatch):
     # Windows-like
     monkeypatch.setattr(sys, "platform", "win32")
