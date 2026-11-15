@@ -21,6 +21,7 @@
 * Filename templates: Split into two, 'In Post Folder' and 'In Creator Folder', using placeholders such as `{file_number}`, `{post_id}`, `{post_date}`, `{file_index}`, `{creator_name}` and `{service}`.<br>
 * 'Dedup when filename is taken' (Off/On): saves a second file as `name_1`, `name_2` instead of overwriting it.<br>
 * 'Open Folder' button beside the run controls: opens the creator folder of the run in flight, greyed out until that folder exists.<br>
+* Pawchive previews show the site's smaller thumbnail first, with a 'Load Full Image' button for the original file; the preview cache is capped at 100 MB and can be cleared from Settings.<br>
 
 # Changes:<br>
 * Creator Downloader is now the first tab and defaults on launch.<br>

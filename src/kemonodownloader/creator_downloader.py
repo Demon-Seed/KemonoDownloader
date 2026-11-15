@@ -18,8 +18,18 @@ import requests
 from bs4 import BeautifulSoup
 from bs4.element import NavigableString
 from fake_useragent import UserAgent
-from PyQt6.QtCore import QByteArray, Qt, QThread, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices, QPixmap
+from PyQt6.QtCore import (
+    QBuffer,
+    QByteArray,
+    QIODevice,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    pyqtSignal,
+)
+from PyQt6.QtGui import QDesktopServices, QImageReader, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -48,12 +58,15 @@ from kemonodownloader.domain_config import (
     clean_file_url,
     file_host_headers,
     get_domain_config,
+    get_domains,
+    preview_thumbnail_url,
     warm_file_host,
 )
 from kemonodownloader.download_history import DownloadHistoryDB, iso_to_local_date
 from kemonodownloader.hash_db import HashDB
 from kemonodownloader.kd_language import translate
 from kemonodownloader.kd_paths import ensure_directory
+from kemonodownloader.preview_cache import has_cached_preview, preview_cache_path
 from kemonodownloader.retry_policy import (
     api_retry_delay,
     countdown_seconds,
@@ -813,11 +826,14 @@ def get_user_agent() -> str:
 
 # Default headers (will be updated per request based on domain)
 def _build_headers() -> dict:
-    # Use the first/default domain's referer for the generic header set
-    default_referer = get_domain_config("")["referer"]
+    # The generic header set belongs to the default domain, not to whatever
+    # URL a caller happens to preview. Reading the domain list directly keeps
+    # a per-request domain override from changing the shared headers.
+    domains = get_domains()
+    default_domain = domains[0] if domains else "kemono.cr"
     return {
         "User-Agent": get_user_agent(),
-        "Referer": default_referer,
+        "Referer": f"https://{default_domain}/",
         "Accept": "text/css",
         "Accept-Language": accept_language,
         "Accept-Encoding": "gzip, deflate",
@@ -933,16 +949,56 @@ class _StoppableThread:
         self.is_running = False
 
 
+def _decode_preview_image(data, max_size=800):
+    """Decode *data* into a QPixmap that fits *max_size*.
+
+    Qt refuses to decode an image whose full bitmap would exceed its 256 MB
+    allocation limit, which multi-thousand-pixel Patreon JPEGs routinely do
+    even though a preview only ever shows 800 px. QImageReader can read at a
+    reduced size, so those files still preview instead of failing as
+    "invalid image data".
+
+    Returns None when the bytes are not a decodable image.
+    """
+    buffer = QBuffer()
+    buffer.setData(QByteArray(bytes(data)))
+    buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+    reader = QImageReader(buffer)
+    source_size = reader.size()
+    if source_size.isValid() and source_size.width() > 0 and source_size.height() > 0:
+        reader.setScaledSize(
+            source_size.scaled(
+                QSize(max_size, max_size),
+                Qt.AspectRatioMode.KeepAspectRatio,
+            )
+        )
+    image = reader.read()
+    if image.isNull():
+        return None
+    pixmap = QPixmap.fromImage(image)
+    if pixmap.width() > max_size or pixmap.height() > max_size:
+        pixmap = pixmap.scaled(
+            max_size,
+            max_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+    return pixmap
+
+
 class PreviewThread(QThread):
     preview_ready = pyqtSignal(str, object)
     progress = pyqtSignal(int)
     error = pyqtSignal(str)
 
-    def __init__(self, url, cache_dir, settings_tab=None):
+    def __init__(self, url, cache_dir, settings_tab=None, cache=True):
         super().__init__()
         self.url = url
         self.cache_dir = cache_dir
         self.settings_tab = settings_tab
+        # Thumbnail-first previews pass cache=False: a thumbnail is a cheap
+        # request and the full render is what repeat previews reuse.
+        self.cache = bool(cache)
         # Kept so preview requests can be shaped for the file host rather
         # than for the site's API (see domain_config.file_host_headers).
         self.domain_config = get_domain_config(url)
@@ -952,12 +1008,10 @@ class PreviewThread(QThread):
 
     def run(self):
         if self.url.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
-            cache_key = (
-                hashlib.md5(self.url.encode()).hexdigest()
-                + os.path.splitext(self.url)[1]
+            cache_path = (
+                preview_cache_path(self.url, self.cache_dir) if self.cache else None
             )
-            cache_path = os.path.join(self.cache_dir, cache_key)
-            if os.path.exists(cache_path):
+            if cache_path and os.path.exists(cache_path):
                 pixmap = QPixmap()
                 if pixmap.load(cache_path):
                     self.preview_ready.emit(self.url, pixmap)
@@ -1000,21 +1054,16 @@ class PreviewThread(QThread):
                         else:
                             progress = 0
                         self.progress.emit(min(progress, 100))
-                pixmap = QPixmap()
-                if not pixmap.loadFromData(QByteArray(bytes(downloaded_data))):
+                pixmap = _decode_preview_image(downloaded_data)
+                if pixmap is None:
                     self.error.emit(
                         f"{translate('failed_to_download')}: {self.url}: "
                         f"{translate('invalid_image_data')}"
                     )
                     return
-                scaled_pixmap = pixmap.scaled(
-                    800,
-                    800,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-                scaled_pixmap.save(cache_path)
-                self.preview_ready.emit(self.url, scaled_pixmap)
+                if cache_path:
+                    pixmap.save(cache_path)
+                self.preview_ready.emit(self.url, pixmap)
             except requests.RequestException as e:
                 self.error.emit(
                     f"{translate('failed_to_download')}: {self.url}: {str(e)}"
@@ -1024,9 +1073,29 @@ class PreviewThread(QThread):
 
 
 class ImageModal(QDialog):
+    """Preview one post image, using Pawchive's thumbnail when available.
+
+    A thumbnail is shown first so the dialog paints quickly; the full file is
+    one click away. If the full render is already cached the modal skips the
+    thumbnail stage entirely - a cached full image is strictly better.
+    """
+
+    # Class-level defaults keep the display helpers usable on instances built
+    # with ``__new__`` in tests, before the Qt superclass is initialised.
+    _image_shown = False
+    _loading_full = False
+    _thumbnail_url = ""
+    _load_full_btn = None
+
     def __init__(self, url, cache_dir, parent=None, settings_tab=None):
         super().__init__(parent)
         self._parent = parent
+        self._full_url = str(url)
+        self._cache_dir = cache_dir
+        self._thumbnail_url = preview_thumbnail_url(self._full_url)
+        self._image_shown = False
+        self._loading_full = False
+        self._preview_threads = []
         self.setWindowTitle(translate("media_preview"))
         self.setModal(True)
         self.resize(800, 800)
@@ -1034,6 +1103,15 @@ class ImageModal(QDialog):
         self._label = QLabel(translate("loading_image_simple"))
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._layout.addWidget(self._label)
+
+        self._load_full_btn = QPushButton(translate("load_full_image"))
+        self._load_full_btn.setToolTip(translate("load_full_image_tooltip"))
+        self._load_full_btn.clicked.connect(self.load_full_image)
+        self._load_full_btn.hide()
+        self._layout.addWidget(
+            self._load_full_btn, alignment=Qt.AlignmentFlag.AlignCenter
+        )
+
         self._progress_bar = QProgressBar()
         self._progress_bar.setStyleSheet(
             "QProgressBar { border: 1px solid #4A5B7A; border-radius: 5px; } QProgressBar::chunk { background: #4A5B7A; }"
@@ -1043,12 +1121,16 @@ class ImageModal(QDialog):
 
         if settings_tab is None:
             settings_tab = self._resolve_settings_tab()
-        self.preview_thread = PreviewThread(url, cache_dir, settings_tab)
-        self.preview_thread.preview_ready.connect(self.display_image)
-        self.preview_thread.progress.connect(self.update_progress)
-        self.preview_thread.error.connect(self.display_error)
-        self.preview_thread.finished.connect(self.preview_thread.deleteLater)
-        self.preview_thread.start()
+        self._settings_tab = settings_tab
+
+        # A cached full render is sharper than any thumbnail, so repeat
+        # previews skip the thumbnail step instead of asking for a click.
+        if has_cached_preview(self._full_url, cache_dir):
+            self._start_preview(self._full_url, is_full=True)
+        elif self._thumbnail_url:
+            self._start_preview(self._thumbnail_url, is_full=False)
+        else:
+            self._start_preview(self._full_url, is_full=True)
 
     def _resolve_settings_tab(self):
         """Return the Settings tab so previews honor the proxy settings.
@@ -1069,17 +1151,99 @@ class ImageModal(QDialog):
                 return candidate
         return None
 
+    def _start_preview(self, url, is_full):
+        """Start one load. Thumbnail loads are never written to the cache."""
+        self._loading_full = bool(is_full)
+        self._progress_bar.setValue(0)
+        self._progress_bar.show()
+        if not self._image_shown:
+            self._label.setText(translate("loading_image_simple"))
+
+        button = getattr(self, "_load_full_btn", None)
+        if is_full and self._image_shown and button is not None:
+            button.setText(translate("loading_full_image"))
+            button.setEnabled(False)
+
+        if is_full:
+            thread = PreviewThread(url, self._cache_dir, self._settings_tab)
+        else:
+            thread = PreviewThread(
+                url, self._cache_dir, self._settings_tab, cache=False
+            )
+        self.preview_thread = thread
+        self._preview_threads.append(thread)
+        thread.preview_ready.connect(
+            lambda ready_url, pixmap, full=is_full: self._on_preview_ready(
+                ready_url, pixmap, full
+            )
+        )
+        thread.progress.connect(self.update_progress)
+        thread.error.connect(
+            lambda message, full=is_full: self._on_preview_error(message, full)
+        )
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread: self._forget_thread(t))
+        thread.start()
+
+    def _forget_thread(self, thread):
+        """Drop a finished worker so only running threads stay referenced."""
+        try:
+            self._preview_threads.remove(thread)
+        except ValueError:
+            pass
+
+    def _on_preview_ready(self, url, pixmap, is_full):
+        self.display_image(url, pixmap)
+        self._loading_full = False
+        button = getattr(self, "_load_full_btn", None)
+        if button is None:
+            return
+        if is_full:
+            button.hide()
+        elif self._thumbnail_url:
+            button.setText(translate("load_full_image"))
+            button.setEnabled(True)
+            button.show()
+        else:
+            button.hide()
+
+    def _on_preview_error(self, error_message, is_full):
+        self._loading_full = False
+        if not is_full and self._thumbnail_url:
+            # The thumbnail is only an optimisation: a missing or broken one
+            # must never stop the preview from opening.
+            button = getattr(self, "_load_full_btn", None)
+            if button is not None:
+                button.hide()
+            self._start_preview(self._full_url, is_full=True)
+            return
+        self.display_error(error_message)
+        button = getattr(self, "_load_full_btn", None)
+        if button is not None and self._image_shown:
+            button.setText(translate("load_full_image"))
+            button.setEnabled(True)
+            button.show()
+
+    def load_full_image(self):
+        """Replace the thumbnail with the original file."""
+        if self._loading_full or not self._thumbnail_url:
+            return
+        self._start_preview(self._full_url, is_full=True)
+
     def update_progress(self, value):
         self._progress_bar.setValue(value)
-        self._label.setText(translate("loading_image", value))
+        if not getattr(self, "_image_shown", False):
+            self._label.setText(translate("loading_image", value))
 
     def display_image(self, url, pixmap):
+        self._image_shown = True
         self._label.setText("")
         self._progress_bar.hide()
         self._label.setPixmap(pixmap)
 
     def display_error(self, error_message):
-        self._label.setText(translate("error_loading_image"))
+        if not getattr(self, "_image_shown", False):
+            self._label.setText(translate("error_loading_image"))
         self._progress_bar.hide()
         QMessageBox.critical(self, translate("image_load_error"), error_message)
 
@@ -5555,27 +5719,29 @@ class CreatorDownloaderTab(QWidget):
     def _load_config_for_creator(self):
         """Switch the page to the loaded creator's profile, or back to default.
 
-        Called when a creator is loaded and before the fetch reads the Filters
-        box, so the restored filters are the ones the fetch actually uses. A
-        creator profile replaces the default rather than being layered on it;
-        with no creator profile the default is what the page returns to, and
+        Called when a creator is loaded, when its view is cleared, and before
+        the fetch reads the Filters box, so the restored filters are the ones
+        the fetch actually uses. A creator profile replaces the default rather
+        than being layered on it; with no creator profile — or with no creator
+        loaded at all — the saved default is what the page returns to, and
         with neither the built-in page state is.
         """
         store = self._config_store()
         service, creator_id = self._current_creator_identity()
         config = None
         from_creator = False
-        if store is not None and self.current_creator_url:
-            try:
-                config = store.get_creator_config(service, creator_id)
-            except Exception as e:
-                self.append_log_to_console(
-                    translate("log_warning", translate("config_load_failed", e)),
-                    "WARNING",
-                )
-            if config is not None:
-                from_creator = True
-            else:
+        if store is not None:
+            if self.current_creator_url:
+                try:
+                    config = store.get_creator_config(service, creator_id)
+                except Exception as e:
+                    self.append_log_to_console(
+                        translate("log_warning", translate("config_load_failed", e)),
+                        "WARNING",
+                    )
+                if config is not None:
+                    from_creator = True
+            if not from_creator:
                 try:
                     config = store.get_page_default()
                 except Exception:
@@ -5752,6 +5918,18 @@ class CreatorDownloaderTab(QWidget):
             if date_text:
                 self._post_history_cache[str(post_id)] = date_text
 
+    @staticmethod
+    def _row_label_text(key, download_date):
+        """Return a row label, bolding the bracketed last-download date.
+
+        The row switches to rich text only when it has a date to emphasise,
+        so the title and date are escaped: a title containing '<' or '&' must
+        still render literally.
+        """
+        if not download_date:
+            return key
+        return f"{html.escape(str(key))} <b>[{html.escape(str(download_date))}]</b>"
+
     def refresh_download_history_ui(self):
         """Re-read the history and restamp the visible rows + creator label."""
         self._load_post_history()
@@ -5762,7 +5940,10 @@ class CreatorDownloaderTab(QWidget):
             if post_id is None or not key or not hasattr(widget, "label"):
                 continue
             date_text = self._post_history_cache.get(str(post_id))
-            widget.label.setText(f"{key} [{date_text}]" if date_text else key)
+            widget.label.setTextFormat(
+                Qt.TextFormat.RichText if date_text else Qt.TextFormat.PlainText
+            )
+            widget.label.setText(self._row_label_text(key, date_text))
 
     def _show_info(self, title_key, text_key):
         """Show a translated one-paragraph help dialog."""
@@ -5893,6 +6074,9 @@ class CreatorDownloaderTab(QWidget):
                         self.current_creator_url = None
                         self._clear_filetype_selection()
                         self._reset_found_extensions()
+                        # The creator's saved profile goes with it: hand every
+                        # option and filter back to the page default.
+                        self._load_config_for_creator()
                         self.update_checked_posts()
                         self.filter_items()
                 else:
@@ -7843,10 +8027,14 @@ class CreatorDownloaderTab(QWidget):
 
         # *text* already ends with the post's publish date in parentheses, so
         # the last-download date goes straight after it in square brackets —
-        # and only when the post actually has one.
+        # and only when the post actually has one. That date is bolded, since
+        # it is the one part of the row that changes between runs.
         download_date = self._post_history_cache.get(str(post_id))
-        display_text = f"{text} [{download_date}]" if download_date else text
-        label = QLabel(display_text)
+        label = QLabel()
+        label.setTextFormat(
+            Qt.TextFormat.RichText if download_date else Qt.TextFormat.PlainText
+        )
+        label.setText(self._row_label_text(text, download_date))
         label.setStyleSheet("color: white;")
         label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(label, stretch=1)

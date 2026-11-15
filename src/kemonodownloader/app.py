@@ -6,7 +6,7 @@ import warnings
 
 import qtawesome as qta
 from bs4 import MarkupResemblesLocatorWarning
-from PyQt6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation, QTimer, Qt
+from PyQt6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation, Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontDatabase, QIcon, QPalette
 from PyQt6.QtWidgets import (
     QApplication,
@@ -23,6 +23,7 @@ from kemonodownloader import kd_paths
 from kemonodownloader.creator_downloader import CreatorDownloaderTab
 from kemonodownloader.kd_language import translate
 from kemonodownloader.kd_settings import GITHUB_REPO_URL, SettingsTab
+from kemonodownloader.preview_cache import prune_preview_cache_async
 
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
@@ -265,15 +266,17 @@ class KemonoDownloader(QMainWindow):
         self.status_label.setText(message)
 
 
-# Qt 6.10's tooltips expire after 10 s plus 40 ms per character past 100, so
-# hover help stays on screen far too long. The style hints that used to tune
-# this (SH_ToolTip_WakeUpDelay / FallAsleepDelay) are no longer read by
-# QToolTip, so the lifetime is capped with an application event filter.
-TOOLTIP_DISPLAY_TIME = 1800  # ms
+# Qt's QTipLabel expires after 10 s plus 40 ms per character past 100 (see
+# QTipLabel::restartExpireTimer), and the style hints that used to tune this
+# (SH_ToolTip_WakeUpDelay / FallAsleepDelay) are no longer read by QToolTip.
+# The event filter below therefore stretches each widget's display time to int
+# max and hides the tip itself, so hover help stays on screen for as long as
+# the pointer actually rests on the widget.
+TOOLTIP_HOVER_TIME = 2**31 - 1  # ms, effectively forever
 
 
 class _TooltipLifetimeFilter(QObject):
-    """Cap a tooltip's display time and hide it the moment it is left."""
+    """Keep a tooltip on screen for as long as its widget is hovered."""
 
     # QTipLabel gives itself this object name; hiding it directly skips Qt's
     # 300 ms fade-out timer, which made tooltips trail behind the pointer.
@@ -283,28 +286,24 @@ class _TooltipLifetimeFilter(QObject):
         super().__init__(parent)
         self._hide = hide
         self._owner = None
-        self._timer = QTimer(self)
-        self._timer.setSingleShot(True)
-        self._timer.setInterval(TOOLTIP_DISPLAY_TIME)
-        self._timer.timeout.connect(self._hide_now)
 
     def _hide_now(self):
         """Hide the tooltip without waiting for Qt's fade-out timer."""
-        self._timer.stop()
+        self._owner = None
         self._hide()
         for widget in QApplication.topLevelWidgets():
-            if (
-                widget.objectName() == self.TOOLTIP_OBJECT_NAME
-                and widget.isVisible()
-            ):
+            if widget.objectName() == self.TOOLTIP_OBJECT_NAME and widget.isVisible():
                 widget.hide()
 
     def eventFilter(self, obj, event):
         kind = event.type()
         if kind == QEvent.Type.ToolTip:
-            # A new tip is about to be shown: give it the full display time.
             self._owner = obj if isinstance(obj, QWidget) else None
-            self._timer.start()
+            if self._owner is not None:
+                # QWidget::event() passes toolTipDuration() to
+                # QToolTip::showText(), so this stops Qt's own expiry while the
+                # pointer rests on the widget; Leave hides the tip below.
+                obj.setToolTipDuration(TOOLTIP_HOVER_TIME)
         elif kind == QEvent.Type.Leave and obj is self._owner:
             # Moving off the widget means the tip should vanish immediately.
             self._hide_now()
@@ -316,13 +315,13 @@ class _TooltipLifetimeFilter(QObject):
         ):
             self._hide_now()
         elif kind == QEvent.Type.Hide and obj is self._owner:
-            self._timer.stop()
-            self._owner = None
+            # The owner is gone, so nothing is being hovered any more.
+            self._hide_now()
         return False
 
 
 def install_tooltip_lifetime(app):
-    """Cap how long hover help stays on screen."""
+    """Keep hover help on screen while its widget is hovered."""
     if not isinstance(app, QObject):
         # Tests replace QApplication with a stub; there is nothing to filter.
         return None
@@ -359,6 +358,11 @@ def main():
     load_bundled_fonts()
     window = KemonoDownloader()
     window.show()
+    # The preview cache is bounded by size; trim it off the UI thread so
+    # startup never waits on a large Cache folder.
+    cache_folder = getattr(window, "cache_folder", None)
+    if cache_folder:
+        prune_preview_cache_async(cache_folder)
     sys.exit(app.exec())
 
 

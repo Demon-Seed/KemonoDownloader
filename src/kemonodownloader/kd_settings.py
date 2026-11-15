@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
 
 from kemonodownloader import kd_paths
 from kemonodownloader.kd_language import language_manager, translate
+from kemonodownloader.preview_cache import clear_preview_cache, format_size
 
 # Main repository (VoxDroid) used by the in-app update/repository links.
 GITHUB_REPO_URL = "https://github.com/VoxDroid/KemonoDownloader"
@@ -461,6 +462,13 @@ class SettingsTab(QWidget):
         # what people actually wanted (to back up or clear the databases).
         self.browse_data_button.clicked.connect(self.open_data_directory)
         folder_layout.addWidget(self.browse_data_button, 1, 2)
+
+        self.clear_cache_button = QPushButton()
+        self.clear_cache_button.setStyleSheet(
+            "background: #4A5B7A; padding: 5px; border-radius: 5px;"
+        )
+        self.clear_cache_button.clicked.connect(self.clear_preview_cache_action)
+        folder_layout.addWidget(self.clear_cache_button, 1, 3)
 
         self.folder_group.setLayout(folder_layout)
         layout.addWidget(self.folder_group)
@@ -1210,6 +1218,38 @@ class SettingsTab(QWidget):
             pass
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
+    def clear_preview_cache_action(self):
+        """Delete the disposable preview cache after confirmation."""
+        reply = QMessageBox.question(
+            self,
+            translate("confirm_clear_cache_title"),
+            translate("confirm_clear_cache_message"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            removed, freed = clear_preview_cache(kd_paths.cache_dir())
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                translate("cache_clear_failed_title"),
+                translate("cache_clear_failed", e),
+            )
+            return
+        if removed:
+            QMessageBox.information(
+                self,
+                translate("cache_cleared_title"),
+                translate("cache_cleared_text", removed, format_size(freed)),
+            )
+        else:
+            QMessageBox.information(
+                self,
+                translate("cache_cleared_title"),
+                translate("cache_empty_text"),
+            )
+
     def browse_tor_executable(self):
         """Browse for Tor executable file."""
         if sys.platform == "win32":
@@ -1803,6 +1843,8 @@ class SettingsTab(QWidget):
         self.data_directory_input.setToolTip(translate("data_directory_tooltip"))
         self.browse_button.setText(translate("browse"))
         self.browse_data_button.setText(translate("browse"))
+        self.clear_cache_button.setText(translate("clear_cache"))
+        self.clear_cache_button.setToolTip(translate("clear_cache_tooltip"))
 
         self.download_group.setTitle(translate("download_settings"))
         self.simultaneous_downloads_label.setText(translate("simultaneous_downloads"))

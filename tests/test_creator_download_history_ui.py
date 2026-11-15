@@ -5,10 +5,7 @@ from types import SimpleNamespace
 from PyQt6.QtCore import Qt
 
 from kemonodownloader import creator_downloader as cd
-from kemonodownloader.download_history import (
-    DownloadHistoryDB,
-    iso_to_local_date,
-)
+from kemonodownloader.download_history import DownloadHistoryDB, iso_to_local_date
 from kemonodownloader.kd_language import language_manager, translate
 
 STAMP = "2026-01-02T03:04:05+00:00"
@@ -292,9 +289,23 @@ def test_row_label_appends_the_date_in_brackets(qtbot, tmp_path):
 
     widget = add_post_row(tab, "Title (2024-01-01)", "1")
 
-    assert widget.label.text() == "Title (2024-01-01) [2026-10-16]"
+    assert widget.label.text() == "Title (2024-01-01) <b>[2026-10-16]</b>"
+    # The date is the only rich-text part, so it reads as bold.
+    assert widget.label.textFormat() == Qt.TextFormat.RichText
     # The undecorated key is preserved for the maps.
     assert widget.post_key == "Title (2024-01-01)"
+
+
+def test_row_label_escapes_the_title_in_rich_text(qtbot, tmp_path):
+    tab, _ = make_tab(qtbot, tmp_path)
+    tab._post_history_cache = {"1": "2026-10-16"}
+
+    widget = add_post_row(tab, "A <b>title</b> & more (2024-01-01)", "1")
+
+    assert widget.label.text() == (
+        "A &lt;b&gt;title&lt;/b&gt; &amp; more (2024-01-01) <b>[2026-10-16]</b>"
+    )
+    assert widget.label.textFormat() == Qt.TextFormat.RichText
 
 
 def test_row_label_is_untouched_without_history(qtbot, tmp_path):
@@ -315,7 +326,8 @@ def test_refresh_restamps_visible_rows_and_label(qtbot, tmp_path):
     DownloadHistoryDB(other_dir).record_post("patreon", "123", "1", STAMP)
     tab.refresh_download_history_ui()
 
-    assert widget.label.text() == f"Title (2024-01-01) [{STAMP_DATE}]"
+    assert widget.label.text() == f"Title (2024-01-01) <b>[{STAMP_DATE}]</b>"
+    assert widget.label.textFormat() == Qt.TextFormat.RichText
     assert tab.creator_last_download_label.text() == translate(
         "last_downloaded_creator", STAMP_DATE
     )

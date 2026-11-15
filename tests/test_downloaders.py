@@ -489,18 +489,23 @@ class TestPreviewThread:
 
         return PreviewThread("https://kemono.cr/img.jpg", str(tmp_path), MagicMock())
 
-    def test_run_success(self, preview_thread, mock_downloader_deps, monkeypatch):
+    def test_run_success(self, preview_thread, mock_downloader_deps):
+        from PyQt6.QtCore import QBuffer, QIODevice
+        from PyQt6.QtGui import QPixmap
+
+        pixmap = QPixmap(2, 2)
+        pixmap.fill()
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.ReadWrite)
+        pixmap.save(buffer, "PNG")
+        payload = bytes(buffer.data())
+
         mock_session = mock_downloader_deps
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.headers = {"content-length": "4"}
-        mock_resp.iter_content = lambda chunk_size: [b"data"]
+        mock_resp.headers = {"content-length": str(len(payload))}
+        mock_resp.iter_content = lambda chunk_size: [payload]
         mock_session.get.return_value = mock_resp
-
-        from PyQt6.QtGui import QPixmap
-
-        monkeypatch.setattr(QPixmap, "loadFromData", lambda *a: True)
-        monkeypatch.setattr(QPixmap, "scaled", lambda *a, **k: MagicMock())
 
         results = []
         preview_thread.preview_ready.connect(lambda u, p: results.append(u))

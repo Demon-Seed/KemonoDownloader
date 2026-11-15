@@ -35,32 +35,36 @@ def test_disable_ui_effects_turns_off_popup_and_tooltip_animations(qapp):
         assert QApplication.isEffectEnabled(effect) is False
 
 
-def test_tooltip_lifetime_filter_uses_the_configured_display_time(qapp):
+def test_tooltip_lifetime_filter_stretches_the_widget_display_time(qapp):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtWidgets import QWidget
+
+    from kemonodownloader import app as app_module
+
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: None)
+    widget = QWidget()
+    widget.setToolTip("Hover help")
+
+    assert event_filter.eventFilter(widget, QEvent(QEvent.Type.ToolTip)) is False
+
+    # Qt would otherwise expire the tip after 10 s plus 40 ms per character;
+    # stretching the widget's own display time keeps it up while hovered.
+    assert widget.toolTipDuration() == app_module.TOOLTIP_HOVER_TIME
+    assert app_module.TOOLTIP_HOVER_TIME > 10_000
+
+
+def test_tooltip_lifetime_filter_ignores_tooltip_events_from_non_widgets(qapp):
+    from PyQt6.QtCore import QEvent, QObject
+
     from kemonodownloader import app as app_module
 
     event_filter = app_module._TooltipLifetimeFilter(hide=lambda: None)
 
-    assert event_filter._timer.interval() == app_module.TOOLTIP_DISPLAY_TIME
+    assert event_filter.eventFilter(QObject(), QEvent(QEvent.Type.ToolTip)) is False
+    assert event_filter._owner is None
 
 
-def test_tooltip_lifetime_filter_hides_after_the_display_time(qapp, qtbot):
-    from PyQt6.QtCore import QEvent
-
-    from kemonodownloader import app as app_module
-
-    hidden = []
-    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: hidden.append(True))
-    event_filter._timer.setInterval(10)
-
-    assert event_filter.eventFilter(None, QEvent(QEvent.Type.ToolTip)) is False
-    assert event_filter._timer.isActive()
-
-    qtbot.wait(60)
-
-    assert hidden == [True]
-
-
-def test_tooltip_lifetime_filter_stops_on_interaction(qapp):
+def test_tooltip_lifetime_filter_hides_on_interaction(qapp):
     from PyQt6.QtCore import QEvent
 
     from kemonodownloader import app as app_module
@@ -71,7 +75,23 @@ def test_tooltip_lifetime_filter_stops_on_interaction(qapp):
 
     event_filter.eventFilter(None, QEvent(QEvent.Type.MouseButtonPress))
 
-    assert not event_filter._timer.isActive()
+    assert hidden == [True]
+
+
+def test_tooltip_lifetime_filter_hides_when_the_owner_is_hidden(qapp):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtWidgets import QWidget
+
+    from kemonodownloader import app as app_module
+
+    hidden = []
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: hidden.append(True))
+    owner = QWidget()
+
+    event_filter.eventFilter(owner, QEvent(QEvent.Type.ToolTip))
+    assert hidden == []
+
+    event_filter.eventFilter(owner, QEvent(QEvent.Type.Hide))
     assert hidden == [True]
 
 
@@ -156,4 +176,3 @@ def test_get_domain_config_coomer_and_default():
     assert co["domain"] == "coomer.st"
     km = cd.get_domain_config("https://kemono.cr/some/path")
     assert km["domain"] == "kemono.cr"
-

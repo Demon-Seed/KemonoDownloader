@@ -131,8 +131,12 @@ def _build_config(domain: str) -> Dict[str, str]:
     # Special case for file download servers, e.g. pawchive.<suffix> -> file.pawchive.<suffix>
     if _is_pawchive_domain(domain):
         file_base_url = f"https://file.{domain}"
+        # Pawchive's post cards use a separate, much smaller render served
+        # from img.<domain>/thumbnail with the same /data/... path.
+        thumbnail_base_url = f"https://img.{domain}/thumbnail"
     else:
         file_base_url = f"https://{domain}"
+        thumbnail_base_url = ""
 
     return {
         "domain": domain,
@@ -140,6 +144,7 @@ def _build_config(domain: str) -> Dict[str, str]:
         "api_base": f"https://{domain}/api/v1",
         "referer": f"https://{domain}/",
         "file_base_url": file_base_url,
+        "thumbnail_base_url": thumbnail_base_url,
     }
 
 
@@ -176,6 +181,34 @@ def clean_file_url(file_url: str, domain_config: Dict[str, str]) -> str:
         full_url = urlunparse(parsed)
 
     return full_url
+
+
+def preview_thumbnail_url(
+    file_url: str, domain_config: Optional[Dict[str, str]] = None
+) -> str:
+    """Return the site's lighter thumbnail for *file_url*, or "".
+
+    Pawchive serves post-card thumbnails from ``img.<domain>/thumbnail`` and
+    accepts the same ``/data/...`` path as the full file, so the mapping is a
+    host swap rather than a new path. Domains without a known thumbnail host
+    return "" and callers keep using the original URL.
+
+    The file URL is expected to have been passed through :func:`clean_file_url`
+    (or to already be a Pawchive file URL); a path outside ``/data/`` is left
+    alone rather than guessed at.
+    """
+    from urllib.parse import urlparse
+
+    cfg = domain_config if domain_config is not None else get_domain_config(file_url)
+    base = str(cfg.get("thumbnail_base_url") or "").rstrip("/")
+    if not base:
+        return ""
+
+    path = urlparse(str(file_url)).path
+    if not path.startswith("/data/"):
+        return ""
+
+    return base + path
 
 
 def file_host_headers(

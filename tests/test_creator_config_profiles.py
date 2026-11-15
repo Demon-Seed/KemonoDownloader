@@ -239,6 +239,108 @@ def test_creator_profile_replaces_the_default(qtbot, tmp_path):
     assert tab.skip_keywords_edit.text() == "wallpaper"
 
 
+def test_clearing_the_viewed_creator_restores_the_default_profile(
+    qtbot, tmp_path, monkeypatch
+):
+    """Removing the viewed creator hands every field back to the default."""
+    tab = make_tab(qtbot, tmp_path)
+    # The remove handler re-runs the filter pass; that has its own coverage.
+    tab.filter_items = lambda: None
+
+    # The default profile leaves the built-in values behind on every field,
+    # so a partial restore cannot pass by accident.
+    tick(tab.creator_main_check)
+    tick(tab.creator_attachments_check)
+    tick(tab.creator_content_check)
+    tick(tab.creator_download_text_check)
+    tick(tab.creator_skip_folder_check)
+    tab.creator_skip_folder_combo.setCurrentIndex(4)  # value 5
+    tick(tab.creator_force_compressed_folder_check)
+    tick(tab.creator_skip_images_check)
+    tick(tab.creator_ext_checks[".jpg"])
+    tick(tab.creator_ext_checks[".pdf"])
+    tab.skip_keywords_edit.setText("wallpaper, sketch")
+    tick(tab.skip_scope_checkboxes["title"], False)
+    tick(tab.skip_scope_checkboxes["tags"])
+    tab.file_skip_keywords_edit.setText("psd")
+    tab.date_from_edit.setText("2024-01-01")
+    tab.date_to_edit.setText("2024-12-31")
+    tab.file_count_from_edit.setText("2")
+    tab.file_count_to_edit.setText("9")
+    tick(tab.file_count_keep_compressed_check)
+    tick(tab.filter_no_selected_filetypes_check)
+    tick(tab.search_scope_checkboxes["title"], False)
+    tick(tab.search_scope_checkboxes["filenames"])
+    assert tab.save_page_config() is True
+    expected = tab._config_snapshot()
+
+    # The creator's own profile turns every one of those around.
+    tab.current_creator_url = CREATOR_URL
+    tab._load_config_for_creator()
+    tick(tab.creator_main_check, False)
+    tick(tab.creator_attachments_check, False)
+    tick(tab.creator_content_check, False)
+    tick(tab.creator_download_text_check, False)
+    tick(tab.creator_skip_folder_check, False)
+    tab.creator_skip_folder_combo.setCurrentIndex(0)  # value 1
+    tick(tab.creator_force_compressed_folder_check, False)
+    tick(tab.creator_skip_images_check, False)
+    tick(tab.creator_ext_checks[".jpg"], False)
+    tick(tab.creator_ext_checks[".pdf"], False)
+    tab.skip_keywords_edit.setText("sketch")
+    tick(tab.skip_scope_checkboxes["title"])
+    tick(tab.skip_scope_checkboxes["tags"], False)
+    tab.file_skip_keywords_edit.setText("")
+    tab.date_from_edit.setText("")
+    tab.date_to_edit.setText("")
+    tab.file_count_from_edit.setText("")
+    tab.file_count_to_edit.setText("")
+    tick(tab.file_count_keep_compressed_check, False)
+    tick(tab.filter_no_selected_filetypes_check, False)
+    tick(tab.search_scope_checkboxes["title"])
+    tick(tab.search_scope_checkboxes["filenames"], False)
+    assert tab.save_creator_config() is True
+    assert tab.skip_keywords_edit.text() == "sketch"
+
+    # Removing the viewed creator from the queue is how the page is cleared.
+    tab.creator_queue.append((CREATOR_URL, False))
+    monkeypatch.setattr(
+        cd.QMessageBox,
+        "question",
+        lambda *args, **kwargs: cd.QMessageBox.StandardButton.Yes,
+    )
+    tab.create_remove_handler(CREATOR_URL)()
+
+    assert tab.current_creator_url is None
+    # Whole-snapshot equality: every option and filter is back on the default.
+    assert tab._config_snapshot() == expected
+    assert tab.creator_save_creator_config_btn.isEnabled() is False
+
+
+def test_clearing_a_creator_without_a_default_restores_the_builtin_state(
+    qtbot, tmp_path, monkeypatch
+):
+    """With no saved default the page returns to its built-in state."""
+    tab = make_tab(qtbot, tmp_path)
+    tab.filter_items = lambda: None
+    expected = copy.deepcopy(tab._config_snapshot())
+
+    tab.current_creator_url = CREATOR_URL
+    tick(tab.creator_skip_folder_check)
+    tab.skip_keywords_edit.setText("sketch")
+    assert tab.save_creator_config() is True
+
+    tab.creator_queue.append((CREATOR_URL, False))
+    monkeypatch.setattr(
+        cd.QMessageBox,
+        "question",
+        lambda *args, **kwargs: cd.QMessageBox.StandardButton.Yes,
+    )
+    tab.create_remove_handler(CREATOR_URL)()
+
+    assert tab._config_snapshot() == expected
+
+
 def test_no_saved_profiles_means_the_builtin_page_state(qtbot, tmp_path):
     tab = make_tab(qtbot, tmp_path)
     # Captured before any stored profile could touch the widgets.
