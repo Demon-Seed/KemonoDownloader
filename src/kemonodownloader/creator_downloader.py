@@ -46,6 +46,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -5149,6 +5150,45 @@ class LogsWindow(QDialog):
                     )
 
 
+class _CreatorQueueComposer(QLineEdit):
+    """The Creator Queue's one-line URL field.
+
+    Enter arrives as ``returnPressed`` already, but Space is not a legal URL
+    character, so it commits the entry too instead of inserting whitespace
+    the validator would then reject.
+    """
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Space:
+            self.returnPressed.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class _CreatorQueueRow(QWidget):
+    """A queue row whose empty area means "load this creator".
+
+    The eye and the ✕ stay ordinary buttons; double-clicking anywhere else on
+    the row (the URL text, the gaps) opens the creator, which makes the label
+    itself a big, obvious target.
+    """
+
+    def __init__(self, on_double_click, parent=None):
+        super().__init__(parent)
+        self._on_double_click = on_double_click
+
+    def mouseDoubleClickEvent(self, event):
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._on_double_click is not None
+        ):
+            self._on_double_click()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+
 class CreatorDownloaderTab(QWidget):
     def __init__(self, parent):
         super().__init__()
@@ -5158,6 +5198,9 @@ class CreatorDownloaderTab(QWidget):
         self.all_detected_posts = []
         self.creator_queue = []
         self.downloading = False
+        # Set when an auto-loaded creator will re-enable the queue afterwards;
+        # the input row takes focus back so the next URL can be typed.
+        self._restore_queue_input_focus = False
         # Guards the end-of-run bookkeeping so a late cleanup_thread pass
         # cannot re-finalise a run that already finalised itself.
         self._run_finished = False
@@ -5372,55 +5415,63 @@ class CreatorDownloaderTab(QWidget):
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
 
-        # URL input area: one URL per line. Both creator and post URLs are
-        # accepted — post URLs are canonicalized to their parent creator.
-        self.creator_multi_url_input = QTextEdit()
-        self.creator_multi_url_input.setPlaceholderText(
-            translate("multi_url_placeholder_creator")
-        )
-        self.creator_multi_url_input.setStyleSheet(
-            "background: #2A3B5A; border-radius: 5px; padding: 5px; color: white;"
-        )
-        self.creator_multi_url_input.setFixedHeight(80)
-        left_layout.addWidget(self.creator_multi_url_input)
-
-        creator_url_layout = QHBoxLayout()
-        self.creator_multi_url_add_btn = QPushButton(
-            qta.icon("fa5s.layer-group", color="white"), ""
-        )
-        self.creator_multi_url_add_btn.clicked.connect(
-            self.add_multiple_creators_to_queue
-        )
-        self.creator_multi_url_add_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px;"
-        )
-        self.creator_multi_url_add_btn.setToolTip(translate("add_all_to_queue"))
-        creator_url_layout.addWidget(self.creator_multi_url_add_btn)
-
-        self.creator_add_from_file_btn = QPushButton(
-            qta.icon("fa5s.file-import", color="white"), ""
-        )
-        self.creator_add_from_file_btn.clicked.connect(self.add_creators_from_file)
-        self.creator_add_from_file_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px;"
-        )
-        self.creator_add_from_file_btn.setToolTip(translate("add_links_from_file"))
-        creator_url_layout.addWidget(self.creator_add_from_file_btn)
-        creator_url_layout.addStretch()
-        left_layout.addLayout(creator_url_layout)
-
-        # Creator Queue Group
+        # Creator Queue Group. The list keeps its three-row height; the one
+        # blank row underneath is where a creator or post URL is typed or
+        # pasted. The input lives outside the list so rebuilding the list can
+        # never disturb the widget being typed into.
         self.creator_queue_group = QGroupBox()
         self.creator_queue_group.setStyleSheet(
             "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
         )
         creator_queue_layout = QVBoxLayout()
+
         self.creator_queue_list = QListWidget()
         self.creator_queue_list.setFixedHeight(100)
         self.creator_queue_list.setStyleSheet(
             "background: #2A3B5A; border-radius: 5px;"
         )
+        # File import has no button of its own any more; it is reachable from
+        # the queue's context menu instead of taking a row of its own.
+        self.creator_queue_list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.creator_queue_list.customContextMenuRequested.connect(
+            self._show_queue_context_menu
+        )
         creator_queue_layout.addWidget(self.creator_queue_list)
+
+        creator_queue_input_layout = QHBoxLayout()
+        creator_queue_input_layout.setContentsMargins(0, 0, 0, 0)
+        creator_queue_input_layout.setSpacing(5)
+
+        self.creator_queue_input_btn = QPushButton(
+            qta.icon("fa5s.eye", color="white"), ""
+        )
+        self.creator_queue_input_btn.setStyleSheet(
+            # Scoped to QPushButton: an unscoped rule also lands on the
+            # tooltip label Qt parents to the button, which squeezed the
+            # tooltip down to the button's own size.
+            "QPushButton { background: #4A5B7A; padding: 2px; border-radius: 5px; "
+            "min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; }"
+        )
+        self.creator_queue_input_btn.setToolTip(
+            translate("add_creator_and_load_tooltip")
+        )
+        self.creator_queue_input_btn.clicked.connect(self.add_creator_and_load)
+        creator_queue_input_layout.addWidget(self.creator_queue_input_btn)
+
+        self.creator_queue_input = _CreatorQueueComposer()
+        self.creator_queue_input.setPlaceholderText(
+            translate("creator_queue_input_placeholder")
+        )
+        self.creator_queue_input.setStyleSheet(
+            "background: #2A3B5A; border-radius: 5px; padding: 2px 8px; color: white;"
+        )
+        self.creator_queue_input.setFixedHeight(30)
+        self.creator_queue_input.returnPressed.connect(self.add_creator_to_queue)
+        creator_queue_input_layout.addWidget(self.creator_queue_input, stretch=1)
+
+        creator_queue_layout.addLayout(creator_queue_input_layout)
         self.creator_queue_group.setLayout(creator_queue_layout)
         left_layout.addWidget(self.creator_queue_group)
 
@@ -6122,12 +6173,13 @@ class CreatorDownloaderTab(QWidget):
         self._connect_live_filters()
 
     def update_ui_text(self):
-        self.creator_multi_url_input.setPlaceholderText(
-            translate("multi_url_placeholder_creator")
+        self.creator_queue_input.setPlaceholderText(
+            translate("creator_queue_input_placeholder")
         )
-        self.creator_multi_url_add_btn.setToolTip(translate("add_all_to_queue"))
-        self.creator_add_from_file_btn.setToolTip(translate("add_links_from_file"))
-        self.creator_add_from_file_btn.setText(translate("add_links_from_file_title"))
+        self.creator_queue_input.setToolTip(translate("creator_queue_input_tooltip"))
+        self.creator_queue_input_btn.setToolTip(
+            translate("add_creator_and_load_tooltip")
+        )
 
         self.creator_queue_group.setTitle(translate("creator_queue"))
         self.creator_options_group.setTitle(translate("download_options"))
@@ -6179,10 +6231,6 @@ class CreatorDownloaderTab(QWidget):
             translate("filter_no_selected_filetypes")
         )
         self.search_scope_label.setText(translate("search_scope"))
-        self.creator_multi_url_input.setPlaceholderText(
-            translate("multi_url_placeholder_creator")
-        )
-        self.creator_multi_url_add_btn.setText(translate("add_all_to_queue"))
 
         self.creator_file_progress_label.setText(translate("file_progress", 0))
         self.creator_overall_progress_label.setText(
@@ -6717,75 +6765,126 @@ class CreatorDownloaderTab(QWidget):
         """Show a dialog explaining what Skip Images if Compressed does."""
         self._show_info("skip_images_info_title", "skip_images_info_text")
 
-    def add_multiple_creators_to_queue(self):
-        """Add creator URLs from the multi-URL text area to the queue at once.
+    def _queue_creator_url(self, url_text, refresh=True):
+        """Queue one creator URL, returning "added", "duplicate" or "invalid".
 
-        One URL per line. Post URLs are canonicalized to their parent
-        creator URL, so pasting either link shape does the same thing.
+        Post URLs collapse to their parent creator and remember their post id,
+        so a post link still drives the post-link auto-select.
         """
-        text = self.creator_multi_url_input.toPlainText().strip()
-        if not text:
+        # Accept both creator and post URLs; post URLs collapse to the parent
+        # creator so the queue only ever holds creator URLs.
+        normalized_url, post_id = resolve_creator_url(url_text)
+        normalized_url = normalized_url.rstrip("/")
+
+        # Validate URL format (same rules as the detection thread)
+        parts = normalized_url.split("/")
+        domain_config = get_domain_config(normalized_url)
+        if (
+            len(parts) < 5
+            or domain_config["domain"] not in normalized_url
+            or parts[-2] != "user"
+        ):
+            self.append_log_to_console(
+                translate("log_warning", translate("invalid_creator_url", url_text)),
+                "WARNING",
+            )
+            return "invalid"
+
+        # A post link means "just this post"; accumulate them so several post
+        # links for one creator all get selected. A plain creator link means
+        # "everything", so it drops any earlier restriction.
+        post_ids_changed = self._remember_batch_post_id(normalized_url, post_id)
+
+        if any(item[0].rstrip("/") == normalized_url for item in self.creator_queue):
+            self.append_log_to_console(
+                translate("log_warning", translate("url_already_in_queue")),
+                "WARNING",
+            )
+            # A post link for an already-queued creator still adds its tag.
+            if refresh and post_ids_changed:
+                self.update_creator_queue_list()
+            return "duplicate"
+
+        self.creator_queue.append((normalized_url, False))
+        if refresh:
+            self.update_creator_queue_list(scroll=True)
+        self.append_log_to_console(
+            translate("log_info", translate("added_to_queue") + f": {normalized_url}"),
+            "INFO",
+        )
+        return "added"
+
+    def _queue_input_behavior(self):
+        """Which auto-load mode Settings asks the queue's input row for."""
+        settings_tab = getattr(self._parent, "settings_tab", None)
+        getter = getattr(settings_tab, "get_queue_input_behavior", None)
+        return getter() if callable(getter) else "default"
+
+    def add_creator_to_queue(self, auto_load=True):
+        """Commit the URL in the queue's blank row, then empty the field.
+
+        Enter and Space both land here. Adding never fetches by itself: the
+        Settings mode decides whether the new creator is then opened. The
+        row's eye passes ``auto_load=False`` so it can open the creator once,
+        itself, without a second fetch from the mode.
+        """
+        url_text = self.creator_queue_input.text().strip()
+        if not url_text:
             self.append_log_to_console(
                 translate("log_error", translate("no_url_entered")), "ERROR"
             )
-            return
+            return "invalid"
 
-        lines = text.split("\n")
-        added_count = 0
-        skipped_count = 0
-        invalid_count = 0
-        post_ids_changed = False
+        outcome = self._queue_creator_url(url_text)
+        if outcome == "invalid":
+            # Keep the text so it can be corrected in place.
+            return outcome
 
-        for line in lines:
-            url = line.strip()
-            if not url:
-                continue
-            # Accept both creator and post URLs; post URLs collapse to the
-            # parent creator so the queue only ever holds creator URLs.
-            normalized_url, post_id = resolve_creator_url(url)
+        # Added or already queued: the URL was understood either way, so the
+        # field empties and stays focused for the next one.
+        self.creator_queue_input.clear()
+        self.creator_queue_input.setFocus()
+        if outcome == "added" and auto_load:
+            self._auto_load_queued_creator()
+        return outcome
+
+    def add_creator_and_load(self):
+        """The blank row's eye: add the URL, then open it whatever the mode."""
+        url_text = self.creator_queue_input.text().strip()
+        normalized_url = ""
+        if url_text:
+            normalized_url, _post_id = resolve_creator_url(url_text)
             normalized_url = normalized_url.rstrip("/")
 
-            # Validate URL format (same rules as the detection thread)
-            parts = normalized_url.split("/")
-            domain_config = get_domain_config(normalized_url)
-            if (
-                len(parts) < 5
-                or domain_config["domain"] not in normalized_url
-                or parts[-2] != "user"
-            ):
-                invalid_count += 1
-                self.append_log_to_console(
-                    translate(
-                        "log_warning",
-                        translate("invalid_creator_url", url),
-                    ),
-                    "WARNING",
-                )
-                continue
+        outcome = self.add_creator_to_queue(auto_load=False)
+        if outcome == "added":
+            self.check_creator_from_queue(self.creator_queue[-1][0])
+        elif outcome == "duplicate":
+            # Already queued: still honour the explicit "show me this one".
+            self.check_creator_from_queue(normalized_url)
 
-            # A post link means "just this post"; accumulate them so several
-            # post links for one creator all get selected. A plain creator link
-            # means "everything", so it drops any earlier restriction.
-            if self._remember_batch_post_id(normalized_url, post_id):
-                post_ids_changed = True
+    def _auto_load_queued_creator(self):
+        """Open the just-queued creator when Settings asks for it.
 
-            if any(
-                item[0].rstrip("/") == normalized_url for item in self.creator_queue
-            ):
-                skipped_count += 1
-                continue
-            self.creator_queue.append((normalized_url, False))
-            added_count += 1
+        "load_first" only opens while nothing is being viewed, so adding more
+        links never yanks the page away from the creator being set up.
+        "load_every" opens every creator that is added.
+        """
+        mode = self._queue_input_behavior()
+        if mode == "load_every" or (
+            mode == "load_first" and not self.current_creator_url
+        ):
+            # The fetch disables the queue, input row included; hand focus back
+            # to it once the fetch finishes so the next URL can be typed.
+            self._restore_queue_input_focus = True
+            self.check_creator_from_queue(self.creator_queue[-1][0])
 
-        if added_count > 0 or post_ids_changed:
-            self.update_creator_queue_list()
-        if added_count > 0:
-            self.creator_multi_url_input.clear()
-
-        summary = translate("bulk_add_summary", added_count, skipped_count)
-        if invalid_count:
-            summary += f" ({invalid_count} invalid)"
-        self.append_log_to_console(translate("log_info", summary), "INFO")
+    def _show_queue_context_menu(self, position):
+        """Queue context menu: the .txt import lives here now."""
+        menu = QMenu(self.creator_queue_list)
+        import_action = menu.addAction(translate("add_links_from_file_title"))
+        import_action.triggered.connect(self.add_creators_from_file)
+        menu.exec(self.creator_queue_list.mapToGlobal(position))
 
     def create_view_handler(self, url, checked):
         def handler():
@@ -6844,11 +6943,13 @@ class CreatorDownloaderTab(QWidget):
 
         return handler
 
-    def update_creator_queue_list(self):
+    def update_creator_queue_list(self, scroll=False):
         self.creator_queue_list.clear()
         for url, checked in self.creator_queue:
             item = QListWidgetItem()
-            widget = QWidget()
+            # Double-clicking the row (its URL, its gaps) loads the creator;
+            # the eye and the ✕ stay one-click buttons of their own.
+            widget = _CreatorQueueRow(lambda u=url: self.check_creator_from_queue(u))
             layout = QHBoxLayout()
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(5)
@@ -6872,6 +6973,9 @@ class CreatorDownloaderTab(QWidget):
             label.setAlignment(
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
             )
+            # The label is decoration: let double-clicks fall through to the
+            # row widget instead of being swallowed by the text.
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             layout.addWidget(label, stretch=1)
 
             remove_button = QPushButton(qta.icon("fa5s.times", color="white"), "")
@@ -6888,6 +6992,11 @@ class CreatorDownloaderTab(QWidget):
             setattr(widget, "view_button", view_button)
             setattr(widget, "label", label)
             setattr(widget, "remove_button", remove_button)
+
+        if scroll:
+            # The newest creator is appended, so it sits directly above the
+            # input row. Bring it into view.
+            self.creator_queue_list.scrollToBottom()
 
     def check_creator_from_queue(self, url):
         if not isinstance(url, str):
@@ -7172,10 +7281,14 @@ class CreatorDownloaderTab(QWidget):
         self.creator_cancel_btn.setEnabled(is_fetching)
 
         # Creator queue operations
-        self.creator_multi_url_input.setEnabled(not is_fetching)
-        self.creator_multi_url_add_btn.setEnabled(not is_fetching)
-        self.creator_add_from_file_btn.setEnabled(not is_fetching)
+        self.creator_queue_input.setEnabled(not is_fetching)
+        self.creator_queue_input_btn.setEnabled(not is_fetching)
         self.creator_queue_list.setEnabled(not is_fetching)
+        if not is_fetching and self._restore_queue_input_focus:
+            # An auto-loaded creator just finished fetching: put the cursor
+            # back in the blank row for the next URL.
+            self._restore_queue_input_focus = False
+            self.creator_queue_input.setFocus()
 
         # Post operations
         self.creator_search_input.setEnabled(not is_fetching)
@@ -7244,9 +7357,8 @@ class CreatorDownloaderTab(QWidget):
         self._refresh_retry_button()
 
         # Queue input area
-        self.creator_multi_url_input.setEnabled(enabled)
-        self.creator_multi_url_add_btn.setEnabled(enabled)
-        self.creator_add_from_file_btn.setEnabled(enabled)
+        self.creator_queue_input.setEnabled(enabled)
+        self.creator_queue_input_btn.setEnabled(enabled)
         self.creator_queue_list.setEnabled(enabled)
 
         # Category checkboxes
@@ -9806,73 +9918,14 @@ class CreatorDownloaderTab(QWidget):
                 if not original_url:
                     continue
 
-                # Accept both creator and post URLs; post URLs collapse to the
-                # parent creator so the queue only ever holds creator URLs and
-                # a post link can drive the post-link auto-select.
-                normalized_url, post_id = resolve_creator_url(original_url)
-                normalized_url = normalized_url.rstrip("/")
-
-                # Skip if already in queue
-                if any(
-                    item[0].rstrip("/") == normalized_url for item in self.creator_queue
-                ):
-                    # Still remember a post link for an already-queued creator.
-                    self._remember_batch_post_id(normalized_url, post_id)
-                    self.append_log_to_console(
-                        translate(
-                            "log_warning",
-                            translate("url_already_in_queue") + f": {original_url}",
-                        ),
-                        "WARNING",
-                    )
-                    skipped_count += 1
-                    continue
-
-                # Validate and add to queue
-                try:
-                    # Basic URL validation
-                    url = normalized_url
-                    domain_config = get_domain_config(url)
-                    parts = url.split("/")
-
-                    if (
-                        len(parts) >= 5
-                        and (domain_config["domain"] in url)
-                        and parts[-2] == "user"
-                    ):
-                        self._remember_batch_post_id(normalized_url, post_id)
-                        self.creator_queue.append((normalized_url, False))
-                        added_count += 1
-                        self.append_log_to_console(
-                            translate(
-                                "log_info",
-                                translate("added_to_queue") + f": {original_url}",
-                            ),
-                            "INFO",
-                        )
-                    else:
-                        self.append_log_to_console(
-                            translate(
-                                "log_error",
-                                translate("invalid_url_format_from_txt")
-                                + f": {original_url}",
-                            ),
-                            "ERROR",
-                        )
-                        skipped_count += 1
-
-                except Exception as e:
-                    self.append_log_to_console(
-                        translate(
-                            "log_error",
-                            translate("error_processing_url")
-                            + f" {normalized_url}: {str(e)}",
-                        ),
-                        "ERROR",
-                    )
+                # Same normalisation, validation and duplicate rule as the
+                # queue's input row; the list is rebuilt once at the end.
+                if self._queue_creator_url(original_url, refresh=False) == "added":
+                    added_count += 1
+                else:
                     skipped_count += 1
 
-            self.update_creator_queue_list()
+            self.update_creator_queue_list(scroll=True)
 
             # Show summary message
             summary = translate("bulk_add_summary", added_count, skipped_count)

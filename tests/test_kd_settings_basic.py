@@ -52,6 +52,61 @@ def test_show_only_found_filetypes_falls_back_on_junk():
     assert s.get_show_only_found_filetypes() == "off"
 
 
+def test_queue_input_behavior_defaults_to_default():
+    s = SettingsTab.__new__(SettingsTab)
+    s.settings = {}
+
+    assert s.get_queue_input_behavior() == "default"
+
+
+def test_queue_input_behavior_reads_each_mode():
+    s = SettingsTab.__new__(SettingsTab)
+
+    for mode in ("default", "load_first", "load_every"):
+        s.settings = {"queue_input_behavior": mode}
+        assert s.get_queue_input_behavior() == mode
+
+
+def test_queue_input_behavior_falls_back_on_junk():
+    s = SettingsTab.__new__(SettingsTab)
+    s.settings = {"queue_input_behavior": "always load everything"}
+
+    assert s.get_queue_input_behavior() == "default"
+
+
+def test_queue_input_behavior_combo_writes_the_temp_setting(tmp_path):
+    tab = make_tab(tmp_path)
+
+    assert [
+        tab.queue_input_behavior_combo.itemText(i)
+        for i in range(tab.queue_input_behavior_combo.count())
+    ] == ["Default", "Load First Creator", "Load Every Creator"]
+    assert tab.queue_input_behavior_combo.currentData() == "default"
+
+    index = tab.queue_input_behavior_combo.findData("load_every")
+    tab.queue_input_behavior_combo.setCurrentIndex(index)
+
+    assert tab.temp_settings["queue_input_behavior"] == "load_every"
+
+
+def test_queue_input_behavior_help_uses_the_translated_text(tmp_path, monkeypatch):
+    tab = make_tab(tmp_path)
+    shown = []
+    monkeypatch.setattr(
+        "kemonodownloader.kd_settings.QMessageBox.information",
+        lambda _parent, title, text: shown.append((title, text)),
+    )
+
+    tab.show_queue_input_behavior_help()
+
+    assert shown == [
+        (
+            "Queue Input Field Behavior Help",
+            ks.translate("queue_input_behavior_help_text"),
+        )
+    ]
+
+
 def test_save_and_load_settings_roundtrip(tmp_path):
     ini_path = str(tmp_path / "test_settings.ini")
     qs = QSettings(ini_path, QSettings.Format.IniFormat)

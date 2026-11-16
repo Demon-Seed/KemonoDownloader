@@ -323,13 +323,13 @@ def test_create_remove_handler_removes_url(monkeypatch, tmp_path):
     assert all(item[0] != url for item in tab.creator_queue)
 
 
-def test_add_multiple_creators_to_queue_validates_and_adds(monkeypatch, tmp_path):
+def test_queue_input_validates_and_adds(monkeypatch, tmp_path):
     parent = make_tab_parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
 
     url = "https://kemono.cr/user/abc"
-    tab.creator_multi_url_input.setPlainText(url)
-    tab.add_multiple_creators_to_queue()
+    tab.creator_queue_input.setText(url)
+    assert tab.add_creator_to_queue() == "added"
     assert any(u for u, _ in tab.creator_queue if u == url)
 
 
@@ -426,23 +426,25 @@ def test_creator_tab_ui_basics(monkeypatch, qapp, tmp_path):
     tab.update_ui_text()
     assert tab.creator_download_btn.text() != ""
 
-    # The multi-URL input is always available.
+    # The queue's input row is always available.
+    assert tab.creator_queue_input.isVisibleTo(tab)
 
-    # Add multiple creators: include one valid and one invalid URL
+    # One valid URL and one invalid one, committed through the input row
     valid = "https://kemono.cr/user/123"
-    invalid = "not a url"
-    tab.creator_multi_url_input.setPlainText(f"{valid}\n{invalid}\n")
-    tab.add_multiple_creators_to_queue()
-    # valid should have been added
+    tab.creator_queue_input.setText(valid)
+    assert tab.add_creator_to_queue() == "added"
     assert any(valid in u for u, _ in tab.creator_queue)
 
-    # Empty input logs an error and leaves the queue untouched
-    tab.creator_multi_url_input.setPlainText("")
-    tab.add_multiple_creators_to_queue()
+    # Invalid text is kept in the field and nothing is queued
+    tab.creator_queue_input.setText("not a url")
+    assert tab.add_creator_to_queue() == "invalid"
+    assert all(valid in u for u, _ in tab.creator_queue)
+
     # Duplicate prevention: adding the same valid URL again is skipped
-    tab.creator_multi_url_input.setPlainText(valid)
-    tab.add_multiple_creators_to_queue()
+    tab.creator_queue_input.setText(valid)
+    assert tab.add_creator_to_queue() == "duplicate"
     assert sum(1 for u, _ in tab.creator_queue if u == valid) == 1
+    assert tab.creator_queue_input.text() == ""
 
     # create_remove_handler should remove entry when user confirms
     pre_len = len(tab.creator_queue)
@@ -452,19 +454,16 @@ def test_creator_tab_ui_basics(monkeypatch, qapp, tmp_path):
     assert len(tab.creator_queue) <= pre_len
 
 
-def test_add_multiple_creators_to_queue_basic(tmp_path):
+def test_queue_input_adds_a_creator(tmp_path):
     parent = make_tab_parent(tmp_path, window=True)
     tab = cd.CreatorDownloaderTab(parent)
 
-    # Provide one valid and one invalid URL
-    tab.creator_multi_url_input.setPlainText(
-        "https://kemono.cr/fanbox/user/111\nnot-a-url"
-    )
-    tab.add_multiple_creators_to_queue()
+    tab.creator_queue_input.setText("https://kemono.cr/fanbox/user/111")
+    assert tab.add_creator_to_queue() == "added"
 
-    # The valid URL should be in the queue, input cleared
+    # The valid URL is queued, and the input clears itself.
     assert any("fanbox/user/111" in item[0] for item in tab.creator_queue)
-    assert tab.creator_multi_url_input.toPlainText().strip() == ""
+    assert tab.creator_queue_input.text() == ""
 
 
 def test_category_checks_are_enabled(tmp_path):

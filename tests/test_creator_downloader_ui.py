@@ -45,7 +45,7 @@ def make_parent(tmp_path):
     return parent
 
 
-def test_append_log_and_multi_url_input(tmp_path):
+def test_append_log_and_queue_input(tmp_path):
     parent = make_parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
 
@@ -53,17 +53,18 @@ def test_append_log_and_multi_url_input(tmp_path):
     # The log is a plain store now, and the window is the only view over it.
     assert [message for message, _colour in tab.log_lines_from(0)] == ["Test message"]
 
-    # The multi-URL input is the only entry point.
-    assert tab.creator_multi_url_input.isVisibleTo(tab)
+    # The queue's input row is the only entry point.
+    assert tab.creator_queue_input.isVisibleTo(tab)
+    assert tab.creator_queue_input_btn.isVisibleTo(tab)
 
 
-def test_add_multiple_creators_and_remove(monkeypatch, tmp_path):
+def test_add_creators_and_remove(monkeypatch, tmp_path):
     parent = make_parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
 
-    text = "https://kemono.cr/user/1\nnot a url\nhttps://coomer.st/user/2"
-    tab.creator_multi_url_input.setPlainText(text)
-    tab.add_multiple_creators_to_queue()
+    for text in ("https://kemono.cr/user/1", "not a url", "https://coomer.st/user/2"):
+        tab.creator_queue_input.setText(text)
+        tab.add_creator_to_queue()
     # Should have added the two valid URLs
     assert any("kemono.cr/user/1" in u[0] for u in tab.creator_queue)
     assert any("coomer.st/user/2" in u[0] for u in tab.creator_queue)
@@ -133,12 +134,12 @@ def test_set_fetching_and_downloading_states(tmp_path):
     tab.set_downloading_ui_state(True)
     assert tab.creator_download_btn.isEnabled() is False
     assert tab.creator_cancel_btn.isEnabled() is True
-    assert tab.creator_multi_url_input.isEnabled() is False
+    assert tab.creator_queue_input.isEnabled() is False
 
     tab.set_downloading_ui_state(False)
     assert tab.creator_download_btn.isEnabled() is True
     assert tab.creator_cancel_btn.isEnabled() is False
-    assert tab.creator_multi_url_input.isEnabled() is True
+    assert tab.creator_queue_input.isEnabled() is True
 
 
 def test_creator_tab_basic_interactions(tmp_path, monkeypatch):
@@ -157,10 +158,10 @@ def test_creator_tab_basic_interactions(tmp_path, monkeypatch):
     # Category checkboxes stay enabled: nothing locks them during a fetch.
     assert tab.creator_main_check.isEnabled()
 
-    # Add a creator url via multi-url input
+    # Add a creator url through the queue's input row
     test_url = "https://kemono.cr/user/1"
-    tab.creator_multi_url_input.setPlainText(test_url)
-    tab.add_multiple_creators_to_queue()
+    tab.creator_queue_input.setText(test_url)
+    assert tab.add_creator_to_queue() == "added"
     assert any(test_url == item[0] for item in tab.creator_queue)
 
     # toggle_check_all should return early when no visible posts

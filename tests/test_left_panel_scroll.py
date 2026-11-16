@@ -127,7 +127,7 @@ class TestCreatorLeftPanelScroll:
             assert scroll is not None
             inner = scroll.widget()
             assert inner is not None
-            assert hasattr(tab, "creator_multi_url_input")
-            assert tab.creator_multi_url_input is not None
+            assert hasattr(tab, "creator_queue_input")
+            assert tab.creator_queue_input is not None
         finally:
             tab.deleteLater()

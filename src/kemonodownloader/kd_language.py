@@ -5,7 +5,7 @@ The application ships a single language, so ``STRINGS`` is a flat
 """
 
 STRINGS = {
-    "add_all_to_queue": "Add All to Queue",
+    "add_creator_and_load_tooltip": "Add this creator and load its posts",
     "add_links_from_file": "Add links from .txt file. Each link should be on a new line.",
     "add_links_from_file_title": "Import from TXT File.",
     "added_attachment": "Added attachment: {0}",
@@ -69,6 +69,8 @@ STRINGS = {
     "creator_downloader_tab": "Creator Downloader",
     "creator_posts_max_attempts": "Creator Posts Max Pages:",
     "creator_queue": "Creator Queue",
+    "creator_queue_input_placeholder": "Enter Creator",
+    "creator_queue_input_tooltip": "Creator or post URL. Press Enter or Space to add it to the queue.",
     "custom_proxy_url": "Custom Proxy URL:",
     "custom_proxy_url_empty": "Custom proxy URL cannot be empty.",
     "date_filter_help_text": "Filter posts by their own publish date (not the date they were imported/scraped). Enter dates as YYYY-MM-DD in 'From' and/or 'To' — both bounds are inclusive and both are optional; leave either blank to disable that bound. Posts with an unknown publish date are always kept.",
@@ -212,7 +214,6 @@ STRINGS = {
     "main_file": "Main File",
     "mapped_title_to_id_and_thumbnail": "Mapped title '{0}' to ID: {1}, Thumbnail: {2}",
     "media_preview": "Media Preview",
-    "multi_url_placeholder_creator": "Paste creator or post URLs here, one per line…",
     "never_downloaded": "Never",
     "no_active_downloads_to_cancel": "No active downloads to cancel",
     "no_creator_viewed": "No creator currently viewed to download.",
@@ -285,6 +286,12 @@ STRINGS = {
     "punctuation_matching_rules": "Punctuation Matching Rules:",
     "punctuation_rules_default": "Default",
     "punctuation_rules_relaxed": "Relaxed",
+    "queue_input_behavior_help_text": "Controls what happens after a creator URL is added in the Creator Queue's input row.\n\nDefault: the creator is only added to the queue. Nothing is loaded.\n\nLoad First Creator: the first creator you add is opened so you can pick its posts. Once a creator is open, adding more only queues them, so the page never switches away from the creator you are working on.\n\nLoad Every Creator: every creator you add is opened straight away, replacing the one currently open. Adding several in a row loads them one after another.\n\nIn every mode, the eye button on the input row still adds the URL and opens it.",
+    "queue_input_behavior_help_title": "Queue Input Field Behavior Help",
+    "queue_input_default": "Default",
+    "queue_input_field_behavior": "Queue Input Field Behavior:",
+    "queue_input_load_every": "Load Every Creator",
+    "queue_input_load_first": "Load First Creator",
     "rate_limit_hit": "Rate limit hit for {0} (attempt {1}/{2}). Retrying...",
     "queued_post_hidden_by_filters": "{0} of the posts you queued are hidden by the current filters or search, so they will not be downloaded.",
     "reached_last_page": "Reached last page for creator {0}. Total posts fetched: {1}",

@@ -84,11 +84,12 @@ class TestKDLanguageEdgeCases:
 
 
 class TestBatchInputTranslations:
-    """Verify that the multi-URL batch translation keys exist."""
+    """Verify that the Creator Queue input row's translation keys exist."""
 
     KEYS = [
-        "multi_url_placeholder_creator",
-        "add_all_to_queue",
+        "creator_queue_input_placeholder",
+        "creator_queue_input_tooltip",
+        "add_creator_and_load_tooltip",
     ]
 
     def setup_method(self):

@@ -36,22 +36,24 @@ def test_create_thread_settings_defaults(tmp_path):
     assert ts.settings_tab is None
 
 
-def test_add_multiple_creators_to_queue_and_duplicates_and_invalid(tmp_path):
+def test_add_creators_to_queue_and_duplicates_and_invalid(tmp_path):
     parent = _FakeParent(str(tmp_path))
     tab = CreatorDownloaderTab(parent)
 
-    # Prepare multi-line input with: valid, invalid, duplicate
-    tab.creator_multi_url_input.setPlainText(
-        "https://kemono.cr/a/user/1\nhttps://example.com/bad\nhttps://kemono.cr/a/user/1"
-    )
-    tab.add_multiple_creators_to_queue()
+    # One valid URL, then invalid text, then the same URL again.
+    tab.creator_queue_input.setText("https://kemono.cr/a/user/1")
+    assert tab.add_creator_to_queue() == "added"
+    tab.creator_queue_input.setText("https://example.com/bad")
+    assert tab.add_creator_to_queue() == "invalid"
+    tab.creator_queue_input.setText("https://kemono.cr/a/user/1")
+    assert tab.add_creator_to_queue() == "duplicate"
 
-    # One valid entry should be added, duplicates skipped, invalid counted
+    # One valid entry, duplicates skipped, invalid refused.
     assert len(tab.creator_queue) == 1
-    # Input should be cleared after successful add
-    assert tab.creator_multi_url_input.toPlainText() == ""
-    # Summary message should be logged (open the minimised log panel first)
-    assert "Added 1 link(s) to queue" in log_text(tab)
+    # Input is cleared after a successful add (and after a duplicate).
+    assert tab.creator_queue_input.text() == ""
+    # The added link is logged.
+    assert "Added to queue" in log_text(tab)
 
 
 def test_create_remove_handler_prompts_and_removes(monkeypatch, tmp_path):

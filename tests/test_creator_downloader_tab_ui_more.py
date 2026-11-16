@@ -30,7 +30,7 @@ def make_parent(tmp_path):
     return parent
 
 
-def test_multi_url_input_always_visible(qtbot, monkeypatch, tmp_path):
+def test_queue_input_always_visible(qtbot, monkeypatch, tmp_path):
     # Keep thread settings simple
     monkeypatch.setattr(
         cd.CreatorDownloaderTab,
@@ -47,10 +47,12 @@ def test_multi_url_input_always_visible(qtbot, monkeypatch, tmp_path):
     parent = make_parent(tmp_path)
     tab = cd.CreatorDownloaderTab(parent)
 
-    # The multi-URL input replaced the old single-URL row, so it is always
-    # visible.
-    assert tab.creator_multi_url_input.isVisibleTo(tab)
-    assert tab.creator_multi_url_add_btn.isVisibleTo(tab)
+    # The queue's blank row under the list is the entry point, and it is
+    # always visible so a URL can be pasted without opening anything.
+    assert tab.creator_queue_input.isVisibleTo(tab)
+    assert tab.creator_queue_input_btn.isVisibleTo(tab)
+    # The list keeps its three-row height; the input sits outside it.
+    assert tab.creator_queue_list.height() == 100
 
 
 def test_pagination_and_display(qtbot, monkeypatch, tmp_path):

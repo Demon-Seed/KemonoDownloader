@@ -568,24 +568,36 @@ class TestUIComponents:
 
 class TestCreatorDownloaderTab:
     def test_init(self, creator_tab):
-        assert creator_tab.creator_multi_url_input is not None
-        assert creator_tab.creator_multi_url_add_btn is not None
+        assert creator_tab.creator_queue_input is not None
+        assert creator_tab.creator_queue_input_btn is not None
         assert creator_tab.creator_queue_list.count() == 0
 
-    def test_add_multiple_creators_to_queue(self, creator_tab):
+    def test_add_creator_from_input(self, creator_tab):
         # Use valid-looking URLs that pass the length/format check
         url1 = "https://kemono.cr/fanbox/user/1"
-        url2 = "https://kemono.cr/fanbox/user/2"
-        creator_tab.creator_multi_url_input.setPlainText(f"{url1}\n{url2}")
-        creator_tab.add_multiple_creators_to_queue()
+        creator_tab.creator_queue_input.setText(url1)
+        creator_tab.add_creator_to_queue()
+        creator_tab.creator_queue_input.setText("https://kemono.cr/fanbox/user/2")
+        creator_tab.add_creator_to_queue()
         assert creator_tab.creator_queue_list.count() == 2
+        # The field clears itself so the next URL can go straight in.
+        assert creator_tab.creator_queue_input.text() == ""
+
+    def test_duplicate_creator_is_not_added_twice(self, creator_tab):
+        url = "https://kemono.cr/fanbox/user/1"
+        creator_tab.creator_queue_input.setText(url)
+        creator_tab.add_creator_to_queue()
+        creator_tab.creator_queue_input.setText(url)
+        assert creator_tab.add_creator_to_queue() == "duplicate"
+        assert len(creator_tab.creator_queue) == 1
+        assert creator_tab.creator_queue_input.text() == ""
 
     def test_post_url_is_canonicalized_to_creator(self, creator_tab):
-        # Pasting a post URL should queue the parent creator.
-        creator_tab.creator_multi_url_input.setPlainText(
+        # A post URL queues the parent creator.
+        creator_tab.creator_queue_input.setText(
             "https://kemono.cr/fanbox/user/1/post/999"
         )
-        creator_tab.add_multiple_creators_to_queue()
+        creator_tab.add_creator_to_queue()
         assert creator_tab.creator_queue_list.count() == 1
         assert creator_tab.creator_queue[0][0] == "https://kemono.cr/fanbox/user/1"
 
@@ -610,19 +622,23 @@ class TestCreatorDownloaderTab:
         assert creator_tab.creator_queue_list.count() == 0
         assert len(creator_tab.creator_queue) == 0
 
-    def test_add_multiple_creators_to_queue(self, creator_tab):
-        text = "https://kemono.cr/fanbox/user/1\nhttps://kemono.cr/fanbox/user/2\n"
-        creator_tab.creator_multi_url_input.setPlainText(text)
-        creator_tab.add_multiple_creators_to_queue()
+    def test_add_creators_in_order(self, creator_tab):
+        for url in (
+            "https://kemono.cr/fanbox/user/1",
+            "https://kemono.cr/fanbox/user/2",
+        ):
+            creator_tab.creator_queue_input.setText(url)
+            creator_tab.add_creator_to_queue()
 
         assert len(creator_tab.creator_queue) == 2
         assert creator_tab.creator_queue[0][0] == "https://kemono.cr/fanbox/user/1"
 
-    def test_add_multiple_creators_invalid(self, creator_tab):
-        text = "invalid-url\n"
-        creator_tab.creator_multi_url_input.setPlainText(text)
-        creator_tab.add_multiple_creators_to_queue()
+    def test_add_invalid_creator_keeps_the_text(self, creator_tab):
+        creator_tab.creator_queue_input.setText("invalid-url")
+        assert creator_tab.add_creator_to_queue() == "invalid"
         assert len(creator_tab.creator_queue) == 0
+        # Invalid text stays so it can be corrected in place.
+        assert creator_tab.creator_queue_input.text() == "invalid-url"
 
     def test_remove_handler(self, creator_tab, monkeypatch):
         from PyQt6.QtWidgets import QMessageBox

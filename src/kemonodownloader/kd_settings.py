@@ -77,6 +77,16 @@ _PUNCTUATION_LABEL_KEYS = {
     "lenient": "punctuation_rules_relaxed",
 }
 
+# "Queue Input Field Behavior": what the Creator Queue's input row does after
+# a URL is committed. Adding is always the same; only the auto-load part
+# differs, so a stale settings file can only change how eager the tab is.
+QUEUE_INPUT_BEHAVIOR_MODES = ("default", "load_first", "load_every")
+_QUEUE_INPUT_LABEL_KEYS = {
+    "default": "queue_input_default",
+    "load_first": "queue_input_load_first",
+    "load_every": "queue_input_load_every",
+}
+
 
 def normalize_name_dedup(value):
     """Coerce a stored "Name Dedup" value to a known mode.
@@ -164,6 +174,9 @@ class SettingsTab(QWidget):
             # already summarises) stay out of the log unless this is on.
             "verbose_logging": False,
             "show_only_found_filetypes": "on_with_count",
+            # What the Creator Queue's input row does after a URL is added:
+            # just queue it, open the first one, or open every one.
+            "queue_input_behavior": "default",
             "use_proxy": False,
             "proxy_type": "tor",  # "custom", "tor"
             "custom_proxy_url": "",
@@ -269,6 +282,13 @@ class SettingsTab(QWidget):
         )
         if settings_dict["show_only_found_filetypes"] not in SHOW_ONLY_FILETYPE_MODES:
             settings_dict["show_only_found_filetypes"] = "off"
+        settings_dict["queue_input_behavior"] = self.qsettings.value(
+            "queue_input_behavior",
+            self.default_settings.get("queue_input_behavior", "default"),
+            type=str,
+        )
+        if settings_dict["queue_input_behavior"] not in QUEUE_INPUT_BEHAVIOR_MODES:
+            settings_dict["queue_input_behavior"] = "default"
         settings_dict["use_proxy"] = False  # Always start with proxy disabled
         settings_dict["proxy_type"] = self.qsettings.value(
             "proxy_type", self.default_settings["proxy_type"], type=str
@@ -366,6 +386,10 @@ class SettingsTab(QWidget):
         self.qsettings.setValue(
             "show_only_found_filetypes",
             self.settings.get("show_only_found_filetypes", "on_with_count"),
+        )
+        self.qsettings.setValue(
+            "queue_input_behavior",
+            self.settings.get("queue_input_behavior", "default"),
         )
         self.qsettings.setValue("proxy_type", self.settings["proxy_type"])
         self.qsettings.setValue("custom_proxy_url", self.settings["custom_proxy_url"])
@@ -834,6 +858,47 @@ class SettingsTab(QWidget):
         )
         creator_custom_layout.addWidget(self.punctuation_matching_help_btn, 7, 3)
 
+        # What the Creator Queue's input row does once a URL is committed.
+        # Adding is identical in every mode; only the auto-loading differs.
+        self.queue_input_behavior_label = QLabel()
+        self.queue_input_behavior_label.setStyleSheet("color: white;")
+        creator_custom_layout.addWidget(self.queue_input_behavior_label, 8, 0)
+
+        self.queue_input_behavior_combo = QComboBox()
+        for label_key, mode in (
+            ("queue_input_default", "default"),
+            ("queue_input_load_first", "load_first"),
+            ("queue_input_load_every", "load_every"),
+        ):
+            self.queue_input_behavior_combo.addItem(translate(label_key), mode)
+        self.queue_input_behavior_combo.setStyleSheet(
+            "padding: 5px; border-radius: 5px;"
+        )
+        current_behavior = self.temp_settings.get("queue_input_behavior", "default")
+        for i in range(self.queue_input_behavior_combo.count()):
+            if self.queue_input_behavior_combo.itemData(i) == current_behavior:
+                self.queue_input_behavior_combo.setCurrentIndex(i)
+                break
+        self.queue_input_behavior_combo.currentIndexChanged.connect(
+            lambda idx: self.update_temp_setting(
+                "queue_input_behavior",
+                self.queue_input_behavior_combo.itemData(idx),
+            )
+        )
+        creator_custom_layout.addWidget(self.queue_input_behavior_combo, 8, 1, 1, 2)
+
+        self.queue_input_behavior_help_btn = QPushButton("?")
+        self.queue_input_behavior_help_btn.setStyleSheet(
+            # Scoped to QPushButton so the size cap does not reach the tooltip
+            # label Qt parents to this button.
+            "QPushButton { background: #4A5B7A; padding: 5px; border-radius: 5px; "
+            "min-width: 26px; max-width: 26px; }"
+        )
+        self.queue_input_behavior_help_btn.clicked.connect(
+            self.show_queue_input_behavior_help
+        )
+        creator_custom_layout.addWidget(self.queue_input_behavior_help_btn, 8, 3)
+
         self.creator_custom_group.setLayout(creator_custom_layout)
         layout.addWidget(self.creator_custom_group)
 
@@ -1182,6 +1247,14 @@ class SettingsTab(QWidget):
             self,
             translate("keyword_matching_rules_help_title"),
             translate("keyword_matching_rules_help_text"),
+        )
+
+    def show_queue_input_behavior_help(self):
+        """Explain what the three Queue Input Field Behavior modes do."""
+        QMessageBox.information(
+            self,
+            translate("queue_input_behavior_help_title"),
+            translate("queue_input_behavior_help_text"),
         )
 
     def show_punctuation_matching_help(self):
@@ -1600,6 +1673,16 @@ class SettingsTab(QWidget):
                 ),
                 "punctuation_matching_rules",
             ),
+            (
+                translate("queue_input_field_behavior"),
+                translate(
+                    _QUEUE_INPUT_LABEL_KEYS.get(
+                        values.get("queue_input_behavior", "default"),
+                        "queue_input_default",
+                    )
+                ),
+                "queue_input_behavior",
+            ),
             (translate("font"), values.get("font", "JetBrains Mono"), "font"),
         ]
 
@@ -1781,6 +1864,7 @@ class SettingsTab(QWidget):
             (self.creator_unique_filenames_combo, "creator_unique_filenames"),
             (self.lenient_keyword_matching_combo, "lenient_keyword_matching"),
             (self.punctuation_matching_rules_combo, "punctuation_matching_rules"),
+            (self.queue_input_behavior_combo, "queue_input_behavior"),
         ):
             combo.blockSignals(True)
             index = combo.findData(self.temp_settings.get(key))
@@ -1854,6 +1938,22 @@ class SettingsTab(QWidget):
                 translate(_PUNCTUATION_LABEL_KEYS.get(mode, "punctuation_rules_default")),
             )
         self.punctuation_matching_rules_combo.blockSignals(False)
+
+        self.queue_input_behavior_label.setText(translate("queue_input_field_behavior"))
+        self.queue_input_behavior_combo.blockSignals(True)
+        for index in range(self.queue_input_behavior_combo.count()):
+            mode = self.queue_input_behavior_combo.itemData(index)
+            self.queue_input_behavior_combo.setItemText(
+                index,
+                translate(_QUEUE_INPUT_LABEL_KEYS.get(mode, "queue_input_default")),
+            )
+        self.queue_input_behavior_combo.blockSignals(False)
+        self.queue_input_behavior_combo.setToolTip(
+            translate("queue_input_behavior_help_title")
+        )
+        self.queue_input_behavior_help_btn.setToolTip(
+            translate("queue_input_behavior_help_title")
+        )
 
         self.update_group.setTitle(translate("update_settings"))
         self.github_repo_link.setText(
@@ -1967,6 +2067,17 @@ class SettingsTab(QWidget):
         """
         mode = str(self.settings.get("show_only_found_filetypes", "on_with_count"))
         return mode if mode in SHOW_ONLY_FILETYPE_MODES else "off"
+
+    def get_queue_input_behavior(self):
+        """How the Creator Queue's input row treats a newly added creator.
+
+        One of "default" (only queue it), "load_first" (open it when nothing
+        is open yet) or "load_every" (open every added creator); anything
+        unrecognised falls back to "default" so a stale settings file cannot
+        make the tab fetch creators the user did not ask for.
+        """
+        mode = str(self.settings.get("queue_input_behavior", "default"))
+        return mode if mode in QUEUE_INPUT_BEHAVIOR_MODES else "default"
 
     def get_lenient_keyword_matching(self):
         """Which keyword filters drop the whole-word rule.
