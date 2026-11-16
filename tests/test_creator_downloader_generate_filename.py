@@ -160,23 +160,20 @@ def test_generate_folder_strategies(tmp_path):
     assert target_folder2.endswith(os.path.join("123_Creator Name"))
 
 
-def test_preview_thread_cache_hit(tmp_path):
-    import hashlib
-
-    from PyQt6.QtCore import Qt
+def test_preview_thread_decodes_an_image(monkeypatch):
+    from PyQt6.QtCore import QBuffer, QIODevice, Qt
     from PyQt6.QtGui import QPixmap
 
     url = "https://kemono.cr/uploads/preview.jpg"
-    cache_dir = str(tmp_path / "cache")
-    os.makedirs(cache_dir, exist_ok=True)
-    cache_key = hashlib.md5(url.encode()).hexdigest() + os.path.splitext(url)[1]
-    cache_path = os.path.join(cache_dir, cache_key)
-
     pix = QPixmap(10, 10)
     pix.fill(Qt.GlobalColor.white)
-    assert pix.save(cache_path)
+    buffer = QBuffer()
+    buffer.open(QIODevice.OpenModeFlag.ReadWrite)
+    pix.save(buffer, "PNG")
+    payload = bytes(buffer.data())
+    monkeypatch.setattr(cd, "_download_image_bytes", lambda *a, **k: payload)
 
-    thread = cd.PreviewThread(url, cache_dir)
+    thread = cd.PreviewThread(url)
     results = {}
 
     def on_preview(u, p):

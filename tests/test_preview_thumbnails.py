@@ -1,4 +1,4 @@
-"""Thumbnail-first previews: URL mapping, the modal flow, and no thumbnail cache."""
+"""Thumbnail-only image previews: URL mapping, decoding, and the modal flow."""
 
 import os
 
@@ -7,11 +7,7 @@ from PyQt6.QtCore import QBuffer, QIODevice
 from PyQt6.QtGui import QImage, QImageReader, QPixmap
 from PyQt6.QtWidgets import QMessageBox
 
-from kemonodownloader import (
-    creator_downloader as cd,
-    domain_config as dc,
-    preview_cache as pc,
-)
+from kemonodownloader import creator_downloader as cd, domain_config as dc
 from kemonodownloader.kd_language import translate
 
 PAWCHIVE_URL = (
@@ -45,9 +41,7 @@ def test_pawchive_config_gets_a_thumbnail_host(monkeypatch):
 
 
 def test_preview_thumbnail_url_reuses_the_file_path():
-    thumbnail = dc.preview_thumbnail_url(PAWCHIVE_URL, PAWCHIVE_CONFIG)
-
-    assert thumbnail == PAWCHIVE_THUMB
+    assert dc.preview_thumbnail_url(PAWCHIVE_URL, PAWCHIVE_CONFIG) == PAWCHIVE_THUMB
 
 
 def test_preview_thumbnail_url_is_empty_without_a_thumbnail_host():
@@ -67,11 +61,6 @@ def test_preview_thumbnail_url_requires_a_data_path():
     )
 
 
-def test_load_full_image_strings_are_translated():
-    assert translate("load_full_image") == "Load Full Image"
-    assert translate("loading_full_image") == "Loading Full Image..."
-
-
 class FakeSignal:
     def __init__(self):
         self.slots = []
@@ -89,11 +78,9 @@ class FakePreviewThread:
 
     instances = []
 
-    def __init__(self, url, cache_dir, settings_tab=None, cache=True):
+    def __init__(self, url, settings_tab=None):
         self.url = url
-        self.cache_dir = cache_dir
         self.settings_tab = settings_tab
-        self.cache = cache
         self.preview_ready = FakeSignal()
         self.progress = FakeSignal()
         self.error = FakeSignal()
@@ -116,7 +103,6 @@ def fake_preview(monkeypatch):
         "preview_thumbnail_url",
         lambda url: PAWCHIVE_THUMB if "pawchive" in url else "",
     )
-    monkeypatch.setattr(cd, "has_cached_preview", lambda url, cache_dir: False)
     return FakePreviewThread
 
 
@@ -126,112 +112,69 @@ def _pixmap():
     return pixmap
 
 
-def _make_modal(qtbot, tmp_path):
-    modal = cd.ImageModal(
-        PAWCHIVE_URL, str(tmp_path), parent=None, settings_tab=object()
-    )
+def _make_modal(qtbot):
+    modal = cd.ImageModal(PAWCHIVE_URL, parent=None, settings_tab=object())
     qtbot.addWidget(modal)
     return modal
 
 
-def test_pawchive_preview_loads_the_thumbnail_first(qtbot, tmp_path, fake_preview):
-    modal = _make_modal(qtbot, tmp_path)
+def test_pawchive_preview_loads_the_thumbnail(qtbot, fake_preview):
+    modal = _make_modal(qtbot)
 
     assert fake_preview.instances[0].url == PAWCHIVE_THUMB
-    assert fake_preview.instances[0].cache is False
-    assert modal._load_full_btn.isHidden() is True
+    assert fake_preview.instances[0].settings_tab is modal._settings_tab
     modal.close()
 
 
-def test_thumbnail_ready_reveals_the_load_full_button(qtbot, tmp_path, fake_preview):
-    modal = _make_modal(qtbot, tmp_path)
-    thread = fake_preview.instances[0]
-
-    thread.preview_ready.emit(PAWCHIVE_THUMB, _pixmap())
-
-    assert modal._load_full_btn.text() == translate("load_full_image")
-    assert modal._load_full_btn.isHidden() is False
-    assert modal._load_full_btn.isEnabled() is True
-    modal.close()
-
-
-def test_load_full_image_requests_the_full_url(qtbot, tmp_path, fake_preview):
-    modal = _make_modal(qtbot, tmp_path)
-    fake_preview.instances[0].preview_ready.emit(PAWCHIVE_THUMB, _pixmap())
-
-    modal._load_full_btn.click()
-
-    full_thread = fake_preview.instances[-1]
-    assert full_thread.url == PAWCHIVE_URL
-    assert full_thread.cache is True
-    assert modal._load_full_btn.isEnabled() is False
-
-    full_thread.preview_ready.emit(PAWCHIVE_URL, _pixmap())
-    assert modal._load_full_btn.isHidden() is True
-    modal.close()
-
-
-def test_thumbnail_error_falls_back_to_the_full_url(
-    qtbot, tmp_path, fake_preview, monkeypatch
-):
-    errors = []
-    monkeypatch.setattr(
-        QMessageBox, "critical", lambda *args, **kwargs: errors.append(args)
-    )
-    modal = _make_modal(qtbot, tmp_path)
-
-    fake_preview.instances[0].error.emit("thumbnail unavailable")
-
-    assert fake_preview.instances[-1].url == PAWCHIVE_URL
-    assert fake_preview.instances[-1].cache is True
-    assert errors == []
-    modal.close()
-
-
-def test_full_error_keeps_the_thumbnail_and_re_enables_the_button(
-    qtbot, tmp_path, fake_preview, monkeypatch
-):
-    errors = []
-    monkeypatch.setattr(
-        QMessageBox, "critical", lambda *args, **kwargs: errors.append(args)
-    )
-    modal = _make_modal(qtbot, tmp_path)
-    fake_preview.instances[0].preview_ready.emit(PAWCHIVE_THUMB, _pixmap())
-    modal._load_full_btn.click()
-
-    fake_preview.instances[-1].error.emit("full image unavailable")
-
-    assert errors
-    assert modal._label.pixmap().isNull() is False
-    assert modal._load_full_btn.isHidden() is False
-    assert modal._load_full_btn.isEnabled() is True
-    assert modal._load_full_btn.text() == translate("load_full_image")
-    modal.close()
-
-
-def test_cached_full_render_skips_the_thumbnail_stage(
-    qtbot, tmp_path, fake_preview, monkeypatch
-):
-    monkeypatch.setattr(cd, "has_cached_preview", lambda url, cache_dir: True)
-
-    modal = _make_modal(qtbot, tmp_path)
-
-    assert [thread.url for thread in fake_preview.instances] == [PAWCHIVE_URL]
-    assert modal._load_full_btn.isHidden() is True
-    modal.close()
-
-
-def test_non_pawchive_preview_has_no_thumbnail_stage(qtbot, tmp_path, fake_preview):
-    modal = cd.ImageModal(KEMONO_URL, str(tmp_path), parent=None, settings_tab=object())
+def test_non_pawchive_preview_uses_the_original_url(qtbot, fake_preview):
+    modal = cd.ImageModal(KEMONO_URL, parent=None, settings_tab=object())
     qtbot.addWidget(modal)
 
     assert [thread.url for thread in fake_preview.instances] == [KEMONO_URL]
-    assert modal._load_full_btn.isHidden() is True
     modal.close()
 
 
-def test_progress_does_not_clear_a_shown_thumbnail(qtbot, tmp_path, fake_preview):
-    modal = _make_modal(qtbot, tmp_path)
+def test_preview_ready_displays_the_image(qtbot, fake_preview):
+    modal = _make_modal(qtbot)
+
+    fake_preview.instances[0].preview_ready.emit(PAWCHIVE_THUMB, _pixmap())
+
+    assert modal._progress_bar.isHidden()
+    assert modal._label.pixmap().isNull() is False
+    assert modal._image_shown is True
+    modal.close()
+
+
+def test_initial_image_skips_the_network(qtbot, fake_preview):
+    modal = cd.ImageModal(
+        PAWCHIVE_URL,
+        parent=None,
+        settings_tab=object(),
+        initial_image=_pixmap().toImage(),
+    )
+    qtbot.addWidget(modal)
+
+    assert fake_preview.instances == []
+    assert modal._label.pixmap().isNull() is False
+    modal.close()
+
+
+def test_preview_error_shows_a_message(qtbot, fake_preview, monkeypatch):
+    errors = []
+    monkeypatch.setattr(
+        QMessageBox, "critical", lambda *args, **kwargs: errors.append(args)
+    )
+    modal = _make_modal(qtbot)
+
+    fake_preview.instances[0].error.emit("thumbnail unavailable")
+
+    assert errors
+    assert modal._label.text() == translate("error_loading_image")
+    modal.close()
+
+
+def test_progress_does_not_clear_a_shown_image(qtbot, fake_preview):
+    modal = _make_modal(qtbot)
     fake_preview.instances[0].preview_ready.emit(PAWCHIVE_THUMB, _pixmap())
 
     modal.update_progress(75)
@@ -240,6 +183,16 @@ def test_progress_does_not_clear_a_shown_thumbnail(qtbot, tmp_path, fake_preview
     assert modal._label.text() == ""
     assert modal._label.pixmap().isNull() is False
     modal.close()
+
+
+def test_close_releases_the_shown_pixmap(qtbot, fake_preview):
+    modal = _make_modal(qtbot)
+    fake_preview.instances[0].preview_ready.emit(PAWCHIVE_THUMB, _pixmap())
+    assert modal._label.pixmap().isNull() is False
+
+    modal.close()
+
+    assert modal._label.pixmap().isNull() is True
 
 
 def test_preview_decode_survives_qts_allocation_limit(qapp):
@@ -304,7 +257,9 @@ class _Session:
         return _Response(_png_bytes())
 
 
-def _run_thread(qtbot, tmp_path, monkeypatch, cache):
+def test_preview_thread_fetches_without_writing_any_files(
+    qtbot, tmp_path, monkeypatch
+):
     session = _Session()
     monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: session)
     # A fixed header set keeps this test from caching a Pawchive referer in
@@ -320,44 +275,14 @@ def _run_thread(qtbot, tmp_path, monkeypatch, cache):
     monkeypatch.setattr(cd, "get_domain_config", lambda url: dict(PAWCHIVE_CONFIG))
     previews = []
     errors = []
-    thread = cd.PreviewThread(
-        PAWCHIVE_THUMB, str(tmp_path), settings_tab=None, cache=cache
-    )
-    thread.preview_ready.connect(lambda url, pixmap: previews.append(url))
+    thread = cd.PreviewThread(PAWCHIVE_THUMB, settings_tab=None)
+    thread.preview_ready.connect(lambda url, pixmap: previews.append((url, pixmap)))
     thread.error.connect(errors.append)
+
     thread.run()
-    return session, previews, errors
-
-
-def test_preview_thread_can_skip_the_cache(qtbot, tmp_path, monkeypatch):
-    session, previews, errors = _run_thread(qtbot, tmp_path, monkeypatch, cache=False)
 
     assert session.urls == [PAWCHIVE_THUMB]
-    assert previews == [PAWCHIVE_THUMB]
     assert errors == []
+    assert previews and previews[0][0] == PAWCHIVE_THUMB
+    assert isinstance(previews[0][1], QPixmap)
     assert os.listdir(str(tmp_path)) == []
-
-
-def test_preview_thread_without_cache_ignores_an_existing_entry(
-    qtbot, tmp_path, monkeypatch
-):
-    cached = pc.preview_cache_path(PAWCHIVE_THUMB, str(tmp_path))
-    with open(cached, "wb") as handle:
-        handle.write(_png_bytes())
-
-    session, previews, errors = _run_thread(qtbot, tmp_path, monkeypatch, cache=False)
-
-    assert session.urls == [PAWCHIVE_THUMB]
-    assert previews == [PAWCHIVE_THUMB]
-    assert errors == []
-
-
-def test_preview_thread_still_caches_by_default(qtbot, tmp_path, monkeypatch):
-    session, previews, errors = _run_thread(qtbot, tmp_path, monkeypatch, cache=True)
-
-    assert session.urls == [PAWCHIVE_THUMB]
-    assert previews == [PAWCHIVE_THUMB]
-    assert errors == []
-    assert os.listdir(str(tmp_path)) == [
-        os.path.basename(pc.preview_cache_path(PAWCHIVE_THUMB, str(tmp_path)))
-    ]

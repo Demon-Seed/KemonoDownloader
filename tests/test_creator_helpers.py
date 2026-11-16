@@ -1,5 +1,3 @@
-import hashlib
-import os
 from types import SimpleNamespace
 
 from kemonodownloader.creator_downloader import (
@@ -39,28 +37,27 @@ def test_get_session_with_http_and_socks(tmp_path):
     assert sess2 is not None
 
 
-def test_preview_thread_loads_cached_image(tmp_path):
-    # Create a tiny valid PNG (1x1) in cache with expected cache key
-    url = "https://example.com/img/1.png"
-    cache_key = hashlib.md5(url.encode()).hexdigest() + os.path.splitext(url)[1]
-    cache_dir = str(tmp_path / "cache")
-    os.makedirs(cache_dir, exist_ok=True)
-    cache_path = os.path.join(cache_dir, cache_key)
-
-    # A real PNG: the previous hard-coded bytes failed libpng's CRC check, so
-    # QPixmap.load() never ran and the test could not fail.
+def test_preview_thread_decodes_an_image(monkeypatch):
+    from PyQt6.QtCore import QBuffer, QIODevice
     from PyQt6.QtGui import QImage
 
+    url = "https://example.com/img/1.png"
     image = QImage(1, 1, QImage.Format.Format_ARGB32)
     image.fill(0xFF0000FF)
-    assert image.save(cache_path, "PNG")
+    buffer = QBuffer()
+    buffer.open(QIODevice.OpenModeFlag.ReadWrite)
+    image.save(buffer, "PNG")
+    payload = bytes(buffer.data())
+    monkeypatch.setattr(
+        "kemonodownloader.creator_downloader._download_image_bytes",
+        lambda *a, **k: payload,
+    )
 
-    pt = PreviewThread(url, cache_dir, settings_tab=None)
+    pt = PreviewThread(url, settings_tab=None)
     ready = []
     pt.preview_ready = SimpleNamespace(emit=lambda u, pm: ready.append((u, pm)))
-    # Running should load the cached pixmap and emit it without a request
     pt.run()
 
-    assert ready, "a cached preview must be emitted"
+    assert ready, "a decoded preview must be emitted"
     assert ready[0][0] == url
     assert ready[0][1] is not None and not ready[0][1].isNull()

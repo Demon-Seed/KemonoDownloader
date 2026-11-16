@@ -487,7 +487,7 @@ class TestPreviewThread:
     def preview_thread(self, qapp, tmp_path):
         from kemonodownloader.creator_downloader import PreviewThread
 
-        return PreviewThread("https://kemono.cr/img.jpg", str(tmp_path), MagicMock())
+        return PreviewThread("https://kemono.cr/img.jpg", MagicMock())
 
     def test_run_success(self, preview_thread, mock_downloader_deps):
         from PyQt6.QtCore import QBuffer, QIODevice
@@ -534,7 +534,7 @@ class TestUIComponents:
         # Mock QMessageBox.critical
         monkeypatch.setattr(QMessageBox, "critical", MagicMock())
 
-        modal = ImageModal("https://url", str(tmp_path))
+        modal = ImageModal("https://url")
         modal.update_progress(50)
         assert modal._progress_bar.value() == 50
 

@@ -2,7 +2,6 @@
 
 import asyncio
 import gzip
-import hashlib
 import json
 import os
 from types import SimpleNamespace
@@ -82,7 +81,7 @@ def test_preview_thread_error(monkeypatch):
 
     monkeypatch.setattr(cd, "get_session", lambda s=None: fake_get())
     # Create a PreviewThread-like dummy and run
-    pt = cd.PreviewThread("https://kemono.cr/image.jpg", "/tmp", settings_tab=None)
+    pt = cd.PreviewThread("https://kemono.cr/image.jpg", settings_tab=None)
     errors = {}
     pt.error = SimpleNamespace(emit=lambda e: errors.setdefault("err", e))
     pt.preview_ready = SimpleNamespace(
@@ -320,19 +319,18 @@ def test_get_headers_and_session_proxy_behavior(monkeypatch):
     assert "socks5" in list(socks.proxies.values())[0]
 
 
-def test_preview_thread_uses_cache(tmp_path):
-    # Create a small valid image via QPixmap and save as the cache file
+def test_preview_thread_reports_the_url(tmp_path, monkeypatch):
+    from PyQt6.QtCore import QBuffer, QIODevice
     from PyQt6.QtGui import QColor, QPixmap
 
     url = "https://example.com/image.jpg"
-    cache_key = hashlib.md5(url.encode()).hexdigest() + os.path.splitext(url)[1]
-    cache_dir = str(tmp_path / "cache")
-    os.makedirs(cache_dir, exist_ok=True)
-    cache_path = os.path.join(cache_dir, cache_key)
     pix = QPixmap(8, 8)
     pix.fill(QColor("red"))
-    # Save using the extension-derived format
-    pix.save(cache_path)
+    buffer = QBuffer()
+    buffer.open(QIODevice.OpenModeFlag.ReadWrite)
+    pix.save(buffer, "JPG")
+    payload = bytes(buffer.data())
+    monkeypatch.setattr(cd, "_download_image_bytes", lambda *a, **k: payload)
 
     captured = {}
 
@@ -340,7 +338,7 @@ def test_preview_thread_uses_cache(tmp_path):
         captured["url"] = u
         captured["pix"] = pix
 
-    pt = cd.PreviewThread(url, cache_dir, settings_tab=None)
+    pt = cd.PreviewThread(url, settings_tab=None)
     pt.preview_ready.connect(on_preview)
     pt.run()
     assert captured.get("url") == url

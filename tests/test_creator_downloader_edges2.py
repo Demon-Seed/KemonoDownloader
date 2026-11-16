@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-import hashlib
 import os
 import threading
 from types import SimpleNamespace
@@ -181,20 +180,21 @@ def test_download_file_deletion_failure(monkeypatch, tmp_path):
     assert file_url in dummy.failed_files
 
 
-def test_preview_thread_cached_jpg(tmp_path):
-    # Use a real small JPG saved via QPixmap so load(cache_path) succeeds
+def test_preview_thread_decodes_a_jpg(tmp_path, monkeypatch):
+    # Feed the thread real JPEG bytes without touching the network or a cache.
+    from PyQt6.QtCore import QBuffer, QIODevice
     from PyQt6.QtGui import QColor, QPixmap
 
     url = "https://example.com/img.jpg"
-    cache_dir = str(tmp_path / "cache")
-    os.makedirs(cache_dir, exist_ok=True)
-    cache_key = hashlib.md5(url.encode()).hexdigest() + os.path.splitext(url)[1]
-    cache_path = os.path.join(cache_dir, cache_key)
     pix = QPixmap(8, 8)
     pix.fill(QColor("blue"))
-    pix.save(cache_path)
+    buffer = QBuffer()
+    buffer.open(QIODevice.OpenModeFlag.ReadWrite)
+    pix.save(buffer, "JPG")
+    payload = bytes(buffer.data())
+    monkeypatch.setattr(cd, "_download_image_bytes", lambda *a, **k: payload)
 
-    pt = cd.PreviewThread(url, cache_dir, settings_tab=None)
+    pt = cd.PreviewThread(url, settings_tab=None)
     captured = {}
     pt.preview_ready = SimpleNamespace(
         emit=lambda u, p: captured.update({"url": u, "val": p})

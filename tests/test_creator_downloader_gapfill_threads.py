@@ -53,7 +53,7 @@ def test_preview_thread_bad_content_length_emits_zero_progress(monkeypatch, tmp_
 
     progress = []
     errors = []
-    pt = cd.PreviewThread("https://kemono.cr/x.jpg", str(tmp_path), settings_tab=None)
+    pt = cd.PreviewThread("https://kemono.cr/x.jpg", settings_tab=None)
     pt.progress = SimpleNamespace(emit=lambda v: progress.append(v))
     pt.preview_ready = SimpleNamespace(emit=lambda *a, **k: None)
     pt.error = SimpleNamespace(emit=lambda msg: errors.append(msg))
@@ -74,7 +74,7 @@ def test_preview_thread_unexpected_exception_path(monkeypatch, tmp_path):
     )
 
     errors = []
-    pt = cd.PreviewThread("https://kemono.cr/x.jpg", str(tmp_path), settings_tab=None)
+    pt = cd.PreviewThread("https://kemono.cr/x.jpg", settings_tab=None)
     pt.progress = SimpleNamespace(emit=lambda *a, **k: None)
     pt.preview_ready = SimpleNamespace(emit=lambda *a, **k: None)
     pt.error = SimpleNamespace(emit=lambda msg: errors.append(msg))

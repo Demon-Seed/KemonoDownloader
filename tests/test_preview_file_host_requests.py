@@ -7,7 +7,6 @@ that host and warmed it once per session; the double-click preview must do
 the same, and must report the URL and the reason when it still fails.
 """
 
-import os
 from types import SimpleNamespace
 
 import requests
@@ -161,8 +160,7 @@ def test_creator_preview_retries_after_ddos_guard_challenge(qtbot, tmp_path, mon
 
     previews = []
     errors = []
-    cache_dir = os.path.join(str(tmp_path), "cache")
-    thread = cd.PreviewThread(PAWCHIVE_IMAGE, cache_dir, settings_tab=None)
+    thread = cd.PreviewThread(PAWCHIVE_IMAGE, settings_tab=None)
     thread.preview_ready.connect(lambda url, pixmap: previews.append((url, pixmap)))
     thread.error.connect(errors.append)
 
@@ -190,9 +188,7 @@ def test_creator_preview_reports_the_url_and_reason(qtbot, tmp_path, monkeypatch
     monkeypatch.setattr(cd, "get_domain_config", lambda url: dict(PAWCHIVE_CONFIG))
 
     errors = []
-    thread = cd.PreviewThread(
-        PAWCHIVE_IMAGE, os.path.join(str(tmp_path), "cache"), settings_tab=None
-    )
+    thread = cd.PreviewThread(PAWCHIVE_IMAGE, settings_tab=None)
     thread.error.connect(errors.append)
 
     thread.run()
@@ -208,7 +204,7 @@ def test_kemono_preview_still_makes_a_single_request(qtbot, tmp_path, monkeypatc
     monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: session)
     monkeypatch.setattr(cd, "get_domain_config", lambda url: dict(KEMONO_CONFIG))
 
-    thread = cd.PreviewThread(url, os.path.join(str(tmp_path), "cache"), settings_tab=None)
+    thread = cd.PreviewThread(url, settings_tab=None)
     thread.run()
 
     assert session.urls == [url]
@@ -223,7 +219,7 @@ def test_image_modal_uses_the_tabs_settings_tab(qtbot, tmp_path, monkeypatch):
             return None
 
     class FakePreviewThread:
-        def __init__(self, url, cache_dir, settings_tab=None):
+        def __init__(self, url, settings_tab=None):
             captured["settings_tab"] = settings_tab
             self.preview_ready = FakeSignal()
             self.progress = FakeSignal()
@@ -243,7 +239,7 @@ def test_image_modal_uses_the_tabs_settings_tab(qtbot, tmp_path, monkeypatch):
     tab = QWidget()
     tab._parent = owner
 
-    cd.ImageModal("https://kemono.cr/data/ab/cd/photo.png", str(tmp_path), tab)
+    cd.ImageModal("https://kemono.cr/data/ab/cd/photo.png", tab)
 
     assert captured["settings_tab"] is settings_tab
     assert captured["started"] is True

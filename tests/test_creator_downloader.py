@@ -671,16 +671,14 @@ def test_preview_thread_network_success(tmp_path, monkeypatch):
     monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: FakeSession())
 
     url = "https://kemono.cr/uploads/1.png"
-    cache_dir = str(tmp_path / "cache")
-    thread = cd.PreviewThread(url, cache_dir)
+    thread = cd.PreviewThread(url)
     sig = DummySignal()
     thread.preview_ready = sig
     thread.run()
 
-    # Ensure preview_ready emitted and cache file exists
     assert sig.emitted is True
-    cache_key = hashlib.md5(url.encode()).hexdigest() + os.path.splitext(url)[1]
-    assert os.path.exists(os.path.join(cache_dir, cache_key))
+    assert sig.last_args is not None
+    assert sig.last_args[0] == url
 
 
 def test_post_detection_thread_invalid_url_emits_error():
@@ -793,34 +791,32 @@ def test_get_session_socks_proxy_returns_socks_session():
     assert session.proxies.get("http") == "socks5h://127.0.0.1:9050"
 
 
-def test_preview_thread_uses_cache(qtbot, tmp_path):
-    url = "https://example.com/img.png"
-    cache_dir = str(tmp_path / "cachep")
-    os.makedirs(cache_dir, exist_ok=True)
+def test_preview_thread_reports_the_url(qtbot, monkeypatch):
+    from PyQt6.QtCore import QBuffer, QIODevice
 
-    # Create a valid small PNG using QPixmap to avoid embedding bytes
-    cache_key = hashlib.md5(url.encode()).hexdigest() + ".png"
-    cache_path = os.path.join(cache_dir, cache_key)
     pix = QPixmap(4, 4)
     pix.fill(QColor("white"))
-    pix.save(cache_path)
+    buf = QBuffer()
+    buf.open(QIODevice.OpenModeFlag.ReadWrite)
+    pix.save(buf, "PNG")
+    payload = bytes(buf.data())
+    monkeypatch.setattr(cd, "_download_image_bytes", lambda *a, **k: payload)
 
     called = []
 
     def on_preview(u, pix):
         called.append((u, isinstance(pix, QPixmap)))
 
-    thread = PreviewThread(url, cache_dir, settings_tab=None)
+    thread = PreviewThread("https://example.com/img.png", settings_tab=None)
     thread.preview_ready.connect(on_preview)
     thread.run()
 
-    assert called and called[0][0] == url and called[0][1] is True
+    assert called and called[0][0] == "https://example.com/img.png"
+    assert called[0][1] is True
 
 
 def test_preview_thread_emits_error_for_invalid_data(qtbot, tmp_path, monkeypatch):
     url = "https://example.com/bad.png"
-    cache_dir = str(tmp_path / "cacheb")
-    os.makedirs(cache_dir, exist_ok=True)
 
     # Invalid image bytes
     chunks = [b"notanimage"]
@@ -834,7 +830,7 @@ def test_preview_thread_emits_error_for_invalid_data(qtbot, tmp_path, monkeypatc
     def on_error(msg):
         errors.append(msg)
 
-    thread = PreviewThread(url, cache_dir, settings_tab=None)
+    thread = PreviewThread(url, settings_tab=None)
     thread.error.connect(on_error)
     thread.run()
 

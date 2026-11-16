@@ -72,7 +72,6 @@ def test_apply_uses_the_save_and_data_directories(qapp, monkeypatch, tmp_path):
         st.confirm_and_apply_settings()
 
         assert parent.download_folder == save_dir
-        assert parent.cache_folder == kd_paths.cache_dir()
         assert parent.other_files_folder == kd_paths.other_files_dir()
         assert st.settings["data_directory"] == kd_paths.data_directory()
     finally:

@@ -127,17 +127,28 @@ def test_eye_button_and_its_state_are_gone(qtbot, tmp_path):
     assert not hasattr(tab, "update_current_preview_url")
 
 
-def make_modal_recorder(monkeypatch, opened):
-    """Patch ImageModal with a recorder; returns nothing."""
+def make_post_preview_recorder(monkeypatch, opened):
+    """Patch PostPreviewDialog with a recorder."""
 
-    class FakeModal:
-        def __init__(self, url, cache_dir, parent=None, settings_tab=None):
-            opened.append(("open", url))
+    class FakePostPreview:
+        def __init__(
+            self,
+            post_id,
+            creator_url,
+            parent=None,
+            settings_tab=None,
+            post_data=None,
+            max_retries=1,
+            thread_registry=None,
+            image_cache=None,
+        ):
+            opened.append(("open", str(post_id), creator_url))
+            self.post_loaded = SimpleNamespace(connect=lambda cb: None)
 
         def exec(self):
-            opened.append(("exec", None))
+            opened.append(("exec", None, None))
 
-    monkeypatch.setattr(cd, "ImageModal", FakeModal)
+    monkeypatch.setattr(cd, "PostPreviewDialog", FakePostPreview)
 
 
 class RecordingEvent:
@@ -150,10 +161,11 @@ class RecordingEvent:
         self.accepted = True
 
 
-def test_row_double_click_previews_the_thumbnail(qtbot, tmp_path, monkeypatch):
+def test_row_double_click_previews_the_post(qtbot, tmp_path, monkeypatch):
     tab, _ = make_tab(qtbot, tmp_path)
+    tab.current_creator_url = CREATOR_URL
     opened = []
-    make_modal_recorder(monkeypatch, opened)
+    make_post_preview_recorder(monkeypatch, opened)
     widget = add_post_row(
         tab, "Title (2024-01-01)", "1", thumbnail="https://kemono.cr/t.jpg"
     )
@@ -162,42 +174,47 @@ def test_row_double_click_previews_the_thumbnail(qtbot, tmp_path, monkeypatch):
     widget.mouseDoubleClickEvent(event)
 
     assert event.accepted is True
-    assert opened == [("open", "https://kemono.cr/t.jpg"), ("exec", None)]
+    assert opened == [("open", "1", CREATOR_URL), ("exec", None, None)]
 
 
 def test_list_double_click_signal_previews_too(qtbot, tmp_path, monkeypatch):
     tab, _ = make_tab(qtbot, tmp_path)
+    tab.current_creator_url = CREATOR_URL
     opened = []
-    make_modal_recorder(monkeypatch, opened)
+    make_post_preview_recorder(monkeypatch, opened)
     add_post_row(tab, "Title (2024-01-01)", "1", thumbnail="https://kemono.cr/t.jpg")
     item = tab.post_widget_cache["Title (2024-01-01)"][0]
 
     tab.creator_post_list.itemDoubleClicked.emit(item)
 
-    assert opened == [("open", "https://kemono.cr/t.jpg"), ("exec", None)]
+    assert opened == [("open", "1", CREATOR_URL), ("exec", None, None)]
 
 
-def test_double_click_without_a_thumbnail_does_nothing(qtbot, tmp_path, monkeypatch):
+def test_double_click_without_a_thumbnail_still_previews_the_post(
+    qtbot, tmp_path, monkeypatch
+):
     tab, _ = make_tab(qtbot, tmp_path)
+    tab.current_creator_url = CREATOR_URL
     opened = []
-    make_modal_recorder(monkeypatch, opened)
+    make_post_preview_recorder(monkeypatch, opened)
     widget = add_post_row(tab, "Title (2024-01-01)", "1", thumbnail="")
 
     widget.mouseDoubleClickEvent(RecordingEvent())
 
-    assert opened == []
+    assert opened == [("open", "1", CREATOR_URL), ("exec", None, None)]
 
 
-def test_double_click_on_an_unsupported_link_only_warns(qtbot, tmp_path, monkeypatch):
+def test_double_click_without_a_creator_warns(qtbot, tmp_path, monkeypatch):
     tab, _ = make_tab(qtbot, tmp_path)
+    tab.current_creator_url = None
     opened = []
     logged = []
-    make_modal_recorder(monkeypatch, opened)
+    make_post_preview_recorder(monkeypatch, opened)
     monkeypatch.setattr(
         tab, "append_log_to_console", lambda msg, level="INFO": logged.append(level)
     )
     widget = add_post_row(
-        tab, "Title (2024-01-01)", "1", thumbnail="https://kemono.cr/f.zip"
+        tab, "Title (2024-01-01)", "1", thumbnail="https://kemono.cr/t.jpg"
     )
 
     widget.mouseDoubleClickEvent(RecordingEvent())

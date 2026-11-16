@@ -37,7 +37,6 @@ from PyQt6.QtWidgets import (
 
 from kemonodownloader import kd_paths
 from kemonodownloader.kd_language import language_manager, translate
-from kemonodownloader.preview_cache import clear_preview_cache, format_size
 
 # Main repository (VoxDroid) used by the in-app update/repository links.
 GITHUB_REPO_URL = "https://github.com/VoxDroid/KemonoDownloader"
@@ -150,11 +149,10 @@ class SettingsTab(QWidget):
             # longer affects any path. Kept so existing configs keep loading.
             "base_folder_name": "Kemono Downloader",
             "base_directory": self.get_default_base_directory(),
-            # Where the app's own working files live (cache, databases). Defaults
-            # to the same folder as the Save Directory, so a fresh install keeps
-            # them together until the user splits them.
-            # A readout, not a setting: filled in from kd_paths at load time so
-            # that importing this module never probes (or creates) the folder.
+            # Where the app's own working files live (databases and saved
+            # config profiles). A readout, not a setting: filled in from
+            # kd_paths at load time so importing this module never probes
+            # (or creates) the folder.
             "data_directory": "",
             "simultaneous_downloads": 5,
             "language": "english",
@@ -210,7 +208,7 @@ class SettingsTab(QWidget):
         """Return the platform-appropriate default Save Directory.
 
         Posts go to the per-user folder, NOT to the app's own data folder:
-        ``extras`` holds the databases and the thumbnail cache, and a library
+        ``extras`` holds the databases and saved config profiles, and a library
         must never be mixed with those.
         """
         return kd_paths.per_user_directory()
@@ -462,13 +460,6 @@ class SettingsTab(QWidget):
         # what people actually wanted (to back up or clear the databases).
         self.browse_data_button.clicked.connect(self.open_data_directory)
         folder_layout.addWidget(self.browse_data_button, 1, 2)
-
-        self.clear_cache_button = QPushButton()
-        self.clear_cache_button.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px;"
-        )
-        self.clear_cache_button.clicked.connect(self.clear_preview_cache_action)
-        folder_layout.addWidget(self.clear_cache_button, 1, 3)
 
         self.folder_group.setLayout(folder_layout)
         layout.addWidget(self.folder_group)
@@ -1218,38 +1209,6 @@ class SettingsTab(QWidget):
             pass
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
-    def clear_preview_cache_action(self):
-        """Delete the disposable preview cache after confirmation."""
-        reply = QMessageBox.question(
-            self,
-            translate("confirm_clear_cache_title"),
-            translate("confirm_clear_cache_message"),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        try:
-            removed, freed = clear_preview_cache(kd_paths.cache_dir())
-        except Exception as e:
-            QMessageBox.warning(
-                self,
-                translate("cache_clear_failed_title"),
-                translate("cache_clear_failed", e),
-            )
-            return
-        if removed:
-            QMessageBox.information(
-                self,
-                translate("cache_cleared_title"),
-                translate("cache_cleared_text", removed, format_size(freed)),
-            )
-        else:
-            QMessageBox.information(
-                self,
-                translate("cache_cleared_title"),
-                translate("cache_empty_text"),
-            )
-
     def browse_tor_executable(self):
         """Browse for Tor executable file."""
         if sys.platform == "win32":
@@ -1710,9 +1669,6 @@ class SettingsTab(QWidget):
         # Posts go straight into the Save Directory; the app's own files go to
         # the Data Directory, so the library folder only ever holds posts.
         self.parent.download_folder = self.settings["base_directory"]
-        self.parent.cache_folder = kd_paths.cache_dir(
-            self.settings.get("data_directory")
-        )
         self.parent.other_files_folder = kd_paths.other_files_dir(
             self.settings.get("data_directory")
         )
@@ -1720,7 +1676,6 @@ class SettingsTab(QWidget):
 
         creator_tab = getattr(self.parent, "creator_tab", None)
         if creator_tab is not None:
-            creator_tab.cache_dir = self.parent.cache_folder
             creator_tab.other_files_dir = self.parent.other_files_folder
 
         if language_changed:
@@ -1843,8 +1798,6 @@ class SettingsTab(QWidget):
         self.data_directory_input.setToolTip(translate("data_directory_tooltip"))
         self.browse_button.setText(translate("browse"))
         self.browse_data_button.setText(translate("browse"))
-        self.clear_cache_button.setText(translate("clear_cache"))
-        self.clear_cache_button.setToolTip(translate("clear_cache_tooltip"))
 
         self.download_group.setTitle(translate("download_settings"))
         self.simultaneous_downloads_label.setText(translate("simultaneous_downloads"))

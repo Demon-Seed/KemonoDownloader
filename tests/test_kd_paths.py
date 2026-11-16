@@ -80,10 +80,9 @@ def test_the_environment_override_still_wins(monkeypatch, tmp_path):
     )
 
 
-def test_cache_and_other_files_sit_inside_the_data_directory():
+def test_other_files_sit_inside_the_data_directory():
     resolved = kd_paths.data_directory()
 
-    assert kd_paths.cache_dir() == os.path.join(resolved, "Cache")
     assert kd_paths.other_files_dir() == os.path.join(resolved, "Other Files")
 
 

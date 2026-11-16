@@ -9,6 +9,8 @@ import os
 import re
 import threading
 import time
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import NamedTuple, Optional
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
@@ -22,6 +24,7 @@ from PyQt6.QtCore import (
     QBuffer,
     QByteArray,
     QIODevice,
+    QObject,
     QSize,
     Qt,
     QThread,
@@ -47,6 +50,9 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
+    QSplitter,
+    QTextBrowser,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -66,7 +72,10 @@ from kemonodownloader.download_history import DownloadHistoryDB, iso_to_local_da
 from kemonodownloader.hash_db import HashDB
 from kemonodownloader.kd_language import translate
 from kemonodownloader.kd_paths import ensure_directory
-from kemonodownloader.preview_cache import has_cached_preview, preview_cache_path
+from kemonodownloader.preview_cache import (
+    DEFAULT_PREVIEW_CACHE_BYTES,
+    PreviewImageCache,
+)
 from kemonodownloader.retry_policy import (
     api_retry_delay,
     countdown_seconds,
@@ -90,6 +99,11 @@ def _log_line_html(message, color):
 # Cap for the in-memory log store and for every log view, in lines, so the
 # store and both widgets always agree on how much history is kept.
 LOG_LINE_LIMIT = 5000
+
+# How many complete post records the Creator tab keeps for reopened previews.
+# A record is small (JSON with description + attachment list), but the list is
+# still bounded so browsing many posts cannot grow it without limit.
+POST_PREVIEW_CACHE_LIMIT = 20
 
 # One colour per level, shared by the inline console and the log window and
 # taken from the muted palette the rest of the tab uses. The plain CSS
@@ -949,14 +963,25 @@ class _StoppableThread:
         self.is_running = False
 
 
-def _decode_preview_image(data, max_size=800):
-    """Decode *data* into a QPixmap that fits *max_size*.
+_IMAGE_URL_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp")
+
+
+def _looks_like_image(url):
+    """True when *url*'s path ends in an extension Qt can preview."""
+    return urlparse(str(url)).path.lower().endswith(_IMAGE_URL_EXTENSIONS)
+
+
+def _decode_preview_qimage(data, max_size=800):
+    """Decode *data* into a QImage that fits *max_size*.
 
     Qt refuses to decode an image whose full bitmap would exceed its 256 MB
     allocation limit, which multi-thousand-pixel Patreon JPEGs routinely do
     even though a preview only ever shows 800 px. QImageReader can read at a
     reduced size, so those files still preview instead of failing as
     "invalid image data".
+
+    QImage, unlike QPixmap, may be built on a worker thread; the GUI thread
+    converts it to a QPixmap when it is displayed.
 
     Returns None when the bytes are not a decodable image.
     """
@@ -975,15 +1000,63 @@ def _decode_preview_image(data, max_size=800):
     image = reader.read()
     if image.isNull():
         return None
-    pixmap = QPixmap.fromImage(image)
-    if pixmap.width() > max_size or pixmap.height() > max_size:
-        pixmap = pixmap.scaled(
+    if image.width() > max_size or image.height() > max_size:
+        image = image.scaled(
             max_size,
             max_size,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
-    return pixmap
+    return image
+
+
+def _decode_preview_image(data, max_size=800):
+    """Decode *data* into a QPixmap that fits *max_size* (GUI thread)."""
+    image = _decode_preview_qimage(data, max_size)
+    if image is None:
+        return None
+    return QPixmap.fromImage(image)
+
+
+def _download_image_bytes(url, settings_tab=None, on_progress=None):
+    """Fetch *url* with the file-host headers and return its bytes.
+
+    ``on_progress(downloaded, total)`` is called per chunk; *total* is 0 when
+    the server sends no length. Raises ``requests.RequestException`` on
+    transport/HTTP errors so callers can report the URL and the reason.
+    """
+    domain_config = get_domain_config(url)
+    session = get_session(settings_tab)
+    headers, file_base_url = file_host_headers(url, get_headers(), domain_config)
+    response = session.get(url, headers=headers, stream=True)
+    if response.status_code == 403:
+        # DDoS-Guard challenges the first request of a fresh session; warming
+        # the file host sets its clearance cookie, so retry once instead of
+        # failing the preview outright.
+        response.close()
+        warm_file_host(
+            session,
+            file_base_url,
+            headers.get("User-Agent", ""),
+            domain_config.get("referer"),
+        )
+        response = session.get(url, headers=headers, stream=True)
+    response.raise_for_status()
+    header = response.headers.get("content-length")
+    try:
+        total_size = int(header) if header is not None else 0
+    except Exception:
+        total_size = 0
+    data = bytearray()
+    downloaded = 0
+    for chunk in response.iter_content(chunk_size=8192):
+        if not chunk:
+            continue
+        data.extend(chunk)
+        downloaded += len(chunk)
+        if on_progress is not None:
+            on_progress(downloaded, total_size)
+    return bytes(data)
 
 
 class PreviewThread(QThread):
@@ -991,110 +1064,59 @@ class PreviewThread(QThread):
     progress = pyqtSignal(int)
     error = pyqtSignal(str)
 
-    def __init__(self, url, cache_dir, settings_tab=None, cache=True):
+    def __init__(self, url, settings_tab=None):
         super().__init__()
         self.url = url
-        self.cache_dir = cache_dir
         self.settings_tab = settings_tab
-        # Thumbnail-first previews pass cache=False: a thumbnail is a cheap
-        # request and the full render is what repeat previews reuse.
-        self.cache = bool(cache)
-        # Kept so preview requests can be shaped for the file host rather
-        # than for the site's API (see domain_config.file_host_headers).
-        self.domain_config = get_domain_config(url)
         self.total_size = 0
         self.downloaded_size = 0
-        os.makedirs(self.cache_dir, exist_ok=True)
 
     def run(self):
-        if self.url.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
-            cache_path = (
-                preview_cache_path(self.url, self.cache_dir) if self.cache else None
+        if not _looks_like_image(self.url):
+            return
+        try:
+            data = _download_image_bytes(
+                self.url, self.settings_tab, self._report_progress
             )
-            if cache_path and os.path.exists(cache_path):
-                pixmap = QPixmap()
-                if pixmap.load(cache_path):
-                    self.preview_ready.emit(self.url, pixmap)
-                    return
-
-            try:
-                session = get_session(self.settings_tab)
-                headers, file_base_url = file_host_headers(
-                    self.url, get_headers(), self.domain_config
-                )
-                response = session.get(self.url, headers=headers, stream=True)
-                if response.status_code == 403:
-                    # DDoS-Guard challenges the first request of a fresh session;
-                    # warming the file host sets its clearance cookie, so retry once
-                    # instead of failing the preview outright.
-                    response.close()
-                    warm_file_host(
-                        session,
-                        file_base_url,
-                        headers.get("User-Agent", ""),
-                        self.domain_config.get("referer"),
-                    )
-                    response = session.get(self.url, headers=headers, stream=True)
-                response.raise_for_status()
-                header = response.headers.get("content-length")
-                try:
-                    total_size = int(header) if header is not None else 0
-                except Exception:
-                    total_size = 0
-                self.total_size = total_size
-                downloaded_data = bytearray()
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        downloaded_data.extend(chunk)
-                        self.downloaded_size += len(chunk)
-                        if self.total_size > 0:
-                            progress = int(
-                                (self.downloaded_size / self.total_size) * 100
-                            )
-                        else:
-                            progress = 0
-                        self.progress.emit(min(progress, 100))
-                pixmap = _decode_preview_image(downloaded_data)
-                if pixmap is None:
-                    self.error.emit(
-                        f"{translate('failed_to_download')}: {self.url}: "
-                        f"{translate('invalid_image_data')}"
-                    )
-                    return
-                if cache_path:
-                    pixmap.save(cache_path)
-                self.preview_ready.emit(self.url, pixmap)
-            except requests.RequestException as e:
+            pixmap = _decode_preview_image(data)
+            if pixmap is None:
                 self.error.emit(
-                    f"{translate('failed_to_download')}: {self.url}: {str(e)}"
+                    f"{translate('failed_to_download')}: {self.url}: "
+                    f"{translate('invalid_image_data')}"
                 )
-            except Exception as e:
-                self.error.emit(translate("unexpected_error", f"{self.url}: {str(e)}"))
+                return
+            self.preview_ready.emit(self.url, pixmap)
+        except requests.RequestException as e:
+            self.error.emit(
+                f"{translate('failed_to_download')}: {self.url}: {str(e)}"
+            )
+        except Exception as e:
+            self.error.emit(translate("unexpected_error", f"{self.url}: {str(e)}"))
+
+    def _report_progress(self, downloaded, total_size):
+        self.downloaded_size = downloaded
+        self.total_size = total_size
+        if total_size > 0:
+            progress = int((downloaded / total_size) * 100)
+        else:
+            progress = 0
+        self.progress.emit(min(progress, 100))
 
 
 class ImageModal(QDialog):
-    """Preview one post image, using Pawchive's thumbnail when available.
+    """Preview one image at the site's thumbnail resolution."""
 
-    A thumbnail is shown first so the dialog paints quickly; the full file is
-    one click away. If the full render is already cached the modal skips the
-    thumbnail stage entirely - a cached full image is strictly better.
-    """
-
-    # Class-level defaults keep the display helpers usable on instances built
+    # Class-level default keeps the display helpers usable on instances built
     # with ``__new__`` in tests, before the Qt superclass is initialised.
     _image_shown = False
-    _loading_full = False
     _thumbnail_url = ""
-    _load_full_btn = None
 
-    def __init__(self, url, cache_dir, parent=None, settings_tab=None):
+    def __init__(self, url, parent=None, settings_tab=None, initial_image=None):
         super().__init__(parent)
         self._parent = parent
         self._full_url = str(url)
-        self._cache_dir = cache_dir
-        self._thumbnail_url = preview_thumbnail_url(self._full_url)
+        self._thumbnail_url = preview_thumbnail_url(self._full_url) or self._full_url
         self._image_shown = False
-        self._loading_full = False
         self._preview_threads = []
         self.setWindowTitle(translate("media_preview"))
         self.setModal(True)
@@ -1104,13 +1126,7 @@ class ImageModal(QDialog):
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._layout.addWidget(self._label)
 
-        self._load_full_btn = QPushButton(translate("load_full_image"))
-        self._load_full_btn.setToolTip(translate("load_full_image_tooltip"))
-        self._load_full_btn.clicked.connect(self.load_full_image)
-        self._load_full_btn.hide()
-        self._layout.addWidget(
-            self._load_full_btn, alignment=Qt.AlignmentFlag.AlignCenter
-        )
+        self._closed = False
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setStyleSheet(
@@ -1123,14 +1139,18 @@ class ImageModal(QDialog):
             settings_tab = self._resolve_settings_tab()
         self._settings_tab = settings_tab
 
-        # A cached full render is sharper than any thumbnail, so repeat
-        # previews skip the thumbnail step instead of asking for a click.
-        if has_cached_preview(self._full_url, cache_dir):
-            self._start_preview(self._full_url, is_full=True)
-        elif self._thumbnail_url:
-            self._start_preview(self._thumbnail_url, is_full=False)
-        else:
-            self._start_preview(self._full_url, is_full=True)
+        # A caller that already has the decoded thumbnail (the post image
+        # list does) can show it immediately instead of fetching it again.
+        if initial_image is not None:
+            pixmap = (
+                initial_image
+                if isinstance(initial_image, QPixmap)
+                else QPixmap.fromImage(initial_image)
+            )
+            if not pixmap.isNull():
+                self.display_image(self._thumbnail_url, pixmap)
+                return
+        self._start_preview(self._thumbnail_url)
 
     def _resolve_settings_tab(self):
         """Return the Settings tab so previews honor the proxy settings.
@@ -1151,36 +1171,18 @@ class ImageModal(QDialog):
                 return candidate
         return None
 
-    def _start_preview(self, url, is_full):
-        """Start one load. Thumbnail loads are never written to the cache."""
-        self._loading_full = bool(is_full)
+    def _start_preview(self, url):
+        """Fetch one image and show it when it arrives."""
         self._progress_bar.setValue(0)
         self._progress_bar.show()
         if not self._image_shown:
             self._label.setText(translate("loading_image_simple"))
-
-        button = getattr(self, "_load_full_btn", None)
-        if is_full and self._image_shown and button is not None:
-            button.setText(translate("loading_full_image"))
-            button.setEnabled(False)
-
-        if is_full:
-            thread = PreviewThread(url, self._cache_dir, self._settings_tab)
-        else:
-            thread = PreviewThread(
-                url, self._cache_dir, self._settings_tab, cache=False
-            )
+        thread = PreviewThread(url, self._settings_tab)
         self.preview_thread = thread
         self._preview_threads.append(thread)
-        thread.preview_ready.connect(
-            lambda ready_url, pixmap, full=is_full: self._on_preview_ready(
-                ready_url, pixmap, full
-            )
-        )
+        thread.preview_ready.connect(self._on_preview_ready)
         thread.progress.connect(self.update_progress)
-        thread.error.connect(
-            lambda message, full=is_full: self._on_preview_error(message, full)
-        )
+        thread.error.connect(self._on_preview_error)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda t=thread: self._forget_thread(t))
         thread.start()
@@ -1192,43 +1194,15 @@ class ImageModal(QDialog):
         except ValueError:
             pass
 
-    def _on_preview_ready(self, url, pixmap, is_full):
-        self.display_image(url, pixmap)
-        self._loading_full = False
-        button = getattr(self, "_load_full_btn", None)
-        if button is None:
+    def _on_preview_ready(self, url, pixmap):
+        if getattr(self, "_closed", False):
             return
-        if is_full:
-            button.hide()
-        elif self._thumbnail_url:
-            button.setText(translate("load_full_image"))
-            button.setEnabled(True)
-            button.show()
-        else:
-            button.hide()
+        self.display_image(url, pixmap)
 
-    def _on_preview_error(self, error_message, is_full):
-        self._loading_full = False
-        if not is_full and self._thumbnail_url:
-            # The thumbnail is only an optimisation: a missing or broken one
-            # must never stop the preview from opening.
-            button = getattr(self, "_load_full_btn", None)
-            if button is not None:
-                button.hide()
-            self._start_preview(self._full_url, is_full=True)
+    def _on_preview_error(self, error_message):
+        if getattr(self, "_closed", False):
             return
         self.display_error(error_message)
-        button = getattr(self, "_load_full_btn", None)
-        if button is not None and self._image_shown:
-            button.setText(translate("load_full_image"))
-            button.setEnabled(True)
-            button.show()
-
-    def load_full_image(self):
-        """Replace the thumbnail with the original file."""
-        if self._loading_full or not self._thumbnail_url:
-            return
-        self._start_preview(self._full_url, is_full=True)
 
     def update_progress(self, value):
         self._progress_bar.setValue(value)
@@ -1246,6 +1220,780 @@ class ImageModal(QDialog):
             self._label.setText(translate("error_loading_image"))
         self._progress_bar.hide()
         QMessageBox.critical(self, translate("image_load_error"), error_message)
+
+    def _release_image(self):
+        """Drop the shown pixmap instead of keeping it in a hidden modal."""
+        self._closed = True
+        self._label.clear()
+        self._progress_bar.hide()
+
+    def done(self, result):
+        self._release_image()
+        super().done(result)
+
+    def closeEvent(self, event):
+        self._release_image()
+        super().closeEvent(event)
+
+
+class PostImageEntry(NamedTuple):
+    """One image inside a post, in display order."""
+
+    name: str
+    full_url: str
+    thumbnail_url: str
+
+
+def post_image_entries(post, domain_config=None):
+    """Return the post's images in display order, without duplicates.
+
+    The main file comes first, then attachments, then images embedded in the
+    description. Pawchive's API often repeats the main file as the first
+    attachment, so entries are deduplicated by their cleaned path.
+    """
+    if not isinstance(post, dict):
+        return []
+    config = domain_config if domain_config is not None else get_domain_config("")
+    entries = []
+    seen = set()
+
+    def add(path, name=""):
+        if not path:
+            return
+        full_url = clean_file_url(str(path), config)
+        if not _looks_like_image(full_url):
+            return
+        key = urlparse(full_url).path
+        if key in seen:
+            return
+        seen.add(key)
+        thumbnail = preview_thumbnail_url(full_url, config) or full_url
+        entries.append(
+            PostImageEntry(
+                name=str(name or os.path.basename(key) or translate("not_available")),
+                full_url=full_url,
+                thumbnail_url=thumbnail,
+            )
+        )
+
+    main_file = post.get("file")
+    if isinstance(main_file, dict) and main_file.get("path"):
+        add(main_file["path"], main_file.get("name", ""))
+
+    attachments = post.get("attachments")
+    if isinstance(attachments, list):
+        for attachment in attachments:
+            if isinstance(attachment, dict) and attachment.get("path"):
+                add(attachment["path"], attachment.get("name", ""))
+
+    content = post.get("content")
+    if content:
+        soup = BeautifulSoup(str(content), "html.parser")
+        for img in soup.select("img[src]"):
+            add(str(img.get("src")), "")
+
+    return entries
+
+
+def post_description_html(post):
+    """Return the description HTML with non-text media removed.
+
+    The post's images are already listed below the description, so embedded
+    ``<img>`` tags are dropped instead of being fetched twice. Scripts and
+    frames are removed as well: QTextBrowser must only render text.
+    """
+    if not isinstance(post, dict):
+        return ""
+    content = post.get("content")
+    if not content:
+        return ""
+    try:
+        soup = BeautifulSoup(str(content), "html.parser")
+    except Exception:
+        return ""
+    for tag in soup.select("img, script, style, iframe, video, audio"):
+        tag.decompose()
+    # Content often carries inline colours meant for a light page; drop them
+    # so the dark preview stays readable. Structural tags (bold, lists, links)
+    # are left alone.
+    for tag in soup.find_all(True):
+        tag.attrs.pop("style", None)
+    if not soup.get_text(strip=True):
+        return ""
+    return str(soup)
+
+
+def _creator_api_parts(creator_url):
+    """Return ``(service, creator_id)`` parsed from a creator URL."""
+    url = str(creator_url or "").rstrip("/")
+    parts = url.split("/")
+    if len(parts) >= 3:
+        service = parts[-3].split("?")[0]
+        creator_id = parts[-1].split("?")[0]
+        if service and creator_id:
+            return service, creator_id
+    return "unknown_service", "unknown_creator"
+
+
+def fetch_post_data(post_id, creator_url, settings_tab=None, max_retries=1):
+    """Fetch one post's JSON.
+
+    Returns ``(post_dict, "")`` on success and ``(None, message)`` on failure.
+    The preview only needs the post's own record, so this is deliberately
+    narrower than the downloader's fetch-and-detect pass.
+    """
+    service, creator_id = _creator_api_parts(creator_url)
+    domain_config = get_domain_config(creator_url)
+    api_url = (
+        f"{domain_config['api_base']}/{service}/user/{creator_id}/post/{post_id}"
+    )
+    headers = get_headers().copy()
+    headers["Referer"] = domain_config["referer"]
+    try:
+        attempts = max(1, int(max_retries or 1))
+    except (TypeError, ValueError):
+        attempts = 1
+    last_error = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            response = get_session(settings_tab).get(
+                api_url, headers=headers, timeout=(15, 30)
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, dict):
+                    post = (
+                        data
+                        if "post" not in data
+                        else data.get("post", {})
+                    )
+                else:
+                    post = None
+                if isinstance(post, dict):
+                    return post, ""
+                return None, translate(
+                    "invalid_posts_data_type", type(data).__name__
+                )
+            if (
+                response.status_code == 429 or 500 <= response.status_code < 600
+            ) and attempt < attempts:
+                last_error = f"HTTP {response.status_code}"
+                time.sleep(min(2 ** (attempt - 1), 8))
+                continue
+            return None, f"HTTP {response.status_code}"
+        except Exception as e:
+            last_error = str(e)
+            if attempt < attempts:
+                time.sleep(min(2 ** (attempt - 1), 8))
+    return None, last_error or translate("not_available")
+
+
+class PostPreviewFetchThread(QThread):
+    """Fetch the post record the image list is built from."""
+
+    fetched = pyqtSignal(str, object)
+    error = pyqtSignal(str, str)
+
+    def __init__(self, post_id, creator_url, settings_tab=None, max_retries=1):
+        super().__init__()
+        self.post_id = str(post_id)
+        self.creator_url = str(creator_url or "")
+        self.settings_tab = settings_tab
+        self.max_retries = max_retries
+
+    def run(self):
+        post, message = fetch_post_data(
+            self.post_id, self.creator_url, self.settings_tab, self.max_retries
+        )
+        if post is None:
+            self.error.emit(self.post_id, message)
+        else:
+            self.fetched.emit(self.post_id, post)
+
+
+class PostImagesLoader(QObject):
+    """Background thumbnail fetcher for the post image list.
+
+    A small pool keeps the UI responsive; each worker gets its own requests
+    session via :func:`get_session`, which is per-thread by design. Images are
+    decoded to QImage in the worker and converted to QPixmap on the GUI thread.
+    Raw bytes are kept in a bounded LRU, either the Creator tab's shared
+    session cache or a private one for a standalone loader, so scrolling back
+    does not refetch.
+    """
+
+    image_ready = pyqtSignal(str, object)
+    image_failed = pyqtSignal(str, str)
+
+    def __init__(
+        self,
+        settings_tab=None,
+        max_workers=4,
+        parent=None,
+        cache=None,
+        cache_bytes=DEFAULT_PREVIEW_CACHE_BYTES,
+    ):
+        super().__init__(parent)
+        self.settings_tab = settings_tab
+        self._executor = ThreadPoolExecutor(max_workers=max(1, int(max_workers)))
+        self._lock = threading.Lock()
+        self._in_flight = set()
+        # A post preview dialog receives the Creator tab's session cache; a
+        # standalone loader (tests, one-off previews) gets a private cache.
+        self._cache = cache if cache is not None else PreviewImageCache(cache_bytes)
+        self._owns_cache = cache is None
+        self._cancelled = False
+
+    def request(self, url):
+        """Queue *url* once; cached bytes are decoded without a new request."""
+        if not url:
+            return
+        with self._lock:
+            if self._cancelled or url in self._in_flight:
+                return
+            self._in_flight.add(url)
+        cached = self._cache.get(url)
+        future = self._executor.submit(self._load, url, cached)
+        future.add_done_callback(lambda f, u=url: self._finished(u, f))
+
+    def _load(self, url, cached):
+        data = (
+            cached
+            if cached is not None
+            else _download_image_bytes(url, self.settings_tab)
+        )
+        return data, _decode_preview_qimage(data)
+
+    def _finished(self, url, future):
+        with self._lock:
+            self._in_flight.discard(url)
+        try:
+            data, image = future.result()
+        except Exception as e:
+            with self._lock:
+                cancelled = self._cancelled
+            if not cancelled:
+                self.image_failed.emit(url, str(e))
+            return
+        # Read the flag after the worker finished: stop() may have been called
+        # while this request was in flight, and a stopped loader must neither
+        # refill a cleared cache nor emit into a closed dialog.
+        with self._lock:
+            cancelled = self._cancelled
+        if data and not cancelled:
+            self._cache.store(url, data)
+        if cancelled:
+            return
+        if image is None or image.isNull():
+            self.image_failed.emit(url, translate("invalid_image_data"))
+        else:
+            self.image_ready.emit(url, image)
+
+    @property
+    def cached_bytes(self):
+        return self._cache.cached_bytes
+
+    @property
+    def cached_urls(self):
+        return self._cache.cached_urls
+
+    def stop(self):
+        with self._lock:
+            self._cancelled = True
+            self._in_flight.clear()
+        if self._owns_cache:
+            # A private cache dies with the loader.  A shared session cache is
+            # owned by the Creator tab, so closing one dialog keeps it.
+            self._cache.clear()
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+
+class _ScaledImageLabel(QLabel):
+    """A QLabel that paints its QImage scaled to the available width.
+
+    The source stays at the site's 800 px thumbnail resolution; only the
+    painted copy is sized to the row, so resizing the dialog does not reload
+    or re-decode anything.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._source = None
+        self._pixmap = None
+        self._last_height = 180
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumHeight(120)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_source(self, image):
+        self._source = image
+        self._pixmap = None
+        self._rebuild()
+
+    def release_source(self):
+        """Drop the decoded image but keep the row's height stable."""
+        self._source = None
+        self._pixmap = None
+        self.clear()
+        self.setFixedHeight(self._last_height)
+
+    def _rebuild(self):
+        if self._source is None or self._source.isNull():
+            return
+        available = self.width() if self.width() > 1 else self._source.width()
+        target_width = max(1, min(available, self._source.width()))
+        target_height = max(
+            1, round(self._source.height() * target_width / self._source.width())
+        )
+        if (
+            self._pixmap is not None
+            and self._pixmap.width() == target_width
+            and self._pixmap.height() == target_height
+        ):
+            return
+        self._last_height = target_height
+        self._pixmap = QPixmap.fromImage(
+            self._source.scaled(
+                target_width,
+                target_height,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        self.setPixmap(self._pixmap)
+        if self.height() != self._pixmap.height():
+            self.setFixedHeight(self._pixmap.height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._rebuild()
+
+
+class _PostImageRow(QWidget):
+    """One full-width image in the post list, with a caption."""
+
+    clicked = pyqtSignal(object)
+
+    def __init__(self, entry, parent=None):
+        super().__init__(parent)
+        self.entry = entry
+        self._image = None
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        self._image_label = _ScaledImageLabel()
+        self._image_label.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        self._image_label.setText(translate("loading_image_simple"))
+        self._image_label.setStyleSheet(
+            "QLabel { background: #24344F; color: #8A9BB5; border-radius: 4px; }"
+        )
+        layout.addWidget(self._image_label)
+        self._caption = QLabel(entry.name or translate("not_available"))
+        self._caption.setTextFormat(Qt.TextFormat.PlainText)
+        self._caption.setWordWrap(True)
+        self._caption.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        self._caption.setStyleSheet("QLabel { color: #8A9BB5; font-size: 11px; }")
+        layout.addWidget(self._caption)
+
+    def set_image(self, image):
+        self._image = image
+        self._image_label.setStyleSheet(
+            "QLabel { background: #24344F; border-radius: 4px; }"
+        )
+        self._image_label.set_source(image)
+
+    def release_image(self):
+        self._image = None
+        self._image_label.setStyleSheet(
+            "QLabel { background: #24344F; color: #8A9BB5; border-radius: 4px; }"
+        )
+        self._image_label.release_source()
+
+    def set_error(self, _message=""):
+        self._image = None
+        self._image_label.release_source()
+        self._image_label.setStyleSheet(
+            "QLabel { background: #3A2A2A; color: #E06C75; border-radius: 4px; }"
+        )
+        self._image_label.setText(translate("post_preview_image_failed"))
+
+    @property
+    def has_image(self):
+        return self._image is not None
+
+    @property
+    def image(self):
+        return self._image
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.entry)
+        super().mouseReleaseEvent(event)
+
+
+class PostPreviewDialog(QDialog):
+    """Show a post's description and every image in a scrollable list."""
+
+    post_loaded = pyqtSignal(str, object)
+
+    def __init__(
+        self,
+        post_id,
+        creator_url,
+        parent=None,
+        settings_tab=None,
+        post_data=None,
+        max_retries=1,
+        thread_registry=None,
+        image_cache=None,
+    ):
+        super().__init__(parent)
+        self._post_id = str(post_id)
+        self._creator_url = str(creator_url or "")
+        self._settings_tab = settings_tab
+        self._max_retries = max_retries
+        self._thread_registry = thread_registry
+        self._image_cache = image_cache
+        self._entries = []
+        self._rows = []
+        self._row_by_url = {}
+        self._loaded_urls = set()
+        self._failed_urls = set()
+        self._loader = None
+        self._fetch_thread = None
+        self._closed = False
+
+        self.setWindowTitle(translate("post_preview_title"))
+        self.setModal(True)
+        self.resize(1000, 800)
+        self._build_ui()
+
+        if isinstance(post_data, dict) and post_data:
+            self._populate(post_data)
+        else:
+            self._start_fetch()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        header = QVBoxLayout()
+        self._title_label = QLabel("")
+        self._title_label.setTextFormat(Qt.TextFormat.PlainText)
+        self._title_label.setWordWrap(True)
+        self._title_label.setStyleSheet(
+            "QLabel { color: #FFFFFF; font-size: 16px; font-weight: bold; }"
+        )
+        header.addWidget(self._title_label)
+        self._meta_label = QLabel("")
+        self._meta_label.setTextFormat(Qt.TextFormat.PlainText)
+        self._meta_label.setStyleSheet("QLabel { color: #8A9BB5; }")
+        header.addWidget(self._meta_label)
+        self._status_label = QLabel("")
+        self._status_label.setTextFormat(Qt.TextFormat.PlainText)
+        self._status_label.setStyleSheet("QLabel { color: #8A9BB5; }")
+        header.addWidget(self._status_label)
+        layout.addLayout(header)
+
+        self._description = QTextBrowser()
+        self._description.setOpenExternalLinks(True)
+        self._description.setMinimumHeight(48)
+        self._description.setStyleSheet(
+            "QTextBrowser { background: #24344F; color: #D7E1F0; "
+            "border: 1px solid #3A4B6A; border-radius: 5px; padding: 6px; }"
+        )
+        self._description.hide()
+
+        self._error_label = QLabel("")
+        self._error_label.setTextFormat(Qt.TextFormat.PlainText)
+        self._error_label.setWordWrap(True)
+        self._error_label.setStyleSheet("QLabel { color: #E06C75; }")
+        self._error_label.hide()
+        layout.addWidget(self._error_label)
+
+        self._retry_btn = QPushButton(translate("post_preview_retry"))
+        self._retry_btn.clicked.connect(self._start_fetch)
+        self._retry_btn.hide()
+        layout.addWidget(self._retry_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._scroll.setStyleSheet(
+            "QScrollArea { background: transparent; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
+        )
+        self._container = QWidget()
+        self._rows_layout = QVBoxLayout(self._container)
+        self._rows_layout.setContentsMargins(4, 4, 4, 4)
+        self._rows_layout.setSpacing(14)
+        self._scroll.setWidget(self._container)
+        self._scroll.verticalScrollBar().valueChanged.connect(self._request_visible)
+
+        # The description and the image list share the space through a
+        # vertical splitter: the description opens at roughly half its old
+        # fixed height and the user can drag the divider to change it.
+        self._splitter = QSplitter(Qt.Orientation.Vertical)
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.setHandleWidth(6)
+        self._splitter.setStyleSheet(
+            "QSplitter::handle:vertical { background: #3A4B6A; height: 5px; }"
+        )
+        self._splitter.addWidget(self._description)
+        self._splitter.addWidget(self._scroll)
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setSizes([60, 600])
+        layout.addWidget(self._splitter, stretch=1)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+        self._close_btn = QPushButton(translate("close"))
+        self._close_btn.clicked.connect(self.accept)
+        close_row.addWidget(self._close_btn)
+        layout.addLayout(close_row)
+
+
+    def _start_fetch(self):
+        self._error_label.hide()
+        self._retry_btn.hide()
+        self._status_label.setText(translate("loading_post"))
+        thread = self._fetch_thread
+        if thread is not None and thread.isRunning():
+            return
+        thread = PostPreviewFetchThread(
+            self._post_id, self._creator_url, self._settings_tab, self._max_retries
+        )
+        self._fetch_thread = thread
+        thread.fetched.connect(self._on_post_fetched)
+        thread.error.connect(self._on_post_error)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread: self._forget_fetch(t))
+        registry = self._thread_registry
+        if registry is not None:
+            registry.append(thread)
+            thread.finished.connect(
+                lambda t=thread, r=registry: r.remove(t) if t in r else None
+            )
+        thread.start()
+
+    def _forget_fetch(self, thread):
+        if self._fetch_thread is thread:
+            self._fetch_thread = None
+
+    def _on_post_fetched(self, post_id, post):
+        self.post_loaded.emit(post_id, post)
+        if getattr(self, "_closed", False):
+            # The user closed the dialog while the API request was in flight;
+            # the tab still caches the record, but there is no list to build.
+            return
+        self._populate(post)
+
+    def _on_post_error(self, post_id, message):
+        if getattr(self, "_closed", False):
+            return
+        self._status_label.setText("")
+        self._error_label.setText(translate("post_preview_load_failed", message))
+        self._error_label.show()
+        self._retry_btn.show()
+
+    def _clear_rows(self):
+        if self._loader is not None:
+            self._loader.stop()
+            self._loader.deleteLater()
+            self._loader = None
+        # Rows hold decoded QImages and scaled QPixmaps.  Drop them now:
+        # deleteLater() only destroys the widgets on the next event-loop pass,
+        # and the dialog itself is a Qt child of the Creator tab.
+        for row in self._rows:
+            try:
+                row.release_image()
+            except RuntimeError:
+                pass
+        self._rows = []
+        self._row_by_url.clear()
+        self._entries = []
+        self._loaded_urls.clear()
+        self._failed_urls.clear()
+        while self._rows_layout.count():
+            item = self._rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _populate(self, post):
+        self._clear_rows()
+        title = str(post.get("title") or "").strip()
+        self._title_label.setText(title or translate("not_available"))
+        raw_published = str(post.get("published") or post.get("added") or "").strip()
+        published = iso_to_local_date(raw_published) or raw_published
+        domain_config = get_domain_config(self._creator_url)
+        self._entries = post_image_entries(post, domain_config)
+        meta_parts = []
+        if published:
+            meta_parts.append(published)
+        if self._entries:
+            meta_parts.append(
+                translate("post_preview_images_count", len(self._entries))
+            )
+        self._meta_label.setText(" · ".join(meta_parts))
+
+        description = post_description_html(post)
+        if description:
+            self._description.setHtml(description)
+            self._description.show()
+            QTimer.singleShot(0, self._fit_description)
+        else:
+            self._description.hide()
+
+        if not self._entries:
+            self._status_label.setText(translate("post_preview_no_images"))
+            return
+
+        self._status_label.setText(
+            translate("post_preview_loading_images", 0, len(self._entries))
+        )
+        self._loader = PostImagesLoader(
+            self._settings_tab,
+            max_workers=4,
+            parent=self,
+            cache=self._image_cache,
+        )
+        self._loader.image_ready.connect(self._on_image_ready)
+        self._loader.image_failed.connect(self._on_image_failed)
+
+        for entry in self._entries:
+            row = _PostImageRow(entry)
+            row.clicked.connect(self._open_image)
+            self._rows_layout.addWidget(row)
+            self._rows.append(row)
+            self._row_by_url[entry.thumbnail_url] = row
+        self._rows_layout.addStretch(1)
+
+        if len(self._entries) <= 8:
+            for entry in self._entries:
+                self._loader.request(entry.thumbnail_url)
+        else:
+            QTimer.singleShot(0, self._request_visible)
+
+    def _fit_description(self):
+        """Open the description at its content height, capped at 120 px."""
+        if self._description.isHidden():
+            return
+        document = self._description.document()
+        width = self._description.viewport().width()
+        if width <= 1:
+            width = max(240, self.width() - 40)
+        document.setTextWidth(width)
+        content_height = int(document.size().height()) + 18
+        target = max(56, min(content_height, 120))
+        total = self._splitter.height()
+        if total <= 1:
+            total = 600
+        self._splitter.setSizes([target, max(1, total - target)])
+
+
+    def _request_visible(self):
+        if self._loader is None or not self._rows:
+            return
+        if not any(row.geometry().height() > 0 for row in self._rows):
+            # The layout has not run yet: load the first screen and let the
+            # next call (after layout) apply the real viewport window.
+            for index in range(min(len(self._rows), 8)):
+                self._loader.request(self._entries[index].thumbnail_url)
+            return
+        scroll_y = self._scroll.verticalScrollBar().value()
+        viewport_height = max(1, self._scroll.viewport().height())
+        top = scroll_y - viewport_height
+        bottom = scroll_y + viewport_height * 2
+        visible = []
+        for index, row in enumerate(self._rows):
+            geometry = row.geometry()
+            if geometry.bottom() >= top and geometry.top() <= bottom:
+                visible.append(index)
+        for index in visible:
+            row = self._rows[index]
+            if not row.has_image:
+                self._loader.request(self._entries[index].thumbnail_url)
+        if visible:
+            keep_from = max(0, visible[0] - 20)
+            keep_to = min(len(self._rows) - 1, visible[-1] + 20)
+            for index, row in enumerate(self._rows):
+                if (index < keep_from or index > keep_to) and row.has_image:
+                    row.release_image()
+
+    def _on_image_ready(self, url, image):
+        row = self._row_by_url.get(url)
+        if row is None:
+            return
+        row.set_image(image)
+        self._loaded_urls.add(url)
+        self._failed_urls.discard(url)
+        self._update_status()
+        QTimer.singleShot(0, self._request_visible)
+
+    def _on_image_failed(self, url, message):
+        row = self._row_by_url.get(url)
+        if row is not None:
+            row.set_error(message)
+        self._failed_urls.add(url)
+        self._update_status()
+
+    def _update_status(self):
+        total = len(self._entries)
+        loaded = len(self._loaded_urls)
+        failed = len(self._failed_urls)
+        if total and loaded + failed >= total and failed:
+            self._status_label.setText(
+                translate("post_preview_images_failed", failed, total)
+            )
+        elif total and loaded >= total:
+            self._status_label.setText(
+                translate("post_preview_images_count", total)
+            )
+        else:
+            self._status_label.setText(
+                translate("post_preview_loading_images", loaded, total)
+            )
+
+    def _open_image(self, entry):
+        row = self._row_by_url.get(entry.thumbnail_url)
+        initial = row.image if row is not None else None
+        modal = ImageModal(
+            entry.thumbnail_url,
+            self,
+            settings_tab=self._settings_tab,
+            initial_image=initial,
+        )
+        try:
+            modal.exec()
+        finally:
+            delete_later = getattr(modal, "deleteLater", None)
+            if delete_later is not None:
+                delete_later()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._request_visible)
+
+    def done(self, result):
+        self._shutdown()
+        super().done(result)
+
+    def closeEvent(self, event):
+        self._shutdown()
+        super().closeEvent(event)
+
+    def _shutdown(self):
+        """Stop loading and drop every decoded image before the dialog hides."""
+        self._closed = True
+        self._clear_rows()
 
 
 # Block-level HTML elements render as separate lines/blocks, so they stay
@@ -4413,11 +5161,20 @@ class CreatorDownloaderTab(QWidget):
         # Guards the end-of-run bookkeeping so a late cleanup_thread pass
         # cannot re-finalise a run that already finalised itself.
         self._run_finished = False
-        self.cache_dir = self._parent.cache_folder if self._parent else ""
         self.other_files_dir = self._parent.other_files_folder if self._parent else ""
         self.current_creator_url = None
         self.all_files_map = {}
         self.checked_urls = {}
+        # (creator_url, post_id) -> the post record last shown in the preview
+        # dialog, so reopening a post does not hit the API again.  OrderedDict
+        # lets a cache hit refresh its position for LRU eviction.
+        self._post_preview_cache = OrderedDict()
+        # One bounded byte cache for every post preview in this session.  Each
+        # dialog's loader reads and writes it; switching creators clears it.
+        self._preview_image_cache = PreviewImageCache(DEFAULT_PREVIEW_CACHE_BYTES)
+        # Post preview fetches outlive their dialog when the user closes it
+        # before the API answers; the tab keeps them alive until finished.
+        self._preview_fetch_threads = []
         self.current_file_index = -1
         self.active_threads = []
         # Threads that were stopped but were still running when their last
@@ -4540,7 +5297,6 @@ class CreatorDownloaderTab(QWidget):
         # files), for the "open folder" button. None until it is confirmed.
         self._current_creator_folder = None
         self.files_to_posts_map = {}
-        self.cache_dir = ensure_directory(self.cache_dir, "cache folder")
         self.other_files_dir = ensure_directory(
             self.other_files_dir, "Other Files folder"
         )
@@ -5224,7 +5980,7 @@ class CreatorDownloaderTab(QWidget):
         # old eye button.  Both wirings call the same handler: the per-row
         # widget handler catches clicks landing on the row's own children,
         # this one catches anything that reaches the view.
-        self.creator_post_list.itemDoubleClicked.connect(self.preview_thumbnail)
+        self.creator_post_list.itemDoubleClicked.connect(self.preview_post)
         post_list_layout.addWidget(self.creator_post_list)
 
         # Counters row: the post count on the left, with the creator-level
@@ -6071,6 +6827,7 @@ class CreatorDownloaderTab(QWidget):
                         self.post_url_map = {}
                         self.checked_urls = {}
                         self.all_files_map = {}
+                        self._clear_preview_caches()
                         self.current_creator_url = None
                         self._clear_filetype_selection()
                         self._reset_found_extensions()
@@ -6155,7 +6912,13 @@ class CreatorDownloaderTab(QWidget):
             translate("log_info", translate("viewing_creator", url)), "INFO"
         )
 
+        previous_creator_url = self.current_creator_url
         self.current_creator_url = url
+        if (previous_creator_url or "").rstrip("/") != str(url).rstrip("/"):
+            # Preview caches describe one creator's posts; holding them after
+            # switching wastes memory and could show stale records.  Clear the
+            # shared thumbnail LRU and the post records together.
+            self._clear_preview_caches()
         self.checked_urls.clear()
         self.posts_to_download = []
         self._post_link_selection_pending = False
@@ -8185,36 +8948,110 @@ class CreatorDownloaderTab(QWidget):
         otherwise open a second preview for the same gesture.
         """
         event.accept()
-        self.preview_thumbnail(item)
+        self.preview_post(item)
 
-    def preview_thumbnail(self, item):
-        """Preview the thumbnail of a post row (double-click action)."""
+    def preview_post(self, item):
+        """Open the full post preview for a list row (double-click action).
+
+        The row's stored post id is what matters: a post can hold images in
+        its attachments even when its representative file is a video or
+        missing, so the old single-image gate no longer applies here.
+        """
         if item is None:
             return
+        post_id = item.data(Qt.UserRole + 1)
         thumbnail_url = item.data(Qt.UserRole)
-        if not thumbnail_url:
-            # Posts without a thumbnail have nothing to show.
+        if not post_id:
+            # A row without an id (older data, or a test fixture): fall back
+            # to the single-image preview when there is an image to show.
+            if thumbnail_url and _looks_like_image(thumbnail_url):
+                modal = ImageModal(
+                    str(thumbnail_url),
+                    self,
+                    settings_tab=getattr(self._parent, "settings_tab", None),
+                )
+                try:
+                    modal.exec()
+                finally:
+                    delete_later = getattr(modal, "deleteLater", None)
+                    if delete_later is not None:
+                        delete_later()
             return
-        if (
-            str(thumbnail_url)
-            .lower()
-            .endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
-        ):
-            modal = ImageModal(
-                str(thumbnail_url),
-                self.cache_dir,
-                self,
-                settings_tab=getattr(self._parent, "settings_tab", None),
-            )
-            modal.exec()
-        else:
+        creator_url = getattr(self, "current_creator_url", None)
+        if not creator_url:
             self.append_log_to_console(
-                translate(
-                    "log_warning",
-                    translate("viewing_not_supported_for_url", thumbnail_url),
-                ),
+                translate("log_warning", translate("no_current_creator_url_set")),
                 "WARNING",
             )
+            return
+        settings_tab = getattr(self._parent, "settings_tab", None)
+        post_data = self._cached_post_preview_data(creator_url, post_id)
+        max_retries = 1
+        if settings_tab is not None and hasattr(
+            settings_tab, "get_post_data_max_retries"
+        ):
+            try:
+                max_retries = min(
+                    max(1, int(settings_tab.get_post_data_max_retries())), 3
+                )
+            except (TypeError, ValueError):
+                max_retries = 1
+        dialog = PostPreviewDialog(
+            str(post_id),
+            creator_url,
+            self,
+            settings_tab=settings_tab,
+            post_data=post_data,
+            max_retries=max_retries,
+            thread_registry=self._preview_fetch_threads,
+            image_cache=getattr(self, "_preview_image_cache", None),
+        )
+        dialog.post_loaded.connect(
+            lambda pid, post, cu=creator_url: self._remember_post_preview_data(
+                pid, post, cu
+            )
+        )
+        try:
+            dialog.exec()
+        finally:
+            # The dialog is a Qt child of this tab; without this it would stay
+            # alive (with its rows and loader) for the rest of the session.
+            delete_later = getattr(dialog, "deleteLater", None)
+            if delete_later is not None:
+                delete_later()
+
+    def _remember_post_preview_data(self, post_id, post, creator_url=None):
+        """Cache a fetched post for the next time its preview is opened."""
+        creator_url = creator_url or getattr(self, "current_creator_url", None)
+        if not creator_url:
+            return
+        key = self._preview_cache_key(creator_url, post_id)
+        self._post_preview_cache[key] = post
+        self._post_preview_cache.move_to_end(key)
+        while len(self._post_preview_cache) > POST_PREVIEW_CACHE_LIMIT:
+            self._post_preview_cache.popitem(last=False)
+
+    @staticmethod
+    def _preview_cache_key(creator_url, post_id):
+        """Normalise the creator URL so trailing slashes share one entry."""
+        return (str(creator_url or "").rstrip("/"), str(post_id))
+
+    def _cached_post_preview_data(self, creator_url, post_id):
+        """Return a cached post record, marking it most recently used."""
+        key = self._preview_cache_key(creator_url, post_id)
+        post = self._post_preview_cache.get(key)
+        if post is not None:
+            self._post_preview_cache.move_to_end(key)
+        return post
+
+    def _clear_preview_caches(self):
+        """Drop cached post records and preview image bytes."""
+        post_cache = getattr(self, "_post_preview_cache", None)
+        if post_cache is not None:
+            post_cache.clear()
+        image_cache = getattr(self, "_preview_image_cache", None)
+        if image_cache is not None:
+            image_cache.clear()
 
     def on_selection_changed(self):
         # Reset previous styles

@@ -1,10 +1,9 @@
 """Where the app keeps its own working data, apart from the user's posts.
 
-The Creator tab writes thumbnails and small SQLite databases (file hashes,
-download history, saved config profiles) while it works. Those are the app's
-business, not part of the collection, so they live next to the application in
-``extras``: one folder to back up or move, and nothing scattered through the
-Save Directory.
+The Creator tab writes small SQLite databases (file hashes, download history,
+saved config profiles) while it works. Those are the app's business, not part
+of the collection, so they live next to the application in ``extras``: one
+folder to back up or move, and nothing scattered through the Save Directory.
 
 The location is fixed - there is no setting for it any more. Two escape hatches
 remain: ``KEMONO_DOWNLOADER_DATA_DIR`` (tests, debugging) and the old per-user
@@ -27,12 +26,11 @@ LEGACY_FOLDER = "Kemono Downloader"
 # else without touching the real profile. Not a documented user setting.
 DATA_DIR_ENV = "KEMONO_DOWNLOADER_DATA_DIR"
 
-# The two folders the app needs inside the data directory.
-CACHE_FOLDER = "Cache"
+# The folder the app needs inside the data directory.
 OTHER_FILES_FOLDER = "Other Files"
 
 # Resolved once per process: the writability probe writes a file, and every
-# cache/history lookup asks for the path.
+# data/history lookup asks for the path.
 _resolved_directory = None
 
 
@@ -150,11 +148,6 @@ def data_directory(configured=None):
         migrate_legacy_data(resolved)
         _resolved_directory = resolved
     return _resolved_directory
-
-
-def cache_dir(configured=None):
-    """Return the thumbnail cache folder."""
-    return os.path.join(data_directory(configured), CACHE_FOLDER)
 
 
 def other_files_dir(configured=None):

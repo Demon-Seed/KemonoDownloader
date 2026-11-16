@@ -23,7 +23,6 @@ from kemonodownloader import kd_paths
 from kemonodownloader.creator_downloader import CreatorDownloaderTab
 from kemonodownloader.kd_language import translate
 from kemonodownloader.kd_settings import GITHUB_REPO_URL, SettingsTab
-from kemonodownloader.preview_cache import prune_preview_cache_async
 
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
@@ -71,12 +70,9 @@ class KemonoDownloader(QMainWindow):
         self.settings_tab.download_started.connect(self.disable_other_tabs)
         self.settings_tab.download_finished.connect(self.enable_other_tabs)
         # Posts go straight into the configured Save Directory; the app's own
-        # working files (cache, databases) live in the Data Directory so a
-        # library folder only ever contains saved posts.
+        # working files (databases and saved config profiles) live in the Data
+        # Directory so a library folder only ever contains saved posts.
         self.download_folder = self.settings_tab.settings["base_directory"]
-        self.cache_folder = kd_paths.cache_dir(
-            self.settings_tab.settings.get("data_directory")
-        )
         self.other_files_folder = kd_paths.other_files_dir(
             self.settings_tab.settings.get("data_directory")
         )
@@ -139,7 +135,6 @@ class KemonoDownloader(QMainWindow):
     def ensure_folders_exist(self):
         for folder in [
             self.download_folder,
-            self.cache_folder,
             self.other_files_folder,
         ]:
             kd_paths.ensure_directory(folder, "application folder")
@@ -358,11 +353,6 @@ def main():
     load_bundled_fonts()
     window = KemonoDownloader()
     window.show()
-    # The preview cache is bounded by size; trim it off the UI thread so
-    # startup never waits on a large Cache folder.
-    cache_folder = getattr(window, "cache_folder", None)
-    if cache_folder:
-        prune_preview_cache_async(cache_folder)
     sys.exit(app.exec())
 
 

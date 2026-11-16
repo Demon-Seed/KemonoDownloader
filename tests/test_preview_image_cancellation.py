@@ -16,7 +16,7 @@ def test_preview_thread_error_emits_error(monkeypatch):
     def on_error(msg):
         captured["err"] = msg
 
-    pt = cd.PreviewThread("https://example.com/img.jpg", "/tmp", settings_tab=None)
+    pt = cd.PreviewThread("https://example.com/img.jpg", settings_tab=None)
     pt.error.connect(on_error)
     pt.run()
     assert "err" in captured
@@ -46,7 +46,7 @@ def test_image_modal_display_error_shows_message(monkeypatch):
 
     monkeypatch.setattr(cd, "PreviewThread", FakePreview)
 
-    modal = cd.ImageModal("https://example.com/img.jpg", "/tmp", parent=None)
+    modal = cd.ImageModal("https://example.com/img.jpg", parent=None)
 
     # Replace QMessageBox.critical to avoid UI modal
     monkeypatch.setattr(

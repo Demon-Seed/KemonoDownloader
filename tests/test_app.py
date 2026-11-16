@@ -75,7 +75,7 @@ class TestKemonoDownloader:
             # Posts go straight into the Save Directory (the mocked "/tmp").
             assert window.download_folder == "/tmp"
             # The app's own files live in the Data Directory instead.
-            assert window.cache_folder != window.download_folder
+            assert not hasattr(window, "cache_folder")
             assert window.other_files_folder != window.download_folder
         finally:
             window.deleteLater()
