@@ -6,7 +6,7 @@ import warnings
 
 import qtawesome as qta
 from bs4 import MarkupResemblesLocatorWarning
-from PyQt6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation, Qt
+from PyQt6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation, Qt, QTimer
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontDatabase, QIcon, QPalette
 from PyQt6.QtWidgets import (
     QApplication,
@@ -23,6 +23,7 @@ from kemonodownloader import kd_paths
 from kemonodownloader.creator_downloader import CreatorDownloaderTab
 from kemonodownloader.kd_language import translate
 from kemonodownloader.kd_settings import GITHUB_REPO_URL, SettingsTab
+from kemonodownloader.kd_theme import MENU_STYLE, TOOLTIP_STYLE, WINDOW_BG
 
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
@@ -155,7 +156,7 @@ class KemonoDownloader(QMainWindow):
         main_layout = QVBoxLayout(main_widget)
         main_layout.setContentsMargins(15, 15, 15, 15)
         main_layout.setSpacing(15)
-        main_widget.setStyleSheet("background: #1A2A44;")
+        main_widget.setStyleSheet(f"background: {WINDOW_BG};")
 
         # Tab Widget
         self.tabs = QTabWidget()
@@ -260,6 +261,13 @@ class KemonoDownloader(QMainWindow):
     def log(self, message):
         self.status_label.setText(message)
 
+    def closeEvent(self, event):
+        """Stop background helpers that are not part of a download run."""
+        stop = getattr(self.creator_tab, "stop_name_lookups", None)
+        if callable(stop):
+            stop()
+        super().closeEvent(event)
+
 
 # Qt's QTipLabel expires after 10 s plus 40 ms per character past 100 (see
 # QTipLabel::restartExpireTimer), and the style hints that used to tune this
@@ -269,9 +277,18 @@ class KemonoDownloader(QMainWindow):
 # the pointer actually rests on the widget.
 TOOLTIP_HOVER_TIME = 2**31 - 1  # ms, effectively forever
 
+# How long the pointer must rest on a widget before its tooltip appears. Qt's
+# own wake-up delay is platform-dependent (~700 ms on Windows) and grows again
+# right after another tip closes, which made hover help feel inconsistent. The
+# filter below times the tip itself so every widget answers in the same 350 ms.
+TOOLTIP_HOVER_DELAY = 350  # ms
+# Movement smaller than this does not restart the rest timer, so a jittery
+# hand cannot postpone the tip forever.
+TOOLTIP_MOVE_THRESHOLD = 2  # px
+
 
 class _TooltipLifetimeFilter(QObject):
-    """Keep a tooltip on screen for as long as its widget is hovered."""
+    """Show hover help promptly, then keep it up while the widget is hovered."""
 
     # QTipLabel gives itself this object name; hiding it directly skips Qt's
     # 300 ms fade-out timer, which made tooltips trail behind the pointer.
@@ -281,10 +298,71 @@ class _TooltipLifetimeFilter(QObject):
         super().__init__(parent)
         self._hide = hide
         self._owner = None
+        # A clicked widget keeps its tip hidden until the pointer leaves, so a
+        # tooltip never pops back up under a resting cursor.
+        self._suppressed = None
+        # True while the tip is on screen, so moving within the widget does not
+        # restart the rest timer (which would hide and re-show it).
+        self._shown = False
+        self._arm_pos = None
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(TOOLTIP_HOVER_DELAY)
+        self._timer.timeout.connect(self._show_now)
+
+    def _arm(self, widget, moved=False):
+        """(Re)start the rest timer for *widget*.
+
+        *moved* is True for HoverMove: tiny jitter does not restart the clock,
+        but any real movement puts the tip back to waiting for the pointer to
+        rest again.
+        """
+        if widget is not self._owner:
+            self._hide_now()
+            self._owner = widget
+        if self._shown:
+            return
+        pos = QCursor.pos()
+        if moved and self._arm_pos is not None:
+            if (pos - self._arm_pos).manhattanLength() < TOOLTIP_MOVE_THRESHOLD:
+                return
+        self._arm_pos = pos
+        self._timer.start()
+
+    def _show_now(self):
+        """Show the hovered widget's tip now, at the pointer."""
+        owner = self._owner
+        if owner is None or owner is self._suppressed:
+            return
+        try:
+            text = owner.toolTip()
+        except RuntimeError:  # owner deleted while the timer ran
+            self._owner = None
+            return
+        if not text:
+            return
+        self._shown = True
+        # QWidget::event() passes toolTipDuration() to QToolTip::showText(),
+        # so this stops Qt's own expiry while the pointer rests on the widget;
+        # Leave hides the tip below.
+        owner.setToolTipDuration(TOOLTIP_HOVER_TIME)
+        QToolTip.showText(QCursor.pos(), text, owner)
 
     def _hide_now(self):
         """Hide the tooltip without waiting for Qt's fade-out timer."""
+        if (
+            not self._shown
+            and self._owner is None
+            and not self._timer.isActive()
+            and not QToolTip.isVisible()
+        ):
+            # Nothing on screen and nothing pending: keyboards and wheels fire
+            # this often, so skip the top-level walk entirely.
+            return
+        self._timer.stop()
         self._owner = None
+        self._shown = False
+        self._arm_pos = None
         self._hide()
         for widget in QApplication.topLevelWidgets():
             if widget.objectName() == self.TOOLTIP_OBJECT_NAME and widget.isVisible():
@@ -292,26 +370,77 @@ class _TooltipLifetimeFilter(QObject):
 
     def eventFilter(self, obj, event):
         kind = event.type()
-        if kind == QEvent.Type.ToolTip:
-            self._owner = obj if isinstance(obj, QWidget) else None
-            if self._owner is not None:
-                # QWidget::event() passes toolTipDuration() to
-                # QToolTip::showText(), so this stops Qt's own expiry while the
-                # pointer rests on the widget; Leave hides the tip below.
+        if kind == QEvent.Type.Polish:
+            if isinstance(obj, QWidget) and not obj.testAttribute(
+                Qt.WidgetAttribute.WA_Hover
+            ):
+                # Hover events are what tell the filter that the pointer is
+                # still resting on a widget after a scroll, key press or tiny
+                # move - Enter alone only fires when the widget is entered.
+                obj.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        elif kind == QEvent.Type.Enter:
+            if isinstance(obj, QWidget):
+                try:
+                    text = obj.toolTip() if obj.isEnabled() else ""
+                except RuntimeError:
+                    text = ""
+                if obj is self._suppressed:
+                    # A click can make Qt re-enter the widget under the
+                    # pointer; that is the same hover, so stay quiet until a
+                    # real Leave arrives.
+                    return False
+                if text:
+                    self._arm(obj)
+        elif kind in (QEvent.Type.HoverEnter, QEvent.Type.HoverMove):
+            if isinstance(obj, QWidget) and obj is not self._suppressed:
+                try:
+                    text = obj.toolTip() if obj.isEnabled() else ""
+                except RuntimeError:
+                    text = ""
+                if text:
+                    self._arm(obj, moved=True)
+        elif kind == QEvent.Type.ToolTip:
+            if isinstance(obj, QWidget):
+                if obj is self._suppressed:
+                    # Clicked or typed on: stay quiet until the pointer leaves.
+                    return True
+                if obj is self._owner:
+                    # Hover tracking already owns this hover; never show on
+                    # Qt's platform-dependent schedule.
+                    return True
+                if obj.underMouse():
+                    # Qt's tip can wake before Enter reaches the filter (its
+                    # event is "awake" right after another tip), so arm the
+                    # timer instead of showing instantly. Whichever event
+                    # arrives first, the tip waits the same 350 ms.
+                    self._arm(obj)
+                    return True
+                # A synthetic help event with no hover behind it: let Qt show
+                # it, but track the owner so Leave still hides it.
+                self._owner = obj
                 obj.setToolTipDuration(TOOLTIP_HOVER_TIME)
-        elif kind == QEvent.Type.Leave and obj is self._owner:
-            # Moving off the widget means the tip should vanish immediately.
-            self._hide_now()
+        elif kind in (QEvent.Type.Leave, QEvent.Type.HoverLeave):
+            if obj is self._owner:
+                # Moving off the widget means the tip should vanish at once.
+                self._hide_now()
+            if obj is self._suppressed:
+                self._suppressed = None
         elif kind in (
             QEvent.Type.MouseButtonPress,
             QEvent.Type.MouseButtonDblClick,
-            QEvent.Type.Wheel,
-            QEvent.Type.KeyPress,
         ):
+            self._suppressed = self._owner
+            self._hide_now()
+        elif kind in (QEvent.Type.Wheel, QEvent.Type.KeyPress):
+            # Do not suppress: the next movement over the widget arms the tip
+            # again, so its delay stays the same after scrolling or typing.
             self._hide_now()
         elif kind == QEvent.Type.Hide and obj is self._owner:
             # The owner is gone, so nothing is being hovered any more.
             self._hide_now()
+        elif kind == QEvent.Type.Hide and obj is self._suppressed:
+            # Drop the reference to a hidden widget so it is not held alive.
+            self._suppressed = None
         return False
 
 
@@ -348,6 +477,11 @@ def disable_ui_effects():
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    # Standard edit menus on plain line edits are shown by Qt itself with
+    # popup(), so no per-widget code can style them. Application-wide rules
+    # give every context menu the same dark surface and low-opacity hover
+    # highlight, and every tooltip the same dark background.
+    app.setStyleSheet(MENU_STYLE + TOOLTIP_STYLE)
     disable_ui_effects()
     install_tooltip_lifetime(app)
     load_bundled_fonts()

@@ -6,8 +6,7 @@ The application ships a single language, so ``STRINGS`` is a flat
 
 STRINGS = {
     "add_creator_and_load_tooltip": "Add this creator and load its posts",
-    "add_links_from_file": "Add links from .txt file. Each link should be on a new line.",
-    "add_links_from_file_title": "Import from TXT File.",
+    "add_links_from_file_title": "Import from TXT File",
     "added_attachment": "Added attachment: {0}",
     "added_content_image": "Added content image: {0}",
     "added_main_file": "Added main file: {0}",
@@ -59,6 +58,7 @@ STRINGS = {
     "config_saved_title": "Config Saved",
     "config_unavailable": "Saved configs are unavailable - check the Data Directory.",
     "content_images": "Content Images",
+    "copy_link": "Copy Link",
     "created_directory": "Created directory: {0}",
     "creator_config_loaded": "Using the saved config for creator {0}.",
     "creator_config_saved_log": "Config saved for creator {0}.",
@@ -201,6 +201,7 @@ STRINGS = {
     "language_changed": "Language changed to English",
     "last_downloaded_creator": "Last Downloaded from Creator: {0}",
     "last_page_reached_with_counts": "Last page reached (received {0} posts, expected {1}). Total posts fetched: {2}",
+    "link_copied": "Copied link: {0}",
     "link_removed": "Link ({0}) is removed from the queue.",
     "loading_image": "Loading Image... ({0}%)",
     "loading_image_simple": "Loading Image...",

@@ -15,8 +15,9 @@
 * Customizable skip post folder option for low-image-count posts.<br>
   * Posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.<br>
     * Option to download posts with and archive file to a subfolder regardless of 'Skip Post Folder' value.<br>
-* Multi-URL input: paste one creator or post URL per line to add several to the queue at once.<br>
+* Creator Queue input row: type or paste one creator or post URL under the queue and press Enter or Space to add it; the eye button adds it and opens the creator, and double-clicking a queued row opens it too.<br>
   * Pasted post links are normalized to their creator, and only the linked posts are auto-selected.<br>
+  * Right-click the queue to import a .txt file of links (one per line) or copy a queued link.<br>
 * 'Data Directory' setting: keeps the app's own working files (databases and saved config profiles) out of the Save Directory.<br>
 * Filename templates: Split into two, 'In Post Folder' and 'In Creator Folder', using placeholders such as `{file_number}`, `{post_id}`, `{post_date}`, `{file_index}`, `{creator_name}` and `{service}`.<br>
 * 'Dedup when filename is taken' (Off/On): saves a second file as `name_1`, `name_2` instead of overwriting it.<br>

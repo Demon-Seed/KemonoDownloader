@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
 
 from kemonodownloader import kd_paths
 from kemonodownloader.kd_language import language_manager, translate
+from kemonodownloader.kd_theme import scoped
 
 # Main repository (VoxDroid) used by the in-app update/repository links.
 GITHUB_REPO_URL = "https://github.com/VoxDroid/KemonoDownloader"
@@ -448,7 +449,9 @@ class SettingsTab(QWidget):
         self.directory_label = QLabel()
         folder_layout.addWidget(self.directory_label, 0, 0)
         self.directory_input = QLineEdit(self.temp_settings["base_directory"])
-        self.directory_input.setStyleSheet("padding: 5px; border-radius: 5px;")
+        self.directory_input.setStyleSheet(
+            scoped("QLineEdit", "padding: 5px; border-radius: 5px;")
+        )
         self.directory_input.textChanged.connect(
             lambda: self.update_temp_setting(
                 "base_directory", self.directory_input.text()
@@ -458,7 +461,10 @@ class SettingsTab(QWidget):
 
         self.browse_button = QPushButton()
         self.browse_button.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px;"
+            scoped(
+                "QPushButton",
+                "background: #4A5B7A; padding: 5px; border-radius: 5px;",
+            )
         )
         self.browse_button.clicked.connect(self.browse_directory)
         folder_layout.addWidget(self.browse_button, 0, 2)
@@ -472,13 +478,19 @@ class SettingsTab(QWidget):
         self.data_directory_input.setReadOnly(True)
         self.data_directory_input.setEnabled(False)
         self.data_directory_input.setStyleSheet(
-            "padding: 5px; border-radius: 5px; color: #C8D4E8;"
+            scoped(
+                "QLineEdit",
+                "padding: 5px; border-radius: 5px; color: #C8D4E8;",
+            )
         )
         folder_layout.addWidget(self.data_directory_input, 1, 1)
 
         self.browse_data_button = QPushButton()
         self.browse_data_button.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px;"
+            scoped(
+                "QPushButton",
+                "background: #4A5B7A; padding: 5px; border-radius: 5px;",
+            )
         )
         # It cannot choose the folder any more, so it opens it instead: that is
         # what people actually wanted (to back up or clear the databases).
@@ -509,7 +521,9 @@ class SettingsTab(QWidget):
         self.download_spinbox = QSpinBox()
         self.download_spinbox.setRange(1, 20)
         self.download_spinbox.setValue(self.temp_settings["simultaneous_downloads"])
-        self.download_spinbox.setStyleSheet("padding: 5px; border-radius: 5px;")
+        self.download_spinbox.setStyleSheet(
+            scoped("QSpinBox", "padding: 5px; border-radius: 5px;")
+        )
         self.download_spinbox.valueChanged.connect(self.update_simultaneous_downloads)
         download_layout.addWidget(self.download_spinbox, 0, 2)
 
@@ -531,7 +545,7 @@ class SettingsTab(QWidget):
             self.temp_settings["creator_posts_max_attempts"]
         )
         self.creator_posts_max_attempts_spinbox.setStyleSheet(
-            "padding: 5px; border-radius: 5px;"
+            scoped("QSpinBox", "padding: 5px; border-radius: 5px;")
         )
         self.creator_posts_max_attempts_spinbox.valueChanged.connect(
             lambda value: self.update_temp_setting("creator_posts_max_attempts", value)
@@ -546,7 +560,7 @@ class SettingsTab(QWidget):
             self.temp_settings["post_data_max_retries"]
         )
         self.post_data_max_retries_spinbox.setStyleSheet(
-            "padding: 5px; border-radius: 5px;"
+            scoped("QSpinBox", "padding: 5px; border-radius: 5px;")
         )
         self.post_data_max_retries_spinbox.valueChanged.connect(
             lambda value: self.update_temp_setting("post_data_max_retries", value)
@@ -561,7 +575,7 @@ class SettingsTab(QWidget):
             self.temp_settings["file_download_max_retries"]
         )
         self.file_download_max_retries_spinbox.setStyleSheet(
-            "padding: 5px; border-radius: 5px;"
+            scoped("QSpinBox", "padding: 5px; border-radius: 5px;")
         )
         self.file_download_max_retries_spinbox.valueChanged.connect(
             lambda value: self.update_temp_setting("file_download_max_retries", value)
@@ -576,7 +590,7 @@ class SettingsTab(QWidget):
             self.temp_settings["api_request_max_retries"]
         )
         self.api_request_max_retries_spinbox.setStyleSheet(
-            "padding: 5px; border-radius: 5px;"
+            scoped("QSpinBox", "padding: 5px; border-radius: 5px;")
         )
         self.api_request_max_retries_spinbox.valueChanged.connect(
             lambda value: self.update_temp_setting("api_request_max_retries", value)
@@ -606,7 +620,9 @@ class SettingsTab(QWidget):
                 "creator_filename_template", "{post_id}_{file_number}_{orig_name}"
             )
         )
-        self.creator_filename_input.setStyleSheet("padding: 5px; border-radius: 5px;")
+        self.creator_filename_input.setStyleSheet(
+            scoped("QLineEdit", "padding: 5px; border-radius: 5px;")
+        )
         self.creator_filename_input.textChanged.connect(
             lambda text: self.update_temp_setting("creator_filename_template", text)
         )
@@ -615,7 +631,11 @@ class SettingsTab(QWidget):
         # Help button for template variables (covers both template rows)
         self.creator_template_help_btn = QPushButton("?")
         self.creator_template_help_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+            scoped(
+                "QPushButton",
+                "background: #4A5B7A; padding: 5px; border-radius: 5px; "
+                "min-width: 26px; max-width: 26px;",
+            )
         )
         self.creator_template_help_btn.clicked.connect(self.show_template_help)
         creator_custom_layout.addWidget(self.creator_template_help_btn, 0, 3)
@@ -630,7 +650,7 @@ class SettingsTab(QWidget):
             )
         )
         self.creator_shared_filename_input.setStyleSheet(
-            "padding: 5px; border-radius: 5px;"
+            scoped("QLineEdit", "padding: 5px; border-radius: 5px;")
         )
         self.creator_shared_filename_input.textChanged.connect(
             lambda text: self.update_temp_setting(
@@ -641,7 +661,11 @@ class SettingsTab(QWidget):
 
         self.creator_shared_template_help_btn = QPushButton("?")
         self.creator_shared_template_help_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+            scoped(
+                "QPushButton",
+                "background: #4A5B7A; padding: 5px; border-radius: 5px; "
+                "min-width: 26px; max-width: 26px;",
+            )
         )
         self.creator_shared_template_help_btn.clicked.connect(self.show_template_help)
         creator_custom_layout.addWidget(self.creator_shared_template_help_btn, 1, 3)
@@ -656,7 +680,7 @@ class SettingsTab(QWidget):
             )
         )
         self.creator_folder_name_input.setStyleSheet(
-            "padding: 5px; border-radius: 5px;"
+            scoped("QLineEdit", "padding: 5px; border-radius: 5px;")
         )
         self.creator_folder_name_input.textChanged.connect(
             lambda text: self.update_temp_setting("creator_folder_name_template", text)
@@ -665,7 +689,11 @@ class SettingsTab(QWidget):
 
         self.creator_folder_name_help_btn = QPushButton("?")
         self.creator_folder_name_help_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+            scoped(
+                "QPushButton",
+                "background: #4A5B7A; padding: 5px; border-radius: 5px; "
+                "min-width: 26px; max-width: 26px;",
+            )
         )
         self.creator_folder_name_help_btn.clicked.connect(
             self.show_folder_name_template_help
@@ -689,7 +717,7 @@ class SettingsTab(QWidget):
         ):
             self.creator_unique_filenames_combo.addItem(translate(label_key), mode)
         self.creator_unique_filenames_combo.setStyleSheet(
-            "padding: 5px; border-radius: 5px;"
+            scoped("QComboBox", "padding: 5px; border-radius: 5px;")
         )
         current_unique = normalize_name_dedup(
             self.temp_settings.get("creator_unique_filenames", "both")
@@ -769,7 +797,11 @@ class SettingsTab(QWidget):
 
         self.filetype_display_help_btn = QPushButton("?")
         self.filetype_display_help_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+            scoped(
+                "QPushButton",
+                "background: #4A5B7A; padding: 5px; border-radius: 5px; "
+                "min-width: 26px; max-width: 26px;",
+            )
         )
         self.filetype_display_help_btn.clicked.connect(self.show_filetype_display_help)
         creator_custom_layout.addWidget(self.filetype_display_help_btn, 5, 3)
@@ -809,7 +841,11 @@ class SettingsTab(QWidget):
 
         self.lenient_keyword_matching_help_btn = QPushButton("?")
         self.lenient_keyword_matching_help_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+            scoped(
+                "QPushButton",
+                "background: #4A5B7A; padding: 5px; border-radius: 5px; "
+                "min-width: 26px; max-width: 26px;",
+            )
         )
         self.lenient_keyword_matching_help_btn.clicked.connect(
             self.show_keyword_matching_rules_help
@@ -851,7 +887,11 @@ class SettingsTab(QWidget):
 
         self.punctuation_matching_help_btn = QPushButton("?")
         self.punctuation_matching_help_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px; min-width: 26px; max-width: 26px;"
+            scoped(
+                "QPushButton",
+                "background: #4A5B7A; padding: 5px; border-radius: 5px; "
+                "min-width: 26px; max-width: 26px;",
+            )
         )
         self.punctuation_matching_help_btn.clicked.connect(
             self.show_punctuation_matching_help
@@ -872,7 +912,7 @@ class SettingsTab(QWidget):
         ):
             self.queue_input_behavior_combo.addItem(translate(label_key), mode)
         self.queue_input_behavior_combo.setStyleSheet(
-            "padding: 5px; border-radius: 5px;"
+            scoped("QComboBox", "padding: 5px; border-radius: 5px;")
         )
         current_behavior = self.temp_settings.get("queue_input_behavior", "default")
         for i in range(self.queue_input_behavior_combo.count()):
@@ -891,8 +931,11 @@ class SettingsTab(QWidget):
         self.queue_input_behavior_help_btn.setStyleSheet(
             # Scoped to QPushButton so the size cap does not reach the tooltip
             # label Qt parents to this button.
-            "QPushButton { background: #4A5B7A; padding: 5px; border-radius: 5px; "
-            "min-width: 26px; max-width: 26px; }"
+            scoped(
+                "QPushButton",
+                "background: #4A5B7A; padding: 5px; border-radius: 5px; "
+                "min-width: 26px; max-width: 26px;",
+            )
         )
         self.queue_input_behavior_help_btn.clicked.connect(
             self.show_queue_input_behavior_help
@@ -1022,7 +1065,9 @@ class SettingsTab(QWidget):
         self.custom_proxy_layout.addWidget(self.custom_proxy_label)
 
         self.custom_proxy_input = QLineEdit(self.temp_settings["custom_proxy_url"])
-        self.custom_proxy_input.setStyleSheet("padding: 5px; border-radius: 5px;")
+        self.custom_proxy_input.setStyleSheet(
+            scoped("QLineEdit", "padding: 5px; border-radius: 5px;")
+        )
         self.custom_proxy_input.setPlaceholderText("e.g., 111.222.333.444:8080")
         self.custom_proxy_input.textChanged.connect(
             lambda: self.update_temp_setting(
@@ -1047,7 +1092,9 @@ class SettingsTab(QWidget):
 
         tor_path_layout = QHBoxLayout()
         self.tor_path_input = QLineEdit(self.temp_settings["tor_path"])
-        self.tor_path_input.setStyleSheet("padding: 5px; border-radius: 5px;")
+        self.tor_path_input.setStyleSheet(
+            scoped("QLineEdit", "padding: 5px; border-radius: 5px;")
+        )
         self.tor_path_input.setReadOnly(True)
         self.tor_path_input.textChanged.connect(self.update_tor_button_states)
         tor_path_layout.addWidget(self.tor_path_input)

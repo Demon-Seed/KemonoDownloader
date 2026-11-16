@@ -228,6 +228,9 @@ def test_main_app(monkeypatch):
     main()
     assert mock_window.show.called
     assert mock_app.exec.called
+    # Every context menu, including the ones Qt builds for plain line edits,
+    # shares the queue's highlight.
+    assert "QMenu::item:selected" in mock_app.setStyleSheet.call_args.args[0]
 
 
 def test_main_block(monkeypatch):
@@ -244,6 +247,15 @@ def test_main_block(monkeypatch):
         kemonodownloader.app.main()
 
     assert mock_main.called
+
+
+def test_close_stops_name_lookups(window):
+    stopped = []
+    window.creator_tab.stop_name_lookups = lambda: stopped.append(True)
+
+    window.close()
+
+    assert stopped == [True]
 
 
 def test_app_log_updates_status(monkeypatch):
@@ -269,6 +281,9 @@ def test_main_exec_calls_exit(monkeypatch):
             self.argv = argv
 
         def setStyle(self, _):
+            pass
+
+        def setStyleSheet(self, _):
             pass
 
         def exec(self):

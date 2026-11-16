@@ -150,8 +150,9 @@ const translations = {
         "Click the eye icon to view files, filter by type (e.g., JPG, ZIP), and select files to download.",
       postDownloaderStep4: 'Click "Download" to start, and monitor progress with the progress bars and console.',
       creatorDownloaderStep1:
-        'Enter a creator URL (e.g., `https://kemono.cr/patreon/user/123456789` or `https://coomer.st/onlyfans/user/123456789`) in the "Enter creator URL" field.',
-      creatorDownloaderStep2: 'Click "Add to Queue" to add it to the list.',
+        'Type or paste a creator URL (e.g., `https://kemono.cr/patreon/user/123456789` or `https://coomer.st/onlyfans/user/123456789`) into the input row under the Creator Queue.',
+      creatorDownloaderStep2:
+        'Press Enter or Space to add it (the eye button also opens the creator). Double-click a queued row to open it, and right-click the queue to import a .txt file of links.',
       creatorDownloaderStep3:
         "Click the eye icon to fetch posts, configure options (Main File, Attachments, Content Images), and select posts.",
       creatorDownloaderStep4: 'Click "Download" to begin, and track progress via the interface.',
@@ -359,8 +360,9 @@ const translations = {
         "目のアイコンをクリックしてファイルを表示し、タイプ（JPG、ZIPなど）でフィルタリングし、ダウンロードするファイルを選択します。",
       postDownloaderStep4: "「ダウンロード」をクリックして開始し、プログレスバーとコンソールで進行状況を監視します。",
       creatorDownloaderStep1:
-        "「クリエイターURLを入力」フィールドにクリエイターURL（例：`https://kemono.cr/patreon/user/123456789`または`https://coomer.st/onlyfans/user/123456789`）を入力します。",
-      creatorDownloaderStep2: "「キューに追加」をクリックしてリストに追加します。",
+        "「Creator Queue」の下の入力欄にクリエイターURL（例：`https://kemono.cr/patreon/user/123456789` または `https://coomer.st/onlyfans/user/123456789`）を入力します。",
+      creatorDownloaderStep2:
+        "Enterキーまたはスペースキーで追加します（目のアイコンをクリックすると追加して開きます）。キュー内の行をダブルクリックすると開き、右クリックするとリンクを貼った.txtファイルをインポートできます。",
       creatorDownloaderStep3:
         "目のアイコンをクリックして投稿を取得し、オプション（メインファイル、添付ファイル、コンテンツ画像）を設定し、投稿を選択します。",
       creatorDownloaderStep4: "「ダウンロード」をクリックして開始し、インターフェースで進行状況を追跡します。",
@@ -563,8 +565,9 @@ const translations = {
         "눈 아이콘을 클릭하여 파일을 보고, 유형(예: JPG, ZIP)으로 필터링하고, 다운로드할 파일을 선택합니다.",
       postDownloaderStep4: '"다운로드"를 클릭하여 시작하고, 진행 표시줄과 콘솔로 진행 상황을 모니터링합니다.',
       creatorDownloaderStep1:
-        '"크리에이터 URL 입력" 필드에 크리에이터 URL(예: `https://kemono.cr/patreon/user/123456789` 또는 `https://coomer.st/onlyfans/user/123456789`)을 입력합니다.',
-      creatorDownloaderStep2: '"대기열에 추가"를 클릭하여 목록에 추가합니다.',
+        '"Creator Queue" 아래 입력 줄에 크리에이터 URL(예: `https://kemono.cr/patreon/user/123456789` 또는 `https://coomer.st/onlyfans/user/123456789`)을 입력합니다.',
+      creatorDownloaderStep2:
+        'Enter 또는 Space를 눌러 추가합니다(눈 아이콘은 추가하고 바로 엽니다). 대기열의 행을 두 번 클릭하면 열고, 마우스 오른쪽 버튼을 클릭하면 링크가 담긴 .txt 파일을 가져올 수 있습니다.',
       creatorDownloaderStep3:
         "눈 아이콘을 클릭하여 게시물을 가져오고, 옵션(메인 파일, 첨부 파일, 콘텐츠 이미지)을 구성하고, 게시물을 선택합니다.",
       creatorDownloaderStep4: '"다운로드"를 클릭하여 시작하고, 인터페이스를 통해 진행 상황을 추적합니다.',
@@ -722,8 +725,8 @@ const translations = {
       postDownloaderStep3: "点击眼睛图标查看文件，按类型过滤（例如，JPG、ZIP），并选择要下载的文件。",
       postDownloaderStep4: "点击 \"Download\" 开始，并使用进度条和控制台监控进度。",
       creatorDownloaderTab: "Creator Downloader 选项卡",
-      creatorDownloaderStep1: "在 \"Enter creator URL\" 字段中输入创作者 URL（例如，<code>https://kemono.cr/patreon/user/123456789</code> 或 <code>https://coomer.st/onlyfans/user/123456789</code>）。",
-      creatorDownloaderStep2: "点击 \"Add to Queue\" 将其添加到列表中。",
+      creatorDownloaderStep1: "在 Creator Queue 下方的输入行中输入创作者 URL（例如，<code>https://kemono.cr/patreon/user/123456789</code> 或 <code>https://coomer.st/onlyfans/user/123456789</code>）。",
+      creatorDownloaderStep2: "按 Enter 或空格键添加（眼睛按钮还会打开该创作者）。双击队列中的一行即可打开，右键单击队列可导入包含链接的 .txt 文件。",
       creatorDownloaderStep3: "点击眼睛图标获取帖子，配置选项（Main File、Attachments、Content Images），并选择帖子。",
       creatorDownloaderStep4: "点击 \"Download\" 开始，并通过界面跟踪进度。",
       settingsTab: "Settings 选项卡",

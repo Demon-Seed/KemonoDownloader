@@ -35,6 +35,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QDesktopServices, QImageReader, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -73,6 +74,7 @@ from kemonodownloader.download_history import DownloadHistoryDB, iso_to_local_da
 from kemonodownloader.hash_db import HashDB
 from kemonodownloader.kd_language import translate
 from kemonodownloader.kd_paths import ensure_directory
+from kemonodownloader.kd_theme import MENU_STYLE, scoped
 from kemonodownloader.preview_cache import (
     DEFAULT_PREVIEW_CACHE_BYTES,
     PreviewImageCache,
@@ -119,6 +121,28 @@ LOG_LEVEL_COLORS = {
 }
 # Unknown levels keep the body text colour rather than shouting in white.
 LOG_DEFAULT_COLOR = "#D7E1F0"
+
+# The Creator Queue's menus use the shared app menu style (kd_theme.MENU_STYLE,
+# which app.main() applies to every context menu). The menu chrome and item
+# metrics stay native, so the queue menu and the input row's own edit menu
+# match instead of drifting apart.
+
+# How many profile-only name lookups may run at once; a bulk .txt import
+# queues the rest instead of firing one request per link at the API.
+CREATOR_NAME_LOOKUP_CONCURRENCY = 2
+# A small gap after each lookup keeps a large import from hammering the API.
+CREATOR_NAME_LOOKUP_DELAY = 0.15  # seconds
+# Names are decoration, so a stalled request should not hold a worker long.
+CREATOR_NAME_LOOKUP_TIMEOUT = 5  # seconds
+
+# Repeated small-button chrome. Scoped, so a tooltip label parented to the
+# button cannot inherit the size/background rule.
+_RUN_BUTTON_STYLE = scoped(
+    "QPushButton", "background: #4A5B7A; padding: 8px; border-radius: 5px;"
+)
+_TOOL_BUTTON_STYLE = scoped(
+    "QPushButton", "background: #4A5B7A; padding: 6px; border-radius: 5px;"
+)
 
 
 def _post_published_datetime(post):
@@ -783,6 +807,35 @@ def split_creator_url(url):
         creator_id = parts[-1].split("?")[0]
         return service, creator_id
     return "unknown_service", "unknown_creator"
+
+
+def creator_profile_url(domain_config, service, creator_id):
+    """Return the API URL that carries a creator's display name."""
+    return f"{domain_config['api_base']}/{service}/user/{creator_id}/profile"
+
+
+def fetch_creator_display_name(
+    settings_tab, domain_config, service, creator_id, timeout=10
+):
+    """Return a creator's display name, or "" when it cannot be read.
+
+    One small profile request, shared by the queue's name lookups and the
+    detection fallback.  The caller owns retries and error reporting; this
+    helper only builds and parses the one request both need.
+    """
+    headers = get_headers().copy()
+    headers["Referer"] = domain_config["referer"]
+    response = get_session(settings_tab).get(
+        creator_profile_url(domain_config, service, creator_id),
+        headers=headers,
+        timeout=timeout,
+    )
+    if response.status_code != 200:
+        return ""
+    data = response.json()
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("name") or "").strip()
 
 
 class ThreadSettings:
@@ -2153,6 +2206,8 @@ class PostDetectionThread(_StoppableThread, QThread):
     posts_batch = pyqtSignal(list)
     log = pyqtSignal(str, str)
     error = pyqtSignal(str)
+    # (creator url, display name) once the profile endpoint answers.
+    creator_name_found = pyqtSignal(str, str)
 
     def __init__(
         self,
@@ -2171,9 +2226,11 @@ class PostDetectionThread(_StoppableThread, QThread):
         post_search_index=None,
         found_extensions=None,
         post_filters=None,
+        report_creator_name=False,
     ):
         super().__init__()
         self.url = url
+        self.report_creator_name = bool(report_creator_name)
         self.post_titles_map = post_titles_map  # Shared dictionary to store post titles
         self.post_dates_map = post_dates_map if post_dates_map is not None else {}
         self.settings = settings
@@ -2267,6 +2324,24 @@ class PostDetectionThread(_StoppableThread, QThread):
             self.found_extensions[ext] = self.found_extensions.get(ext, 0) + int(
                 amount or 0
             )
+
+    def _report_creator_name(self, service, creator_id):
+        """Report the creator's display name when the profile endpoint answers.
+
+        The name is decoration on the queue row, so every failure is ignored:
+        the posts fetch below is what the user is actually waiting for.
+        """
+        try:
+            name = fetch_creator_display_name(
+                self.settings.settings_tab,
+                self.domain_config,
+                service,
+                creator_id,
+            )
+            if name:
+                self.creator_name_found.emit(self.url, name)
+        except Exception:
+            return
 
     def run(self):
         """Run the detection pass, always leaving the tab able to continue.
@@ -2811,6 +2886,52 @@ class PostDetectionThread(_StoppableThread, QThread):
             self.filetype_skipped_count = self._filetype_skipped_count
             self.total_detected = len(all_posts)
             self.finished.emit(all_processed_posts)
+            # Decoration only, and after the posts are already on their way:
+            # the queue row shows the creator's name once this answers. Off by
+            # default so a detection pass makes exactly the requests it did
+            # before; the tab opts in.
+            if self.report_creator_name:
+                self._report_creator_name(service, creator_id)
+
+
+class CreatorNameLookupThread(_StoppableThread, QThread):
+    """Fetch just a creator's display name for its queue row.
+
+    This is the same tiny profile request the downloader makes before a run,
+    but on its own so a queued URL can show its name within a moment of being
+    added, instead of waiting for the creator to be loaded. It deliberately
+    touches nothing else: no posts, no files, no folder state.
+    """
+
+    found = pyqtSignal(str, str)  # creator url, display name
+
+    def __init__(self, creator_url, settings_tab):
+        super().__init__()
+        self.creator_url = str(creator_url or "")
+        self.settings_tab = settings_tab
+
+    def run(self):
+        """Look the name up; every failure is silent by design."""
+        url = self.creator_url.rstrip("/")
+        service, creator_id = split_creator_url(url)
+        if not self.is_running or service == "unknown_service":
+            return
+        try:
+            name = fetch_creator_display_name(
+                self.settings_tab,
+                get_domain_config(url),
+                service,
+                creator_id,
+                timeout=CREATOR_NAME_LOOKUP_TIMEOUT,
+            )
+            if self.is_running and name:
+                self.found.emit(url, name)
+        except Exception:
+            pass
+        finally:
+            # A bulk import queues many lookups; a small gap between requests
+            # keeps the API from being hammered.
+            time.sleep(CREATOR_NAME_LOOKUP_DELAY)
 
 
 class PostPopulationThread(_StoppableThread, QThread):
@@ -3734,7 +3855,9 @@ class CreatorDownloadThread(_StoppableThread, QThread):
 
     def fetch_creator_and_post_info(self):
         """Fetch creator name and retrieve post titles from post_titles_map."""
-        profile_url = f"{self.domain_config['api_base']}/{self.service}/user/{self.creator_id}/profile"
+        profile_url = creator_profile_url(
+            self.domain_config, self.service, self.creator_id
+        )
         # The creator name becomes a folder name, so a single blip must not
         # rename it: falling back to "Unknown_Creator" split a creator's files
         # across two folders. Retry before accepting the fallback, using the
@@ -5029,16 +5152,12 @@ class LogsWindow(QDialog):
 
         self.clear_logs_btn = QPushButton(translate("clear_logs"))
         self.clear_logs_btn.clicked.connect(self.clear_logs)
-        self.clear_logs_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 8px; border-radius: 5px;"
-        )
+        self.clear_logs_btn.setStyleSheet(_RUN_BUTTON_STYLE)
         buttons_layout.addWidget(self.clear_logs_btn)
 
         self.download_logs_btn = QPushButton(translate("download_logs"))
         self.download_logs_btn.clicked.connect(self.download_logs)
-        self.download_logs_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 8px; border-radius: 5px;"
-        )
+        self.download_logs_btn.setStyleSheet(_RUN_BUTTON_STYLE)
         buttons_layout.addWidget(self.download_logs_btn)
 
         buttons_layout.addStretch()
@@ -5165,6 +5284,13 @@ class _CreatorQueueComposer(QLineEdit):
             return
         super().keyPressEvent(event)
 
+    def contextMenuEvent(self, event):
+        """Show the standard edit menu with the queue's shared highlight."""
+        menu = self.createStandardContextMenu()
+        menu.setStyleSheet(MENU_STYLE)
+        menu.exec(event.globalPos())
+        menu.deleteLater()
+
 
 class _CreatorQueueRow(QWidget):
     """A queue row whose empty area means "load this creator".
@@ -5284,6 +5410,19 @@ class CreatorDownloaderTab(QWidget):
         # creator is queued from a post link, viewing that creator auto-selects
         # only those posts instead of every post the creator has.
         self._batch_post_ids: dict[str, set] = {}
+        # Creator URL -> display name reported by the profile endpoint while
+        # that creator was loaded. Names are decoration on a queue row and are
+        # never required, so a failed lookup simply leaves the row as the URL.
+        self._creator_names: dict[str, str] = {}
+        # URLs waiting for / using one of the name-lookup workers, so the same
+        # creator is never requested twice.
+        self._name_lookup_pending: list[str] = []
+        self._name_lookup_wanted: set[str] = set()
+        self._name_lookup_threads: dict[str, object] = {}
+        # Where the reader was before a search narrowed the list. A search
+        # always starts on page 1; clearing it puts the page and scroll back.
+        self._search_return_position: Optional[tuple[int, int]] = None
+        self._pending_filter_scroll: Optional[int] = None
         # Set when a post-link selection still has to be applied to the filtered
         # list once it has been rebuilt for display.
         self._post_link_selection_pending = False
@@ -5428,7 +5567,16 @@ class CreatorDownloaderTab(QWidget):
         self.creator_queue_list = QListWidget()
         self.creator_queue_list.setFixedHeight(100)
         self.creator_queue_list.setStyleSheet(
-            "background: #2A3B5A; border-radius: 5px;"
+            # A muted, low-opacity selection (and hover) that matches the post
+            # list's selected-row tint. The :!active rule is the important one:
+            # without it Fusion paints an opaque black bar once the list loses
+            # focus, which looked like a stuck selection.
+            "QListWidget { background: #2A3B5A; border-radius: 5px; }"
+            "QListWidget::item { background: transparent; border-radius: 4px; }"
+            "QListWidget::item:hover { background: rgba(74, 91, 122, 60); }"
+            "QListWidget::item:selected { background: rgba(74, 91, 122, 150); }"
+            "QListWidget::item:selected:!active"
+            " { background: rgba(74, 91, 122, 90); }"
         )
         # File import has no button of its own any more; it is reachable from
         # the queue's context menu instead of taking a row of its own.
@@ -5451,8 +5599,12 @@ class CreatorDownloaderTab(QWidget):
             # Scoped to QPushButton: an unscoped rule also lands on the
             # tooltip label Qt parents to the button, which squeezed the
             # tooltip down to the button's own size.
-            "QPushButton { background: #4A5B7A; padding: 2px; border-radius: 5px; "
-            "min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; }"
+            scoped(
+                "QPushButton",
+                "background: #4A5B7A; padding: 2px; border-radius: 5px; "
+                "min-width: 30px; max-width: 30px; min-height: 30px; "
+                "max-height: 30px;",
+            )
         )
         self.creator_queue_input_btn.setToolTip(
             translate("add_creator_and_load_tooltip")
@@ -5465,7 +5617,13 @@ class CreatorDownloaderTab(QWidget):
             translate("creator_queue_input_placeholder")
         )
         self.creator_queue_input.setStyleSheet(
-            "background: #2A3B5A; border-radius: 5px; padding: 2px 8px; color: white;"
+            # Scoped so the field's padding/radius does not leak into the
+            # standard edit menu Qt parents to it.
+            scoped(
+                "QLineEdit",
+                "background: #2A3B5A; border-radius: 5px;"
+                " padding: 2px 8px; color: white;",
+            )
         )
         self.creator_queue_input.setFixedHeight(30)
         self.creator_queue_input.returnPressed.connect(self.add_creator_to_queue)
@@ -5529,7 +5687,7 @@ class CreatorDownloaderTab(QWidget):
         )
         self.creator_skip_folder_info_btn.setFixedSize(26, 26)
         self.creator_skip_folder_info_btn.setStyleSheet(
-            "background: #4A5B7A; border-radius: 5px;"
+            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
         )
         self.creator_skip_folder_info_btn.clicked.connect(self.show_skip_folder_info)
         skip_single_image_layout.addWidget(self.creator_skip_folder_info_btn)
@@ -5541,7 +5699,7 @@ class CreatorDownloaderTab(QWidget):
         self.creator_skip_folder_combo.setCurrentIndex(0)  # Default: 1
         self.creator_skip_folder_combo.setFixedWidth(60)
         self.creator_skip_folder_combo.setStyleSheet(
-            "padding: 5px; border-radius: 5px;"
+            scoped("QComboBox", "padding: 5px; border-radius: 5px;")
         )
         skip_single_image_layout.addWidget(self.creator_skip_folder_combo)
         skip_single_image_layout.addStretch()
@@ -5564,7 +5722,7 @@ class CreatorDownloaderTab(QWidget):
         )
         self.creator_skip_images_info_btn.setFixedSize(26, 26)
         self.creator_skip_images_info_btn.setStyleSheet(
-            "background: #4A5B7A; border-radius: 5px;"
+            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
         )
         self.creator_skip_images_info_btn.clicked.connect(self.show_skip_images_info)
         skip_images_layout.addWidget(self.creator_skip_images_info_btn)
@@ -5679,15 +5837,11 @@ class CreatorDownloaderTab(QWidget):
             qta.icon("fa5s.download", color="white"), ""
         )
         self.creator_download_btn.clicked.connect(self.start_creator_download)
-        self.creator_download_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 8px; border-radius: 5px;"
-        )
+        self.creator_download_btn.setStyleSheet(_RUN_BUTTON_STYLE)
         creator_btn_layout.addWidget(self.creator_download_btn)
         self.creator_cancel_btn = QPushButton(qta.icon("fa5s.times", color="white"), "")
         self.creator_cancel_btn.clicked.connect(self.cancel_creator_download)
-        self.creator_cancel_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 8px; border-radius: 5px;"
-        )
+        self.creator_cancel_btn.setStyleSheet(_RUN_BUTTON_STYLE)
         self.creator_cancel_btn.setEnabled(False)
         creator_btn_layout.addWidget(self.creator_cancel_btn)
 
@@ -5697,9 +5851,7 @@ class CreatorDownloaderTab(QWidget):
             qta.icon("fa5s.redo", color="white"), ""
         )
         self.creator_retry_failed_btn.clicked.connect(self.retry_failed_downloads)
-        self.creator_retry_failed_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 8px; border-radius: 5px;"
-        )
+        self.creator_retry_failed_btn.setStyleSheet(_RUN_BUTTON_STYLE)
         self.creator_retry_failed_btn.setEnabled(False)
         creator_btn_layout.addWidget(self.creator_retry_failed_btn)
 
@@ -5709,9 +5861,7 @@ class CreatorDownloaderTab(QWidget):
             qta.icon("fa5s.folder-open", color="white"), ""
         )
         self.creator_open_folder_btn.clicked.connect(self._open_creator_folder)
-        self.creator_open_folder_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 8px; border-radius: 5px;"
-        )
+        self.creator_open_folder_btn.setStyleSheet(_RUN_BUTTON_STYLE)
         self.creator_open_folder_btn.setEnabled(False)
         creator_btn_layout.addWidget(self.creator_open_folder_btn)
 
@@ -5764,7 +5914,9 @@ class CreatorDownloaderTab(QWidget):
         self.skip_keywords_edit.setPlaceholderText(
             translate("skip_posts_keywords_placeholder")
         )
-        self.skip_keywords_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
+        self.skip_keywords_edit.setStyleSheet(
+            scoped("QLineEdit", "padding: 5px; border-radius: 5px;")
+        )
         skip_filter_layout.addWidget(self.skip_keywords_edit, stretch=1)
 
         self.skip_keywords_help_btn = QPushButton(
@@ -5772,7 +5924,7 @@ class CreatorDownloaderTab(QWidget):
         )
         self.skip_keywords_help_btn.setFixedSize(26, 26)
         self.skip_keywords_help_btn.setStyleSheet(
-            "background: #4A5B7A; border-radius: 5px;"
+            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
         )
         self.skip_keywords_help_btn.clicked.connect(self.show_skip_keywords_help)
         skip_filter_layout.addWidget(self.skip_keywords_help_btn)
@@ -5816,7 +5968,9 @@ class CreatorDownloaderTab(QWidget):
         self.file_skip_keywords_edit.setPlaceholderText(
             translate("skip_files_keywords_placeholder")
         )
-        self.file_skip_keywords_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
+        self.file_skip_keywords_edit.setStyleSheet(
+            scoped("QLineEdit", "padding: 5px; border-radius: 5px;")
+        )
         file_skip_filter_layout.addWidget(self.file_skip_keywords_edit, stretch=1)
 
         self.file_skip_keywords_help_btn = QPushButton(
@@ -5824,7 +5978,7 @@ class CreatorDownloaderTab(QWidget):
         )
         self.file_skip_keywords_help_btn.setFixedSize(26, 26)
         self.file_skip_keywords_help_btn.setStyleSheet(
-            "background: #4A5B7A; border-radius: 5px;"
+            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
         )
         self.file_skip_keywords_help_btn.clicked.connect(
             self.show_file_skip_keywords_help
@@ -5849,7 +6003,9 @@ class CreatorDownloaderTab(QWidget):
 
         self.date_from_edit = QLineEdit()
         self.date_from_edit.setPlaceholderText(translate("date_range_from_placeholder"))
-        self.date_from_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
+        self.date_from_edit.setStyleSheet(
+            scoped("QLineEdit", "padding: 5px; border-radius: 5px;")
+        )
         date_range_layout.addWidget(self.date_from_edit, stretch=1)
 
         self.date_to_label = QLabel(translate("date_range_to"))
@@ -5858,7 +6014,9 @@ class CreatorDownloaderTab(QWidget):
 
         self.date_to_edit = QLineEdit()
         self.date_to_edit.setPlaceholderText(translate("date_range_to_placeholder"))
-        self.date_to_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
+        self.date_to_edit.setStyleSheet(
+            scoped("QLineEdit", "padding: 5px; border-radius: 5px;")
+        )
         date_range_layout.addWidget(self.date_to_edit, stretch=1)
 
         self.date_filter_help_btn = QPushButton(
@@ -5866,7 +6024,7 @@ class CreatorDownloaderTab(QWidget):
         )
         self.date_filter_help_btn.setFixedSize(26, 26)
         self.date_filter_help_btn.setStyleSheet(
-            "background: #4A5B7A; border-radius: 5px;"
+            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
         )
         self.date_filter_help_btn.clicked.connect(self.show_date_filter_help)
         date_range_layout.addWidget(self.date_filter_help_btn)
@@ -5888,7 +6046,9 @@ class CreatorDownloaderTab(QWidget):
         self.file_count_from_edit.setPlaceholderText(
             translate("file_count_from_placeholder")
         )
-        self.file_count_from_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
+        self.file_count_from_edit.setStyleSheet(
+            scoped("QLineEdit", "padding: 5px; border-radius: 5px;")
+        )
         file_count_layout.addWidget(self.file_count_from_edit, stretch=1)
 
         self.file_count_to_label = QLabel(translate("file_count_to"))
@@ -5899,7 +6059,9 @@ class CreatorDownloaderTab(QWidget):
         self.file_count_to_edit.setPlaceholderText(
             translate("file_count_to_placeholder")
         )
-        self.file_count_to_edit.setStyleSheet("padding: 5px; border-radius: 5px;")
+        self.file_count_to_edit.setStyleSheet(
+            scoped("QLineEdit", "padding: 5px; border-radius: 5px;")
+        )
         file_count_layout.addWidget(self.file_count_to_edit, stretch=1)
 
         self.file_count_keep_compressed_check = QCheckBox(
@@ -5914,7 +6076,7 @@ class CreatorDownloaderTab(QWidget):
         )
         self.file_count_help_btn.setFixedSize(26, 26)
         self.file_count_help_btn.setStyleSheet(
-            "background: #4A5B7A; border-radius: 5px;"
+            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
         )
         self.file_count_help_btn.clicked.connect(self.show_file_count_help)
         file_count_layout.addWidget(self.file_count_help_btn)
@@ -5937,7 +6099,7 @@ class CreatorDownloaderTab(QWidget):
         )
         self.filter_no_selected_filetypes_help_btn.setFixedSize(26, 26)
         self.filter_no_selected_filetypes_help_btn.setStyleSheet(
-            "background: #4A5B7A; border-radius: 5px;"
+            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
         )
         self.filter_no_selected_filetypes_help_btn.clicked.connect(
             self.show_filter_no_selected_filetypes_help
@@ -5979,8 +6141,10 @@ class CreatorDownloaderTab(QWidget):
         post_list_layout.addLayout(search_scope_layout)
 
         self.creator_search_input = QLineEdit()
-        self.creator_search_input.setStyleSheet("padding: 5px; border-radius: 5px;")
-        self.creator_search_input.textChanged.connect(self.filter_items)
+        self.creator_search_input.setStyleSheet(
+            scoped("QLineEdit", "padding: 5px; border-radius: 5px;")
+        )
+        self.creator_search_input.textChanged.connect(self._on_search_text_changed)
         post_list_layout.addWidget(self.creator_search_input)
 
         checkbox_layout = QHBoxLayout()
@@ -6005,7 +6169,7 @@ class CreatorDownloaderTab(QWidget):
         )
         self.creator_box_info_btn.setFixedSize(26, 26)
         self.creator_box_info_btn.setStyleSheet(
-            "background: #4A5B7A; border-radius: 5px;"
+            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
         )
         self.creator_box_info_btn.clicked.connect(self.show_downloader_box_info)
         checkbox_layout.addWidget(self.creator_box_info_btn)
@@ -6061,7 +6225,12 @@ class CreatorDownloaderTab(QWidget):
             qta.icon("fa5s.chevron-left", color="white"), ""
         )
         self.prev_page_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 2px; border-radius: 5px; min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px;"
+            scoped(
+                "QPushButton",
+                "background: #4A5B7A; padding: 2px; border-radius: 5px; "
+                "min-width: 30px; max-width: 30px; min-height: 30px; "
+                "max-height: 30px;",
+            )
         )
         self.prev_page_btn.clicked.connect(self.prev_page)
         self.prev_page_btn.setEnabled(False)
@@ -6071,7 +6240,12 @@ class CreatorDownloaderTab(QWidget):
             qta.icon("fa5s.chevron-right", color="white"), ""
         )
         self.next_page_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 2px; border-radius: 5px; min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px;"
+            scoped(
+                "QPushButton",
+                "background: #4A5B7A; padding: 2px; border-radius: 5px; "
+                "min-width: 30px; max-width: 30px; min-height: 30px; "
+                "max-height: 30px;",
+            )
         )
         self.next_page_btn.clicked.connect(self.next_page)
         self.next_page_btn.setEnabled(False)
@@ -6108,9 +6282,7 @@ class CreatorDownloaderTab(QWidget):
             qta.icon("fa5s.chevron-right", color="white"), ""
         )
         self.creator_log_btn.clicked.connect(self.open_logs)
-        self.creator_log_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 6px; border-radius: 5px;"
-        )
+        self.creator_log_btn.setStyleSheet(_TOOL_BUTTON_STYLE)
         log_config_layout.addWidget(self.creator_log_btn)
 
         # Saved page state, first for every creator, then for this one only.
@@ -6118,18 +6290,14 @@ class CreatorDownloaderTab(QWidget):
             qta.icon("fa5s.save", color="white"), ""
         )
         self.creator_save_config_btn.clicked.connect(self.save_page_config)
-        self.creator_save_config_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 6px; border-radius: 5px;"
-        )
+        self.creator_save_config_btn.setStyleSheet(_TOOL_BUTTON_STYLE)
         log_config_layout.addWidget(self.creator_save_config_btn)
 
         self.creator_save_creator_config_btn = QPushButton(
             qta.icon("fa5s.user-shield", color="white"), ""
         )
         self.creator_save_creator_config_btn.clicked.connect(self.save_creator_config)
-        self.creator_save_creator_config_btn.setStyleSheet(
-            "background: #4A5B7A; padding: 6px; border-radius: 5px;"
-        )
+        self.creator_save_creator_config_btn.setStyleSheet(_TOOL_BUTTON_STYLE)
         # Nothing to attach a creator profile to until a creator is loaded.
         self.creator_save_creator_config_btn.setEnabled(False)
         log_config_layout.addWidget(self.creator_save_creator_config_btn)
@@ -6806,6 +6974,9 @@ class CreatorDownloaderTab(QWidget):
             return "duplicate"
 
         self.creator_queue.append((normalized_url, False))
+        # The profile name is a single small request; ask for it straight away
+        # so the row reads as a creator name rather than a bare URL.
+        self._request_creator_name(normalized_url)
         if refresh:
             self.update_creator_queue_list(scroll=True)
         self.append_log_to_console(
@@ -6839,7 +7010,6 @@ class CreatorDownloaderTab(QWidget):
         if outcome == "invalid":
             # Keep the text so it can be corrected in place.
             return outcome
-
         # Added or already queued: the URL was understood either way, so the
         # field empties and stays focused for the next one.
         self.creator_queue_input.clear()
@@ -6875,16 +7045,142 @@ class CreatorDownloaderTab(QWidget):
             mode == "load_first" and not self.current_creator_url
         ):
             # The fetch disables the queue, input row included; hand focus back
-            # to it once the fetch finishes so the next URL can be typed.
-            self._restore_queue_input_focus = True
-            self.check_creator_from_queue(self.creator_queue[-1][0])
+            # to it once the fetch finishes so the next URL can be typed. The
+            # flag is set from the result so a refused fetch (one already
+            # running, a rejected URL) cannot move focus on some later run.
+            self._restore_queue_input_focus = self.check_creator_from_queue(
+                self.creator_queue[-1][0]
+            )
 
     def _show_queue_context_menu(self, position):
-        """Queue context menu: the .txt import lives here now."""
+        """Queue context menu: copy a creator's link or import a .txt file."""
         menu = QMenu(self.creator_queue_list)
+        menu.setStyleSheet(MENU_STYLE)
+        item = self.creator_queue_list.itemAt(position)
+        if item is not None:
+            url = item.data(Qt.ItemDataRole.UserRole)
+            if url:
+                copy_action = menu.addAction(translate("copy_link"))
+                copy_action.triggered.connect(
+                    lambda _checked=False, link=url: self._copy_queue_link(link)
+                )
+                menu.addSeparator()
         import_action = menu.addAction(translate("add_links_from_file_title"))
         import_action.triggered.connect(self.add_creators_from_file)
         menu.exec(self.creator_queue_list.mapToGlobal(position))
+        menu.deleteLater()
+
+    def _copy_queue_link(self, url):
+        """Put a queued creator's URL on the clipboard."""
+        QApplication.clipboard().setText(url)
+        self.append_log_to_console(
+            translate("log_info", translate("link_copied", url)), "INFO"
+        )
+
+    def _queue_row_text(self, url):
+        """Return ``(label_text, use_rich_text)`` for a queued creator row."""
+        requested_post_ids = self._batch_post_ids.get(url.rstrip("/"))
+        label_text = url
+        if requested_post_ids:
+            ids = ", ".join(sorted(str(p) for p in requested_post_ids))
+            label_text = f"{url} ({translate('batch_post_link_tag', ids)})"
+        creator_name = self._creator_names.get(url.rstrip("/"))
+        if creator_name:
+            # The name arrives once the creator's profile has been read;
+            # bolding it mirrors the last-download date on the post rows, and
+            # escaping keeps a name containing markup literal.
+            return (
+                f"{html.escape(label_text)} " f"<b>[{html.escape(creator_name)}]</b>",
+                True,
+            )
+        return label_text, False
+
+    def _refresh_queue_row(self, url):
+        """Update one queue row's label in place; a name just arrived.
+
+        Rebuilding the whole list for a single name costs ~70 ms at 100
+        creators and would reset the queue's selection, so only the matching
+        label is rewritten.
+        """
+        key = (url or "").rstrip("/")
+        for index in range(self.creator_queue_list.count()):
+            item = self.creator_queue_list.item(index)
+            item_url = item.data(Qt.ItemDataRole.UserRole)
+            if (item_url or "").rstrip("/") != key:
+                continue
+            widget = self.creator_queue_list.itemWidget(item)
+            if widget is None:
+                return
+            text, rich = self._queue_row_text(item_url)
+            widget.label.setTextFormat(
+                Qt.TextFormat.RichText if rich else Qt.TextFormat.PlainText
+            )
+            widget.label.setText(text)
+            item.setSizeHint(widget.sizeHint())
+            return
+
+    def on_creator_name_found(self, url, name):
+        """Cache a creator's display name and refresh its queue row."""
+        key = (url or "").rstrip("/")
+        name = (name or "").strip()
+        if not key or not name or self._creator_names.get(key) == name:
+            return
+        self._creator_names[key] = name
+        self._refresh_queue_row(key)
+
+    def _request_creator_name(self, creator_url):
+        """Ask for a queued creator's name, once per URL."""
+        key = (creator_url or "").rstrip("/")
+        if not key or key in self._creator_names or key in self._name_lookup_wanted:
+            return
+        self._name_lookup_wanted.add(key)
+        self._name_lookup_pending.append(key)
+        self._start_name_lookups()
+
+    def _start_name_lookups(self):
+        """Start queued name lookups, up to the concurrency cap."""
+        while (
+            self._name_lookup_pending
+            and len(self._name_lookup_threads) < CREATOR_NAME_LOOKUP_CONCURRENCY
+        ):
+            url = self._name_lookup_pending.pop(0)
+            thread = CreatorNameLookupThread(
+                url, getattr(self._parent, "settings_tab", None)
+            )
+            thread.found.connect(self.on_creator_name_found)
+            thread.finished.connect(self._on_name_lookup_finished)
+            self._name_lookup_threads[url] = thread
+            thread.start()
+
+    def stop_name_lookups(self):
+        """Stop pending and active profile lookups (the window is closing).
+
+        Lookup threads are deliberately not part of ``active_threads``: that
+        list belongs to a download run, and a cancelled run must not delete a
+        name lookup and leave a dead entry holding one of the concurrency
+        slots.
+        """
+        self._name_lookup_pending.clear()
+        self._name_lookup_wanted.clear()
+        for thread in list(self._name_lookup_threads.values()):
+            try:
+                thread.stop()
+            except RuntimeError:
+                pass
+
+    def _on_name_lookup_finished(self):
+        """Drop a finished lookup and start the next queued one."""
+        thread = self.sender()
+        if thread is None:
+            return
+        url = (getattr(thread, "creator_url", "") or "").rstrip("/")
+        if self._name_lookup_threads.get(url) is thread:
+            self._name_lookup_threads.pop(url, None)
+        self._name_lookup_wanted.discard(url)
+        if thread in self.active_threads:
+            self.active_threads.remove(thread)
+        thread.deleteLater()
+        self._start_name_lookups()
 
     def create_view_handler(self, url, checked):
         def handler():
@@ -6944,6 +7240,15 @@ class CreatorDownloaderTab(QWidget):
         return handler
 
     def update_creator_queue_list(self, scroll=False):
+        """Rebuild the queue rows.
+
+        A rebuild that is not revealing a new entry keeps the queue's own
+        scroll position, so a name arriving mid-browse does not jump the list
+        back to the top.
+        """
+        queue_scroll = None
+        if not scroll:
+            queue_scroll = self.creator_queue_list.verticalScrollBar().value()
         self.creator_queue_list.clear()
         for url, checked in self.creator_queue:
             item = QListWidgetItem()
@@ -6956,20 +7261,29 @@ class CreatorDownloaderTab(QWidget):
 
             view_button = QPushButton(qta.icon("fa5s.eye", color="white"), "")
             view_button.setStyleSheet(
-                "background: #4A5B7A; padding: 2px; border-radius: 5px; min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px;"
+                scoped(
+                    "QPushButton",
+                    "background: #4A5B7A; padding: 2px; border-radius: 5px; "
+                    "min-width: 30px; max-width: 30px; min-height: 30px; "
+                    "max-height: 30px;",
+                )
             )
             view_button.clicked.connect(self.create_view_handler(url, checked))
             layout.addWidget(view_button)
 
-            # Surface any post link(s) this creator was queued from, so it is
-            # visible that the post part was understood rather than dropped.
-            requested_post_ids = self._batch_post_ids.get(url.rstrip("/"))
-            label_text = url
-            if requested_post_ids:
-                ids = ", ".join(sorted(str(p) for p in requested_post_ids))
-                label_text = f"{url} ({translate('batch_post_link_tag', ids)})"
-            label = QLabel(label_text)
-            label.setStyleSheet("color: white;")
+            # The URL, its post-link tag and the creator's name (once known) are
+            # built by one helper so an in-place name refresh cannot drift from
+            # a full rebuild.
+            label_text, rich_label = self._queue_row_text(url)
+            label = QLabel()
+            label.setTextFormat(
+                Qt.TextFormat.RichText if rich_label else Qt.TextFormat.PlainText
+            )
+            label.setText(label_text)
+            # The window's stylesheet paints every descendant, which put a dark
+            # band over the row's selection highlight; a transparent label lets
+            # the highlight show through.
+            label.setStyleSheet("color: white; background: transparent;")
             label.setAlignment(
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
             )
@@ -6980,13 +7294,21 @@ class CreatorDownloaderTab(QWidget):
 
             remove_button = QPushButton(qta.icon("fa5s.times", color="white"), "")
             remove_button.setStyleSheet(
-                "background: #4A5B7A; padding: 2px; border-radius: 5px; min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px;"
+                scoped(
+                    "QPushButton",
+                    "background: #4A5B7A; padding: 2px; border-radius: 5px; "
+                    "min-width: 30px; max-width: 30px; min-height: 30px; "
+                    "max-height: 30px;",
+                )
             )
             remove_button.clicked.connect(self.create_remove_handler(url))
             layout.addWidget(remove_button)
 
             widget.setLayout(layout)
             item.setSizeHint(widget.sizeHint())
+            # The URL rides on the item so the context menu can copy the link
+            # that was right-clicked, even though the row is a child widget.
+            item.setData(Qt.ItemDataRole.UserRole, url)
             self.creator_queue_list.addItem(item)
             self.creator_queue_list.setItemWidget(item, widget)
             setattr(widget, "view_button", view_button)
@@ -6997,14 +7319,17 @@ class CreatorDownloaderTab(QWidget):
             # The newest creator is appended, so it sits directly above the
             # input row. Bring it into view.
             self.creator_queue_list.scrollToBottom()
+        elif queue_scroll:
+            self.creator_queue_list.verticalScrollBar().setValue(queue_scroll)
 
     def check_creator_from_queue(self, url):
+        """Open a queued creator; return True when a fetch actually started."""
         if not isinstance(url, str):
             self.append_log_to_console(
                 translate("log_error", translate("invalid_url_type", type(url))),
                 "ERROR",
             )
-            return
+            return False
         # Refuse before touching any state: this used to clear the whole view
         # first and only then discover a fetch was still running, which left an
         # empty list with the old fetch still writing into it.
@@ -7016,7 +7341,7 @@ class CreatorDownloaderTab(QWidget):
                 translate("log_warning", translate("post_detection_in_progress")),
                 "WARNING",
             )
-            return
+            return False
         self.append_log_to_console(
             translate("log_info", translate("viewing_creator", url)), "INFO"
         )
@@ -7059,6 +7384,9 @@ class CreatorDownloaderTab(QWidget):
         self._update_download_summary(refresh_skips=True)
         self.current_page = 1  # Reset pagination
         self.total_pages = 1
+        # A saved search position belongs to the creator that was open.
+        self._search_return_position = None
+        self._pending_filter_scroll = None
 
         # Switch the download-history tracking over to this creator.  Doing it
         # here (rather than only after the posts arrive) means the creator's
@@ -7106,14 +7434,25 @@ class CreatorDownloaderTab(QWidget):
             post_search_index=self.post_search_index,
             found_extensions=self._found_type_counts,
             post_filters=post_filters,
+            # Names are normally fetched when the URL is queued; this is the
+            # fallback for a lookup that failed or is still in flight.
+            report_creator_name=(
+                url.rstrip("/") not in self._creator_names
+                and url.rstrip("/") not in self._name_lookup_wanted
+            ),
         )
         self.post_detection_thread.finished.connect(self.on_post_detection_finished)
         self.post_detection_thread.posts_batch.connect(self.on_posts_batch_received)
+        # Test doubles and older stubs may not carry the optional signal.
+        name_signal = getattr(self.post_detection_thread, "creator_name_found", None)
+        if name_signal is not None:
+            name_signal.connect(self.on_creator_name_found)
         self.post_detection_thread.log.connect(self.append_log_to_console)
         self.post_detection_thread.error.connect(self.on_post_detection_error)
         self.post_detection_thread.finished.connect(self.cleanup_post_detection_thread)
         self.active_threads.append(self.post_detection_thread)
         self.post_detection_thread.start()
+        return True
 
     def cleanup_post_detection_thread(self):
         """Drop the tab's reference to the fetch thread once it is done.
@@ -7460,8 +7799,17 @@ class CreatorDownloaderTab(QWidget):
                 label.setText(text)
         label.setVisible(empty)
 
-    def display_current_page(self):
-        """Display the current page of posts"""
+    def display_current_page(self, preserve_scroll=False, scroll_value=None):
+        """Display the current page of posts.
+
+        Filter and search passes call this with *preserve_scroll* so the list
+        stays where the user was reading instead of jumping back to the top;
+        paging leaves it off so a new page starts at the top. *scroll_value*
+        overrides what is restored (a search start or a search clear knows
+        exactly where the viewport belongs).
+        """
+        if scroll_value is None and preserve_scroll:
+            scroll_value = self.creator_post_list.verticalScrollBar().value()
         self._update_post_list_empty_state()
         self.creator_post_list.clear()
         self.post_widget_cache.clear()
@@ -7475,6 +7823,10 @@ class CreatorDownloaderTab(QWidget):
             unique_title = f"{post_title} ({post_date})"
             self.post_url_map[unique_title] = (post_id, thumbnail_url)
             self.add_list_item(unique_title, thumbnail_url, is_checked)
+
+        if scroll_value is not None:
+            # Qt clamps automatically when the rebuilt list is shorter.
+            self.creator_post_list.verticalScrollBar().setValue(scroll_value)
 
         self.update_pagination_controls()
         self.update_check_all_state()
@@ -8679,6 +9031,31 @@ class CreatorDownloaderTab(QWidget):
             "DEBUG",
         )
 
+    def _on_search_text_changed(self):
+        """Run a search from its first page, and put the reader back after.
+
+        Typing the first character saves the page and scroll offset and starts
+        the results on page 1, where a new search belongs. Clearing the box
+        restores that position. Filter changes and manual paging never touch
+        the saved position, so there is no guessing about when to remember and
+        when to restore: only empty -> text and text -> empty do anything.
+        """
+        if self.creator_search_input.text().strip():
+            if self._search_return_position is None:
+                self._search_return_position = (
+                    self.current_page,
+                    self.creator_post_list.verticalScrollBar().value(),
+                )
+                self.current_page = 1
+                self._pending_filter_scroll = 0
+        else:
+            position = self._search_return_position
+            self._search_return_position = None
+            if position is not None:
+                self.current_page = position[0]
+                self._pending_filter_scroll = position[1]
+        self.filter_items()
+
     def filter_items(self):
         if self.filter_thread is not None and self.filter_thread.isRunning():
             self._filter_refresh_pending = True
@@ -8754,8 +9131,12 @@ class CreatorDownloaderTab(QWidget):
             self._post_link_selection_pending = False
             self._apply_post_link_selection()
 
-        # Display current page
-        self.display_current_page()
+        # Display current page, keeping the viewport where the reader was:
+        # applying a filter or typing a search must not throw the list back to
+        # the top of the page. A search start/clear supplies the exact offset.
+        scroll_override = self._pending_filter_scroll
+        self._pending_filter_scroll = None
+        self.display_current_page(preserve_scroll=True, scroll_value=scroll_override)
 
         self.update_check_all_state()
         self.update_checked_posts()

@@ -5,9 +5,7 @@ from types import SimpleNamespace
 import pytest
 from PyQt6.QtCore import QSettings
 
-from kemonodownloader import kd_paths
-
-from kemonodownloader import kd_settings as ks
+from kemonodownloader import kd_paths, kd_settings as ks
 from kemonodownloader.kd_settings import SettingsTab
 
 
@@ -161,7 +159,44 @@ def make_tab(tmp_path):
     return ks.SettingsTab(parent)
 
 
-def test_getters_and_temp_update(tmp_path):
+def test_template_help_tooltips_are_not_squeezed_by_the_button_style(tmp_path, qapp):
+    from PyQt6.QtCore import QEvent, QPoint
+    from PyQt6.QtGui import QHelpEvent
+    from PyQt6.QtWidgets import QApplication, QLabel, QToolTip
+
+    tab = make_tab(tmp_path)
+    tab.show()
+    qapp.processEvents()
+
+    for button in (
+        tab.creator_template_help_btn,
+        tab.creator_shared_template_help_btn,
+        tab.creator_folder_name_help_btn,
+    ):
+        QToolTip.hideText()
+        QApplication.sendEvent(
+            button,
+            QHelpEvent(
+                QEvent.Type.ToolTip,
+                QPoint(2, 2),
+                button.mapToGlobal(QPoint(2, 2)),
+            ),
+        )
+        qapp.processEvents()
+        labels = [
+            w
+            for w in QApplication.topLevelWidgets()
+            if w.objectName() == "qtooltip_label"
+            and w.isVisible()
+            and isinstance(w, QLabel)
+        ]
+        assert labels, "tooltip did not appear"
+        # The old unscoped "max-width: 26px" squeezed this to ~36 px wide.
+        assert labels[0].width() > 100
+        QToolTip.hideText()
+
+    tab.deleteLater()
+
     tab = make_tab(tmp_path)
     # initial getters
     assert isinstance(tab.get_creator_folder_strategy(), str)

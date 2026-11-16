@@ -66,16 +66,38 @@ def test_tooltip_lifetime_filter_ignores_tooltip_events_from_non_widgets(qapp):
 
 def test_tooltip_lifetime_filter_hides_on_interaction(qapp):
     from PyQt6.QtCore import QEvent
+    from PyQt6.QtWidgets import QWidget
 
     from kemonodownloader import app as app_module
 
     hidden = []
     event_filter = app_module._TooltipLifetimeFilter(hide=lambda: hidden.append(True))
-    event_filter.eventFilter(None, QEvent(QEvent.Type.ToolTip))
+    widget = QWidget()
+    widget.setToolTip("Hover help")
+    # Stand in for a tooltip that is currently on screen.
+    event_filter._owner = widget
+    event_filter._shown = True
 
-    event_filter.eventFilter(None, QEvent(QEvent.Type.MouseButtonPress))
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.MouseButtonPress))
 
     assert hidden == [True]
+
+
+def test_tooltip_lifetime_filter_skips_idle_interactions(qapp):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtWidgets import QToolTip
+
+    from kemonodownloader import app as app_module
+
+    QToolTip.hideText()  # a previous test may have left a tip up
+    hidden = []
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: hidden.append(True))
+
+    # Nothing shown and nothing pending: a keypress elsewhere should not walk
+    # the top-level widgets or call QToolTip.hideText().
+    event_filter.eventFilter(None, QEvent(QEvent.Type.MouseButtonPress))
+
+    assert hidden == []
 
 
 def test_tooltip_lifetime_filter_hides_when_the_owner_is_hidden(qapp):
@@ -112,6 +134,227 @@ def test_tooltip_lifetime_filter_hides_when_the_owner_is_left(qapp):
 
     event_filter.eventFilter(owner, QEvent(QEvent.Type.Leave))
     assert hidden == [True]
+
+
+def test_tooltip_lifetime_filter_shows_after_the_fixed_delay(qapp, monkeypatch):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtWidgets import QWidget
+
+    from kemonodownloader import app as app_module
+
+    shown = []
+    monkeypatch.setattr(
+        app_module.QToolTip,
+        "showText",
+        lambda pos, text, widget=None: shown.append(text),
+    )
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: None)
+    widget = QWidget()
+    widget.setToolTip("Hover help")
+
+    # Hovering starts our own timer at a fixed, shorter delay; nothing is
+    # shown until it fires.
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.Enter))
+    assert event_filter._timer.interval() == app_module.TOOLTIP_HOVER_DELAY
+    assert app_module.TOOLTIP_HOVER_DELAY < 700
+    assert shown == []
+
+    event_filter._timer.timeout.emit()
+    assert shown == ["Hover help"]
+    assert widget.toolTipDuration() == app_module.TOOLTIP_HOVER_TIME
+
+    # Qt's own ToolTip event for the same widget would double up, so it is
+    # swallowed; the owner still hides on Leave.
+    assert event_filter.eventFilter(widget, QEvent(QEvent.Type.ToolTip)) is True
+
+
+def test_tooltip_lifetime_filter_ignores_disabled_widgets(qapp):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtWidgets import QWidget
+
+    from kemonodownloader import app as app_module
+
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: None)
+    widget = QWidget()
+    widget.setToolTip("Hover help")
+    widget.setEnabled(False)
+
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.Enter))
+
+    assert event_filter._timer.isActive() is False
+    assert event_filter._owner is None
+
+
+def test_tooltip_lifetime_filter_ignores_qt_early_tooltip_events(qapp, monkeypatch):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtWidgets import QWidget
+
+    from kemonodownloader import app as app_module
+
+    shown = []
+    monkeypatch.setattr(
+        app_module.QToolTip,
+        "showText",
+        lambda pos, text, widget=None: shown.append(text),
+    )
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: None)
+    widget = QWidget()
+    widget.setToolTip("Hover help")
+
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.Enter))
+    # Qt sometimes sends this ~20 ms after Enter (its tip is "awake"), other
+    # times ~700 ms. Either way it must not shorten the fixed delay.
+    assert event_filter.eventFilter(widget, QEvent(QEvent.Type.ToolTip)) is True
+    assert shown == []
+    assert event_filter._timer.isActive() is True
+
+    event_filter._timer.timeout.emit()
+    assert shown == ["Hover help"]
+
+
+def test_tooltip_lifetime_filter_stays_quiet_after_a_click(qapp, monkeypatch):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtWidgets import QWidget
+
+    from kemonodownloader import app as app_module
+
+    shown = []
+    monkeypatch.setattr(
+        app_module.QToolTip,
+        "showText",
+        lambda pos, text, widget=None: shown.append(text),
+    )
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: None)
+    widget = QWidget()
+    widget.setToolTip("Hover help")
+
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.Enter))
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.MouseButtonPress))
+
+    # The pointer never left, so the tip stays hidden.
+    assert event_filter.eventFilter(widget, QEvent(QEvent.Type.ToolTip)) is True
+    assert event_filter._timer.isActive() is False
+    assert shown == []
+
+    # A click can make Qt re-enter the same widget; that must not re-arm it.
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.Enter))
+    assert event_filter._timer.isActive() is False
+
+    # Leaving re-arms the tip for the next hover.
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.Leave))
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.Enter))
+    assert event_filter._timer.isActive() is True
+
+
+def test_tooltip_lifetime_filter_does_not_show_before_the_delay_without_enter(
+    qapp, monkeypatch
+):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtWidgets import QWidget
+
+    from kemonodownloader import app as app_module
+
+    shown = []
+    monkeypatch.setattr(
+        app_module.QToolTip,
+        "showText",
+        lambda pos, text, widget=None: shown.append(text),
+    )
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: None)
+    widget = QWidget()
+    widget.setToolTip("Hover help")
+    widget.underMouse = lambda: True
+
+    # Qt's own event can arrive before Enter. It must only arm the fixed-delay
+    # timer, never show instantly on Qt's platform-dependent schedule.
+    assert event_filter.eventFilter(widget, QEvent(QEvent.Type.ToolTip)) is True
+    assert event_filter._timer.isActive() is True
+    assert shown == []
+
+    event_filter._timer.timeout.emit()
+    assert shown == ["Hover help"]
+
+
+def test_tooltip_lifetime_filter_waits_for_the_pointer_to_rest(qapp, monkeypatch):
+    from PyQt6.QtCore import QEvent, QPoint
+    from PyQt6.QtGui import QCursor
+    from PyQt6.QtWidgets import QWidget
+
+    from kemonodownloader import app as app_module
+
+    shown = []
+    monkeypatch.setattr(
+        app_module.QToolTip,
+        "showText",
+        lambda pos, text, widget=None: shown.append(text),
+    )
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: None)
+    widget = QWidget()
+    widget.setToolTip("Hover help")
+
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.Enter))
+    event_filter._timer.stop()
+    # Tiny jitter within the movement threshold does not restart the clock...
+    event_filter._arm_pos = QCursor.pos()
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.HoverMove))
+    assert event_filter._timer.isActive() is False
+
+    # ...but a real move does.
+    event_filter._arm_pos = QCursor.pos() - QPoint(5, 0)
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.HoverMove))
+    assert event_filter._timer.isActive() is True
+
+    event_filter._timer.timeout.emit()
+    event_filter._timer.stop()  # a real timeout stops a single-shot timer
+    assert shown == ["Hover help"]
+
+    # Moving while the tip is up must not hide and re-show it.
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.HoverMove))
+    assert event_filter._timer.isActive() is False
+    assert shown == ["Hover help"]
+
+
+def test_tooltip_lifetime_filter_only_suppresses_after_a_click(qapp, monkeypatch):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtWidgets import QWidget
+
+    from kemonodownloader import app as app_module
+
+    monkeypatch.setattr(
+        app_module.QToolTip, "showText", lambda pos, text, widget=None: None
+    )
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: None)
+    widget = QWidget()
+    widget.setToolTip("Hover help")
+
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.Enter))
+    event_filter._timer.timeout.emit()
+    # A scroll hides the tip but leaves the hover armed: a small move brings
+    # it back on the same 350 ms schedule instead of a long wake-up.
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.Wheel))
+    assert event_filter._suppressed is None
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.HoverMove))
+    assert event_filter._timer.isActive() is True
+
+    # A click is different: the tip stays down until the pointer leaves.
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.MouseButtonPress))
+    assert event_filter._suppressed is widget
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.HoverMove))
+    assert event_filter._timer.isActive() is False
+
+
+def test_tooltip_lifetime_filter_tracks_hover_after_polish(qapp):
+    from PyQt6.QtCore import QEvent, Qt
+    from PyQt6.QtWidgets import QWidget
+
+    from kemonodownloader import app as app_module
+
+    event_filter = app_module._TooltipLifetimeFilter(hide=lambda: None)
+    widget = QWidget()
+
+    event_filter.eventFilter(widget, QEvent(QEvent.Type.Polish))
+
+    assert widget.testAttribute(Qt.WidgetAttribute.WA_Hover) is True
 
 
 def test_install_tooltip_lifetime_attaches_to_the_app(qapp):

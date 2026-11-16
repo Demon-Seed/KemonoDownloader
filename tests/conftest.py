@@ -104,6 +104,45 @@ def isolated_hash_dir(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def offline_creator_name_lookups(monkeypatch):
+    """Keep the queue's decorative profile lookups off the network in tests.
+
+    Adding a creator asks the API for that creator's display name. Tests build
+    tabs constantly, so the worker is replaced with a no-op here; the worker
+    itself is exercised directly with a fake session where it matters.
+    """
+    from PyQt6.QtCore import QObject, pyqtSignal
+
+    from kemonodownloader import creator_downloader as cd
+
+    class OfflineCreatorNameLookup(QObject):
+        found = pyqtSignal(str, str)
+        finished = pyqtSignal()
+
+        def __init__(self, creator_url, settings):
+            super().__init__()
+            self.creator_url = creator_url
+            self.settings = settings
+
+        def start(self):
+            pass
+
+        def isRunning(self):
+            return False
+
+        def stop(self):
+            pass
+
+        def wait(self, _timeout=0):
+            return True
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(cd, "CreatorNameLookupThread", OfflineCreatorNameLookup)
+
+
+@pytest.fixture(autouse=True)
 def cleanup_qt_threads_after_test():
     """Best-effort cleanup for leaked QThreads.
 

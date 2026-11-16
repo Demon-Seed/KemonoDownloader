@@ -48,6 +48,80 @@ def test_post_detection_populates_titles(monkeypatch):
     assert key in post_titles_map
 
 
+def test_post_detection_reports_the_creator_name(monkeypatch):
+    post_titles_map = {}
+    settings = make_settings_creator()
+    url = "https://kemono.cr/service/user/123"
+
+    thread = PostDetectionThread(
+        url, post_titles_map, settings, report_creator_name=True
+    )
+    thread.log = SimpleNamespace(emit=lambda *a, **k: None)
+    thread.posts_batch = SimpleNamespace(emit=lambda *a, **k: None)
+    thread.error = SimpleNamespace(emit=lambda *a, **k: None)
+    names = []
+    thread.creator_name_found = SimpleNamespace(emit=lambda u, n: names.append((u, n)))
+
+    def fake_get_session(settings_tab=None):
+        def get(u, *a, **k):
+            if u.endswith("/profile"):
+                data = {"name": "Cool Artist"}
+            else:
+                data = [{"id": "1", "title": "Hello World"}]
+            return SimpleNamespace(
+                status_code=200,
+                text=json.dumps(data),
+                content=json.dumps(data).encode(),
+                json=lambda payload=data: payload,
+            )
+
+        return SimpleNamespace(get=get)
+
+    monkeypatch.setattr(
+        "kemonodownloader.creator_downloader.get_session", fake_get_session
+    )
+
+    thread.run()
+
+    # The queue row shows this beside the URL; the posts fetch still ran.
+    assert names == [(url, "Cool Artist")]
+    assert ("service", "123", "1") in post_titles_map
+
+
+def test_post_detection_ignores_non_dict_profile_payloads(monkeypatch):
+    settings = make_settings_creator()
+    thread = PostDetectionThread(
+        "https://kemono.cr/service/user/124", {}, settings, report_creator_name=True
+    )
+    thread.log = SimpleNamespace(emit=lambda *a, **k: None)
+    thread.posts_batch = SimpleNamespace(emit=lambda *a, **k: None)
+    thread.error = SimpleNamespace(emit=lambda *a, **k: None)
+    names = []
+    thread.creator_name_found = SimpleNamespace(emit=lambda u, n: names.append((u, n)))
+
+    def fake_get_session(settings_tab=None):
+        def get(u, *a, **k):
+            # A list is what the posts endpoint returns; the name lookup must
+            # not mistake it for a profile.
+            data = [{"id": "1", "title": "Hello"}]
+            return SimpleNamespace(
+                status_code=200,
+                text=json.dumps(data),
+                content=json.dumps(data).encode(),
+                json=lambda payload=data: payload,
+            )
+
+        return SimpleNamespace(get=get)
+
+    monkeypatch.setattr(
+        "kemonodownloader.creator_downloader.get_session", fake_get_session
+    )
+
+    thread.run()
+
+    assert names == []
+
+
 def test_post_detection_invalid_url_emits_error():
     errors = []
     settings = make_settings_creator()
