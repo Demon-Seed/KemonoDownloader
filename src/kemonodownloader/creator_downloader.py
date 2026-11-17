@@ -71,6 +71,16 @@ from kemonodownloader.domain_config import (
     warm_file_host,
 )
 from kemonodownloader.download_history import DownloadHistoryDB, iso_to_local_date
+from kemonodownloader.download_utils import (
+    DOWNLOAD_CHUNK_SIZE,
+    ProgressTracker,
+    acquire_pawchive_slot,
+    create_connection_guard,
+    direct_url_for,
+    forget_direct_url,
+    remember_direct_url,
+    response_content_length,
+)
 from kemonodownloader.hash_db import HashDB
 from kemonodownloader.kd_language import translate
 from kemonodownloader.kd_paths import ensure_directory
@@ -80,10 +90,14 @@ from kemonodownloader.preview_cache import (
     PreviewImageCache,
 )
 from kemonodownloader.retry_policy import (
+    DOWNLOAD_RETRY_BUDGET_SECONDS,
+    DOWNLOAD_RETRY_MAX_DELAY,
+    FORBIDDEN_ATTEMPTS_BEFORE_GIVING_UP,
     api_retry_delay,
     countdown_seconds,
     is_terminal_error,
     is_terminal_status,
+    retry_after_seconds,
 )
 
 
@@ -134,6 +148,12 @@ CREATOR_NAME_LOOKUP_CONCURRENCY = 2
 CREATOR_NAME_LOOKUP_DELAY = 0.15  # seconds
 # Names are decoration, so a stalled request should not hold a worker long.
 CREATOR_NAME_LOOKUP_TIMEOUT = 5  # seconds
+
+# How long a cancelled run waits for its preparation workers before leaving
+# them behind.  A running job waits as long as its workers need: a post can
+# legitimately sit in retry countdowns, and abandoning its worker is what used
+# to leave a live thread inside a QThread that the tab had already deleted.
+WORKER_CANCEL_GRACE_SECONDS = 30.0
 
 # Repeated small-button chrome. Scoped, so a tooltip label parented to the
 # button cannot inherit the size/background rule.
@@ -288,6 +308,31 @@ def filename_query_value(name):
         quote(char, safe="") if char in _QUERY_VALUE_BREAKERS else char
         for char in str(name or "")
     )
+
+
+def direct_download_url(server, path, name, domain_config):
+    """Return the file's URL on the media server the API names, or ``None``.
+
+    Pawchive tells which server holds each available file; requesting it there
+    skips the redirect from ``file.<domain>``, one request less per file. Only
+    https servers under the site's own domain are accepted, and the caller
+    falls back to the usual URL when the direct one fails.
+    """
+    domain = str((domain_config or {}).get("domain") or "").lower()
+    if not server or not path or not domain:
+        return None
+    parsed = urlparse(str(server))
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "https"
+        or not host.endswith("." + domain)
+        or parsed.path not in ("", "/")
+        or parsed.port is not None
+    ):
+        return None
+    clean_path = path if path.startswith("/data/") else "/data/" + path.lstrip("/")
+    url = f"https://{host}{clean_path}"
+    return f"{url}?f={filename_query_value(name)}" if name else url
 
 
 def filename_from_query(url):
@@ -1073,14 +1118,17 @@ def _decode_preview_image(data, max_size=800):
 def _download_image_bytes(url, settings_tab=None, on_progress=None):
     """Fetch *url* with the file-host headers and return its bytes.
 
-    ``on_progress(downloaded, total)`` is called per chunk; *total* is 0 when
-    the server sends no length. Raises ``requests.RequestException`` on
-    transport/HTTP errors so callers can report the URL and the reason.
+    ``on_progress(downloaded, total)`` is called when the reported percentage
+    changes (not per chunk); *total* is 0 when the server sends no length.
+    Raises ``requests.RequestException`` on transport/HTTP errors so callers
+    can report the URL and the reason.
     """
     domain_config = get_domain_config(url)
     session = get_session(settings_tab)
     headers, file_base_url = file_host_headers(url, get_headers(), domain_config)
-    response = session.get(url, headers=headers, stream=True)
+    # A stalled preview request must not hold its worker forever: the tab has
+    # no way to interrupt a read that never returns.
+    response = session.get(url, headers=headers, stream=True, timeout=(30, 30))
     if response.status_code == 403:
         # DDoS-Guard challenges the first request of a fresh session; warming
         # the file host sets its clearance cookie, so retry once instead of
@@ -1092,22 +1140,23 @@ def _download_image_bytes(url, settings_tab=None, on_progress=None):
             headers.get("User-Agent", ""),
             domain_config.get("referer"),
         )
-        response = session.get(url, headers=headers, stream=True)
+        response = session.get(url, headers=headers, stream=True, timeout=(30, 30))
     response.raise_for_status()
-    header = response.headers.get("content-length")
-    try:
-        total_size = int(header) if header is not None else 0
-    except Exception:
-        total_size = 0
+    # A compressed body's Content-Length says nothing about the decoded size.
+    total_size = response_content_length(response)
+    tracker = ProgressTracker(total_size)
     data = bytearray()
     downloaded = 0
-    for chunk in response.iter_content(chunk_size=8192):
+    for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
         if not chunk:
             continue
         data.extend(chunk)
         downloaded += len(chunk)
         if on_progress is not None:
-            on_progress(downloaded, total_size)
+            # Only report when the percentage moved: a callback per chunk
+            # repainted the dialog thousands of times for one image.
+            if tracker.advance(len(chunk)) is not None:
+                on_progress(downloaded, total_size)
     return bytes(data)
 
 
@@ -3252,6 +3301,11 @@ class FilePreparationThread(_StoppableThread, QThread):
             file_url = clean_file_url(file_path, domain_config)
             if "f=" not in file_url and file_name:
                 file_url += "?f=" + filename_query_value(file_name)
+            direct_url = direct_download_url(
+                main_file.get("server"), file_path, file_name, domain_config
+            )
+            if direct_url:
+                remember_direct_url(file_url, direct_url)
             self.log.emit(
                 translate(
                     "log_debug", translate("checking_main_file", file_name, file_ext)
@@ -3291,6 +3345,14 @@ class FilePreparationThread(_StoppableThread, QThread):
                     attachment_url = clean_file_url(attachment_path, domain_config)
                     if "f=" not in attachment_url and attachment_name:
                         attachment_url += "?f=" + filename_query_value(attachment_name)
+                    direct_url = direct_download_url(
+                        attachment.get("server"),
+                        attachment_path,
+                        attachment_name,
+                        domain_config,
+                    )
+                    if direct_url:
+                        remember_direct_url(attachment_url, direct_url)
                     self.log.emit(
                         translate(
                             "log_debug",
@@ -3531,20 +3593,29 @@ class FilePreparationThread(_StoppableThread, QThread):
             time.sleep(step)
             remaining -= step
 
-    def _worker_wait_budget(self):
-        """How long to wait for one preparation worker to finish.
+    def _wait_for_workers(self, workers):
+        """Wait for preparation workers so none outlive the owning QThread.
 
-        A worker may be sleeping through per-post retry countdowns, so the
-        wait scales with the retry budget. The old single 30 s deadline was
-        shorter than one slow post's countdowns, and whatever stragglers had
-        not queued yet was then dropped with nothing but a warning.
+        A running job waits as long as its workers need: a post can sit in
+        retry countdowns for minutes, and abandoning its worker is what left a
+        live thread inside a QThread the tab had already deleted.  Only a
+        cancelled job gives up, after a grace period, rather than blocking the
+        tab on a worker stuck in a request.
+
+        ``Thread.join()`` internally uses ``Event.wait()``, which triggers
+        ``Condition.notify()`` access violations on Python 3.14 + Windows, so
+        the live threads are polled instead.
         """
-        try:
-            retries = int(getattr(self.settings, "post_data_max_retries", 1) or 1)
-        except (TypeError, ValueError):
-            retries = 1
-        # Each retry can spend up to COUNTDOWN_MAX_SECONDS in its countdown.
-        return min(600, 30 + retries * 6)
+        grace_deadline = None
+        for worker in workers:
+            while worker.is_alive():
+                if not self.is_running:
+                    now = time.monotonic()
+                    if grace_deadline is None:
+                        grace_deadline = now + WORKER_CANCEL_GRACE_SECONDS
+                    elif now >= grace_deadline:
+                        return
+                time.sleep(0.05)
 
     def run(self):
         if not self.is_running:
@@ -3657,23 +3728,12 @@ class FilePreparationThread(_StoppableThread, QThread):
             t.start()
             workers.append(t)
 
-        # Wait for all workers so none outlive the QThread C++ object.
-        # Thread.join() internally uses Event.wait() which triggers
-        # Condition.notify() access violations on Python 3.14 + Windows,
-        # so poll is_alive() instead. The wait is per worker and scaled to the
-        # retry budget: one global 30 s deadline silently stranded any post
-        # still working through its countdowns.
-        budget = self._worker_wait_budget()
-        for w in workers:
-            deadline = time.monotonic() + budget
-            while w.is_alive() and time.monotonic() < deadline:
-                time.sleep(0.05)
+        self._wait_for_workers(workers)
 
-        # Whatever those stragglers were about to queue is lost, so say it
-        # rather than dropping their files silently: a run of 429 countdowns
-        # was enough to hit the deadline and leave files unexplained.
+        # Whatever a straggler was about to queue is lost, so say it rather
+        # than dropping its files silently.  Only a cancelled run leaves any.
         stragglers = [w for w in workers if w.is_alive()]
-        if stragglers and self.is_running:
+        if stragglers:
             self.log.emit(
                 translate(
                     "log_warning",
@@ -3777,6 +3837,9 @@ class CreatorDownloadThread(_StoppableThread, QThread):
         self.post_files_map = self.build_post_files_map()
         self.completed_files = set()
         self.failed_files = {}  # Map file_url to error message
+        # HTTP 403/429 answers from the file host, counted for the end-of-run
+        # log line that says whether the request pacing needs tuning.
+        self.rate_limit_hits = {}
         self.post_titles_map = post_titles_map
         # Publish date per post id ("YYYY-MM-DD") for {post_date} in the
         # filename templates; the download thread only sees file URLs, so the
@@ -3829,7 +3892,10 @@ class CreatorDownloadThread(_StoppableThread, QThread):
         # OpenSSL trigger native access-violation crashes.  Serialising
         # only the session.get() call (which does SSL + redirects) while
         # allowing concurrent body streaming avoids the problem.
-        self._ssl_lock = threading.Lock()
+        # Serialising connection opens is only needed where concurrent OpenSSL
+        # handshakes crash natively (Windows + Python 3.14); elsewhere this is
+        # a no-op so handshakes run in parallel.
+        self._ssl_lock = create_connection_guard()
         # Defence flag: set in stop() *before* any cleanup.  Workers
         # check this before emitting signals so they never touch the
         # C++ object after it has been scheduled for deletion.
@@ -4598,9 +4664,31 @@ class CreatorDownloadThread(_StoppableThread, QThread):
             desc_folder = self.get_desc_folder_for_post(folder, post_id, post_title)
             await self.download_post_text_if_needed(post_id, desc_folder)
 
+        def fail(reason_message, stored_reason):
+            """Record a permanent failure and stop trying this file."""
+            self._safe_emit(self.log, translate("log_error", reason_message), "ERROR")
+            self._discard_part_file(part_path)
+            with self.failed_files_lock:
+                self.failed_files[file_url] = stored_reason
+            self._safe_emit(self.file_progress, file_index, 0)
+            self._safe_emit(self.file_completed, file_index, file_url, False)
+            self.check_post_completion(file_url)
+
+        # Seconds of retry sleeping already spent on this file.  A file that
+        # keeps failing must not hold a download slot for its whole retry count.
+        retry_seconds_spent = 0.0
+        # Consecutive 403s: the host is refusing to start serving the file.
+        forbidden_hits = 0
+
         max_retries = self.settings.file_download_max_retries
-        for attempt in range(1, max_retries + 1):
+        attempt = 0
+        while attempt < max_retries:
+            attempt += 1
             try:
+                # The media server the API named, when known: asking it
+                # directly saves the redirect.  ``file_url`` stays the file's
+                # identity for dedup, history and progress.
+                request_url = direct_url_for(file_url) or file_url
                 headers = get_headers().copy()
                 # Use the file host's own origin as Referer/Origin instead of
                 # the base-domain referer. For hosts like pawchive, files are
@@ -4613,8 +4701,20 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                     self.domain_config.get("file_base_url")
                     or self.domain_config["base_url"]
                 )
-                headers["Referer"] = file_base_url.rstrip("/") + "/"
-                headers["Origin"] = self.domain_config["base_url"].rstrip("/")
+                if request_url == file_url:
+                    headers["Referer"] = file_base_url.rstrip("/") + "/"
+                    headers["Origin"] = self.domain_config["base_url"].rstrip("/")
+                    request_origin = file_base_url.rstrip("/")
+                else:
+                    # A media server is a different host again, so the file
+                    # host's origin would be the mismatched Referer that
+                    # DDoS-Guard rejects; use the media server's own.
+                    parsed_request = urlparse(request_url)
+                    request_origin = (
+                        f"{parsed_request.scheme}://{parsed_request.netloc}"
+                    )
+                    headers["Referer"] = request_origin + "/"
+                    headers["Origin"] = request_origin
                 # get_headers() returns the module-wide default header set,
                 # which hardcodes Accept: text/css (meant for a stylesheet
                 # probe, not a file download). Sending that Accept header
@@ -4636,8 +4736,13 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                 # Use requests instead of aiohttp for better proxy support
                 def download_with_requests():
                     session = get_session(self.settings.settings_tab)
-                    # Serialize SSL connection establishment to prevent
-                    # concurrent SSL access violations on Windows.
+                    # Space new Pawchive requests out.  The connection guard
+                    # below used to do this by accident (one handshake at a
+                    # time on every platform); now that it only serialises
+                    # where OpenSSL needs it, the spacing is explicit, so
+                    # dropping the lock cannot turn a run into a burst.
+                    if not acquire_pawchive_slot(file_url, lambda: self.is_running):
+                        raise _Cancelled("Download cancelled before request slot")
                     with self._ssl_lock:
                         if not self.is_running:
                             raise _Cancelled("Download cancelled before connection")
@@ -4655,10 +4760,10 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                         if warmed_hosts is None:
                             warmed_hosts = set()
                             _thread_local.ddos_guard_warmed_hosts = warmed_hosts
-                        if file_base_url not in warmed_hosts:
+                        if request_origin not in warmed_hosts:
                             try:
                                 session.get(
-                                    file_base_url.rstrip("/") + "/",
+                                    request_origin + "/",
                                     headers={
                                         "User-Agent": headers["User-Agent"],
                                         "Referer": self.domain_config["referer"],
@@ -4668,10 +4773,10 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                             except Exception:
                                 # Warm-up is best-effort; proceed regardless.
                                 pass
-                            warmed_hosts.add(file_base_url)
+                            warmed_hosts.add(request_origin)
 
                         response = session.get(
-                            file_url,
+                            request_url,
                             headers=headers,
                             stream=True,
                             timeout=(30, 30),
@@ -4688,34 +4793,37 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                                 "DEBUG",
                             )
                         response.raise_for_status()
-                        header = response.headers.get("content-length")
-                        try:
-                            file_size = int(header) if header is not None else 0
-                        except Exception:
-                            file_size = 0
+                        # Content-Length counts the bytes on the wire, so it is
+                        # not the size a decompressed body will have; treating
+                        # it as such failed every compressed transfer with a
+                        # false size mismatch and retried it to the end of the
+                        # budget.
+                        file_size = response_content_length(response)
+                        tracker = ProgressTracker(file_size)
                         downloaded_size = 0
                         hasher = hashlib.md5()
 
                         file_handle = open(part_path, "wb")
                         try:
-                            for chunk in response.iter_content(chunk_size=8192):
+                            for chunk in response.iter_content(
+                                chunk_size=DOWNLOAD_CHUNK_SIZE
+                            ):
                                 if not self.is_running:
                                     raise _Cancelled("Download interrupted by user")
                                 if chunk:
                                     file_handle.write(chunk)
                                     hasher.update(chunk)
                                     downloaded_size += len(chunk)
-                                    if file_size > 0:
-                                        progress = int(
-                                            (downloaded_size / file_size) * 100
+                                    # Only report when the percentage moved:
+                                    # queued signals are what made the window
+                                    # stutter on large files.
+                                    percent = tracker.advance(len(chunk))
+                                    if percent is not None:
+                                        self._safe_emit(
+                                            self.file_progress,
+                                            file_index,
+                                            percent,
                                         )
-                                    else:
-                                        progress = 0
-                                    self._safe_emit(
-                                        self.file_progress,
-                                        file_index,
-                                        min(progress, 100),
-                                    )
                         finally:
                             file_handle.close()
 
@@ -4773,78 +4881,103 @@ class CreatorDownloadThread(_StoppableThread, QThread):
             except (requests.RequestException, _RetryableDownloadError) as e:
                 resp = getattr(e, "response", None)
                 status_code = getattr(resp, "status_code", None)
+                if request_url != file_url:
+                    # The media server did not serve this file.  Media servers
+                    # are rotated, so nothing it answers - a 404, a timeout, a
+                    # short read - says anything about file.<domain>: give the
+                    # usual address the next attempt without spending one.
+                    # ``file_url`` stays the file's identity, so duplicate
+                    # detection, history and "Retry failed" are unaffected.
+                    forget_direct_url(file_url)
+                    self._safe_emit(
+                        self.log,
+                        translate(
+                            "log_debug",
+                            translate("direct_server_failed", file_url, str(e)),
+                        ),
+                        "DEBUG",
+                    )
+                    attempt -= 1
+                    continue
+                if status_code in (403, 429):
+                    self.rate_limit_hits[status_code] = (
+                        self.rate_limit_hits.get(status_code, 0) + 1
+                    )
+                if status_code == 403:
+                    forbidden_hits += 1
+                else:
+                    forbidden_hits = 0
                 if is_terminal_error(e):
                     # 400/404/410/...: the request itself is wrong, so no
                     # number of retries can succeed. Report it once instead of
                     # spending the whole retry budget on it: a 404 used to cost
-                    # 50 requests and ~23 minutes of sleeping.
+                    # the entire retry count in sleeping.
                     error_msg = translate(
                         "download_file_unavailable", file_url, status_code
                     )
-                    self._safe_emit(
-                        self.log, translate("log_error", error_msg), "ERROR"
+                    fail(error_msg, error_msg)
+                    return
+                if forbidden_hits >= FORBIDDEN_ATTEMPTS_BEFORE_GIVING_UP:
+                    # The host refuses to start serving this file; retrying
+                    # only spends the budget.
+                    error_msg = translate(
+                        "download_forbidden_giving_up", file_url, forbidden_hits
                     )
-                    with self.failed_files_lock:
-                        self.failed_files[file_url] = error_msg
-                    self._safe_emit(self.file_progress, file_index, 0)
-                    self._safe_emit(self.file_completed, file_index, file_url, False)
-                    self.check_post_completion(file_url)
+                    fail(error_msg, error_msg)
                     return
                 if attempt == max_retries:
-                    error_msg = translate(
-                        "error_downloading_after_retries", file_url, max_retries, str(e)
-                    )
-                    self._safe_emit(
-                        self.log, translate("log_error", error_msg), "ERROR"
-                    )
-                    # Out of retries: the truncated transfer must not stay on
-                    # disk under any name.
-                    self._discard_part_file(part_path)
-                    with self.failed_files_lock:
-                        self.failed_files[file_url] = str(e)
-                    self._safe_emit(self.file_progress, file_index, 0)
-                    self._safe_emit(self.file_completed, file_index, file_url, False)
-                    self.check_post_completion(file_url)
-                    return
-                else:
-                    # Exponential backoff instead of a flat 1s delay, so
-                    # repeated failures don't hammer the server at a fixed
-                    # rate. Retry-After is only present on HTTP errors; other
-                    # failures (timeouts, connection errors,
-                    # _RetryableDownloadError) fall back to the plain
-                    # exponential schedule.
-                    retry_after_header = (
-                        resp.headers.get("Retry-After") if resp is not None else None
-                    )
-
-                    delay = min(2 ** (attempt - 1), 30)
-                    if status_code in (403, 429):
-                        # These are WAF/rate-limit signals specifically -
-                        # retrying fast makes the block more likely to
-                        # persist, so enforce a higher floor even on the
-                        # first retry.
-                        delay = max(delay, 5)
-                    if retry_after_header:
-                        try:
-                            delay = max(delay, float(retry_after_header))
-                        except ValueError:
-                            pass
-
-                    self._safe_emit(
-                        self.log,
+                    fail(
                         translate(
-                            "log_warning",
-                            translate(
-                                "download_failed_retrying",
-                                file_url,
-                                attempt,
-                                max_retries,
-                                str(e),
-                            ),
+                            "error_downloading_after_retries",
+                            file_url,
+                            max_retries,
+                            str(e),
                         ),
-                        "WARNING",
+                        str(e),
                     )
-                    await asyncio.sleep(delay)
+                    return
+
+                # Exponential backoff capped at DOWNLOAD_RETRY_MAX_DELAY, so a
+                # file that stays blocked can no longer burn hours of sleeping
+                # across its retry budget.  A 403/429 is a WAF or rate-limit
+                # signal specifically, and retrying fast makes that block more
+                # likely to persist, so it keeps a floor.
+                delay = min(2 ** (attempt - 1), DOWNLOAD_RETRY_MAX_DELAY)
+                if status_code in (403, 429):
+                    delay = max(delay, 5)
+                requested = retry_after_seconds(resp)
+                if requested is not None:
+                    # The server's own wait wins, bounded by the shared cap so
+                    # a bogus Retry-After cannot stall a worker.
+                    delay = max(delay, requested)
+                if retry_seconds_spent + delay > DOWNLOAD_RETRY_BUDGET_SECONDS:
+                    fail(
+                        translate(
+                            "download_retry_budget_exhausted",
+                            file_url,
+                            int(DOWNLOAD_RETRY_BUDGET_SECONDS),
+                            str(e),
+                        ),
+                        str(e),
+                    )
+                    return
+                retry_seconds_spent += delay
+
+                self._safe_emit(
+                    self.log,
+                    translate(
+                        "log_warning",
+                        translate(
+                            "download_failed_retrying",
+                            file_url,
+                            attempt,
+                            max_retries,
+                            str(e),
+                        ),
+                    ),
+                    "WARNING",
+                )
+                await asyncio.sleep(delay)
             except _Cancelled:
                 # The user stopped the run. Nothing failed, so nothing is
                 # recorded and nothing is offered for retry.
@@ -4930,6 +5063,25 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                 )
             finally:
                 queue.task_done()
+
+    def _log_rate_limit_summary(self):
+        """One log line with the 403/429 counts, when the host sent any.
+
+        The counts are the signal for tuning the request pacing: a run with no
+        403s needs nothing, while a run full of them wants a slower gate.
+        """
+        hits = getattr(self, "rate_limit_hits", None) or {}
+        forbidden = hits.get(403, 0)
+        throttled = hits.get(429, 0)
+        if not forbidden and not throttled:
+            return
+        self._safe_emit(
+            self.log,
+            translate(
+                "log_info", translate("rate_limit_summary", forbidden, throttled)
+            ),
+            "INFO",
+        )
 
     def run(self):
         try:
@@ -5054,6 +5206,8 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                 translate("log_warning", translate("no_files_selected_for_download")),
                 "WARNING",
             )
+
+        self._log_rate_limit_summary()
 
         # Log summary of failed files
         if self.failed_files:

@@ -7,10 +7,16 @@ import types
 from types import MethodType, SimpleNamespace
 
 import requests
-from tests.factories import AlwaysFailingSession, RecordingSignal, make_settings
+from tests.factories import (
+    AlwaysFailingSession,
+    RecordingSignal,
+    make_settings,
+    make_thread,
+)
 
 from kemonodownloader import creator_downloader as cd
 from kemonodownloader.creator_downloader import CreatorDownloadThread
+from kemonodownloader.retry_policy import DOWNLOAD_RETRY_MAX_DELAY, RETRY_AFTER_CAP
 
 
 def test_creator_download_run_processes_queue(monkeypatch, tmp_path):
@@ -458,3 +464,128 @@ def test_run_no_files_logs_warning(tmp_path):
         "log_warning", cd.translate("no_files_selected_for_download")
     )
     assert any(warning in str(args) for args in emitted)
+
+
+# ---------------------------------------------------------------------------
+# Reactive backoff caps
+# ---------------------------------------------------------------------------
+
+
+class _StatusSession:
+    """Session that always fails with an HTTP status attached to the error."""
+
+    def __init__(self, status_code, retry_after=None):
+        self._status_code = status_code
+        self._retry_after = retry_after
+
+    def get(self, *args, **kwargs):
+        headers = (
+            {} if self._retry_after is None else {"Retry-After": self._retry_after}
+        )
+        response = SimpleNamespace(
+            status_code=self._status_code, headers=headers, text=""
+        )
+        raise requests.HTTPError(f"{self._status_code} error", response=response)
+
+
+def _record_backoff_delays(monkeypatch, tmp_path, session, retries=6):
+    """Run one failing download and return the delays it slept for.
+
+    A non-Pawchive URL keeps the request gate out of the measurement.
+    """
+    file_url = "https://n1.kemono.cr/data/ab/cd/x.png"
+    delays = []
+
+    async def fake_sleep(seconds):
+        delays.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(cd, "get_session", lambda *a, **k: session)
+
+    thread = make_thread(tmp_path, file_url, settings_retries=retries)
+    thread.domain_config = {
+        "base_url": "https://n1.kemono.cr",
+        "api_base": "https://n1.kemono.cr/api",
+        "referer": "https://n1.kemono.cr/",
+        "file_base_url": "https://n1.kemono.cr",
+    }
+    thread.generate_filename_and_folder = lambda *a, **k: (str(tmp_path), "x.png")
+
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
+    return delays, thread
+
+
+def test_backoff_is_capped_at_ten_seconds(monkeypatch, tmp_path):
+    delays, thread = _record_backoff_delays(monkeypatch, tmp_path, _StatusSession(500))
+
+    assert delays, "a failing download must back off between attempts"
+    assert max(delays) <= DOWNLOAD_RETRY_MAX_DELAY
+    assert thread.files_to_download[0] in thread.failed_files
+
+
+def test_a_rate_limited_file_keeps_a_five_second_floor(monkeypatch, tmp_path):
+    delays, _thread = _record_backoff_delays(monkeypatch, tmp_path, _StatusSession(429))
+
+    assert delays
+    # 429 is a rate-limit signal: retrying fast keeps the block alive.
+    assert min(delays) >= 5
+    assert max(delays) <= DOWNLOAD_RETRY_MAX_DELAY
+
+
+def test_a_forbidden_file_gives_up_after_three_403s(monkeypatch, tmp_path):
+    delays, thread = _record_backoff_delays(
+        monkeypatch, tmp_path, _StatusSession(403), retries=10
+    )
+
+    # Three attempts and two backoffs: the third 403 ends the file.
+    assert len(delays) == 2
+    assert thread.rate_limit_hits[403] == 3
+    assert thread.files_to_download[0] in thread.failed_files
+
+
+def test_the_retry_budget_stops_the_sleeping(monkeypatch, tmp_path):
+    monkeypatch.setattr(cd, "DOWNLOAD_RETRY_BUDGET_SECONDS", 12.0)
+
+    delays, thread = _record_backoff_delays(
+        monkeypatch, tmp_path, _StatusSession(500), retries=10
+    )
+
+    # 1 + 2 + 4 = 7 s of retries; the next 8 s wait would pass the 12 s budget.
+    assert delays == [1, 2, 4]
+    assert thread.files_to_download[0] in thread.failed_files
+
+
+def test_a_bogus_retry_after_cannot_stall_a_worker(monkeypatch, tmp_path):
+    delays, _thread = _record_backoff_delays(
+        monkeypatch, tmp_path, _StatusSession(503, retry_after="9999")
+    )
+
+    assert delays
+    # The server's wait wins, but only up to the shared cap.
+    assert max(delays) == RETRY_AFTER_CAP
+
+
+def test_the_run_summary_reports_the_403_and_429_counts():
+    thread = cd.CreatorDownloadThread.__new__(cd.CreatorDownloadThread)
+    thread._destroyed = False
+    thread.rate_limit_hits = {403: 4, 429: 2}
+    logs = []
+    thread.log = SimpleNamespace(emit=lambda message, level: logs.append(message))
+
+    thread._log_rate_limit_summary()
+
+    assert len(logs) == 1
+    assert "4" in logs[0]
+    assert "2" in logs[0]
+
+
+def test_a_clean_run_logs_no_rate_limit_summary():
+    thread = cd.CreatorDownloadThread.__new__(cd.CreatorDownloadThread)
+    thread._destroyed = False
+    thread.rate_limit_hits = {}
+    logs = []
+    thread.log = SimpleNamespace(emit=lambda message, level: logs.append(message))
+
+    thread._log_rate_limit_summary()
+
+    assert logs == []

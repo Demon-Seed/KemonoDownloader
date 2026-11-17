@@ -121,6 +121,23 @@ def offline_domain_list(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def reset_pawchive_request_gate():
+    """Clear the download gate's spacing between tests.
+
+    The gate is process-wide by design (it paces real runs), so without this
+    a test that downloads several Pawchive files would wait 250 ms per file
+    for no reason.
+    """
+    from kemonodownloader import download_utils
+
+    download_utils.reset_pawchive_gate()
+    download_utils.clear_direct_urls()
+    yield
+    download_utils.reset_pawchive_gate()
+    download_utils.clear_direct_urls()
+
+
+@pytest.fixture(autouse=True)
 def offline_creator_name_lookups(monkeypatch):
     """Keep the queue's decorative profile lookups off the network in tests.
 

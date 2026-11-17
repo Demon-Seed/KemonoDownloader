@@ -18,6 +18,18 @@ API_RETRY_MAX_DELAY = 4.0
 RETRY_AFTER_CAP = 30.0
 # Hard ceiling for the "Trying again in N..." post-data countdown.
 COUNTDOWN_MAX_SECONDS = 5
+# Hard ceiling for the file-download retry backoff.  30 s made a file that is
+# permanently blocked cost roughly 23 minutes of sleeping across a 50-attempt
+# retry budget; 10 s keeps the same number of tries much cheaper.
+DOWNLOAD_RETRY_MAX_DELAY = 10.0
+# Wall-clock budget for the retries of one file.  A file that never succeeds
+# must not hold a download slot for its whole retry count; when the budget is
+# gone the file is recorded as failed and offered by "Retry failed".
+DOWNLOAD_RETRY_BUDGET_SECONDS = 120.0
+# Consecutive HTTP 403 responses after which a file is treated as forbidden
+# rather than retried: the host is refusing to start serving it, and every
+# further attempt just spends the budget.
+FORBIDDEN_ATTEMPTS_BEFORE_GIVING_UP = 3
 
 # Statuses where retrying cannot help: the request itself is wrong.
 TERMINAL_STATUS_CODES = frozenset({400, 401, 402, 404, 405, 406, 410, 451})

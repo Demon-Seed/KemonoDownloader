@@ -186,11 +186,38 @@ def test_A4_the_countdown_wakes_up_when_the_run_is_stopped(monkeypatch):
     assert max(slept) <= 0.2  # sliced, so a stop is noticed quickly
 
 
-def test_A4_the_worker_wait_scales_with_the_retry_budget(monkeypatch):
+def test_A4_a_running_job_waits_for_its_workers():
+    """A running job must not abandon a worker that is still working."""
     thread = cd.FilePreparationThread.__new__(cd.FilePreparationThread)
+    thread.is_running = True
+    polls = []
 
-    thread.settings = SimpleNamespace(post_data_max_retries=7)
-    assert thread._worker_wait_budget() > 30
+    class FinishingWorker:
+        def is_alive(self):
+            polls.append(1)
+            return len(polls) < 3
 
-    thread.settings = SimpleNamespace(post_data_max_retries=50)
-    assert thread._worker_wait_budget() <= 600  # but never unbounded
+    thread._wait_for_workers([FinishingWorker()])
+
+    assert len(polls) == 3
+
+
+def test_A4_a_cancelled_job_gives_up_after_the_grace_period(monkeypatch):
+    """Only a cancelled run bails out, and only once the grace period ends."""
+    thread = cd.FilePreparationThread.__new__(cd.FilePreparationThread)
+    thread.is_running = False
+    clock = [0.0]
+
+    class StuckWorker:
+        def is_alive(self):
+            return True
+
+    monkeypatch.setattr(cd.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        cd.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
+
+    thread._wait_for_workers([StuckWorker()])
+
+    assert clock[0] >= cd.WORKER_CANCEL_GRACE_SECONDS
+    assert clock[0] < cd.WORKER_CANCEL_GRACE_SECONDS + 1

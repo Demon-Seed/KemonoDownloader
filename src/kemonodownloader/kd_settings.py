@@ -169,7 +169,7 @@ class SettingsTab(QWidget):
             "language": "english",
             "creator_posts_max_attempts": 200,
             "post_data_max_retries": 7,
-            "file_download_max_retries": 50,
+            "file_download_max_retries": 10,
             "api_request_max_retries": 3,
             # Debug lines (internal bookkeeping and per-item detail the UI
             # already summarises) stay out of the log unless this is on.

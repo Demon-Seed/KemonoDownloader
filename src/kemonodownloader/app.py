@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 
 from kemonodownloader import kd_paths
 from kemonodownloader.creator_downloader import CreatorDownloaderTab
+from kemonodownloader.kd_errors import install_exception_hook
 from kemonodownloader.kd_language import translate
 from kemonodownloader.kd_settings import GITHUB_REPO_URL, SettingsTab
 from kemonodownloader.kd_theme import MENU_STYLE, TOOLTIP_STYLE, WINDOW_BG
@@ -476,6 +477,9 @@ def disable_ui_effects():
 
 def main():
     app = QApplication(sys.argv)
+    # Without this, an exception that escapes a slot, an event handler or a
+    # worker's run() calls qFatal() and ends the process with no message.
+    install_exception_hook()
     app.setStyle("Fusion")
     # Standard edit menus on plain line edits are shown by Qt itself with
     # popup(), so no per-widget code can style them. Application-wide rules
@@ -483,11 +487,17 @@ def main():
     # highlight, and every tooltip the same dark background.
     app.setStyleSheet(MENU_STYLE + TOOLTIP_STYLE)
     disable_ui_effects()
-    install_tooltip_lifetime(app)
+    tooltip_filter = install_tooltip_lifetime(app)
     load_bundled_fonts()
     window = KemonoDownloader()
     window.show()
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    # Detach before shutdown: Qt keeps dispatching events while it destroys the
+    # window, and calling into a Python filter while the interpreter is being
+    # torn down crashes natively (an access violation on exit).
+    if tooltip_filter is not None:
+        app.removeEventFilter(tooltip_filter)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

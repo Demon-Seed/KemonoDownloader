@@ -109,6 +109,9 @@ def test_creator_download_thread_run_no_files(monkeypatch, tmp_path):
     dummy.max_concurrent = 2
     dummy.is_running = True
     dummy.hash_db = SimpleNamespace()
+    dummy.rate_limit_hits = {}
+    # run() reports the 403/429 counts through a method this dummy lacks.
+    dummy._log_rate_limit_summary = lambda: None
     dummy.post_file_counters_lock = SimpleNamespace(
         __enter__=lambda s: None, __exit__=lambda s, a, b, c: None
     )

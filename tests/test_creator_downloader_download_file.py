@@ -2,7 +2,11 @@ import asyncio
 import hashlib
 from types import SimpleNamespace
 
+import pytest
+import requests
+
 from kemonodownloader import creator_downloader as cd
+from kemonodownloader import download_utils as du
 
 
 def test_download_file_skips_existing_hash(tmp_path):
@@ -258,3 +262,271 @@ def test_hash_file_matches_md5_of_the_whole_file(tmp_path):
     path.write_bytes(data)
 
     assert cd._hash_file(str(path)) == hashlib.md5(data).hexdigest()
+
+
+def test_progress_is_reported_only_when_the_percentage_moves(monkeypatch, tmp_path):
+    """One file must not emit one GUI event per read.
+
+    The loop used to emit ``file_progress`` for every 8 KiB chunk, which
+    queued tens of thousands of cross-thread signals for a large file and is
+    what made the window stutter.
+    """
+    payload = b"y" * (300 * 1024)
+    file_url = "https://n1.kemono.cr/data/ab/cd/chunky.jpg"
+
+    class ChunkyResponse:
+        status_code = 200
+
+        def __init__(self):
+            self.headers = {"content-length": str(len(payload))}
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size=8192):
+            for start in range(0, len(payload), 1024):
+                yield payload[start : start + 1024]
+
+        def close(self):
+            return None
+
+    class ChunkySession:
+        def get(self, url, headers=None, **kwargs):
+            return ChunkyResponse()
+
+    monkeypatch.setattr(cd, "get_session", lambda *a, **k: ChunkySession())
+
+    thread = make_stream_thread(tmp_path, file_url)
+    thread.generate_filename_and_folder = lambda *a, **k: (str(tmp_path), "chunky.jpg")
+    thread.hash_db = SimpleNamespace(lookup=lambda h: None, store=lambda *a, **k: None)
+    progress = []
+    thread.file_progress = SimpleNamespace(
+        emit=lambda index, percent: progress.append(percent)
+    )
+
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
+
+    assert progress, "a completed download must report progress"
+    assert progress[-1] == 100
+    assert len(progress) <= 101, f"{len(progress)} progress events for one file"
+    # The reported values only ever move forward.
+    assert progress == sorted(progress)
+    assert (tmp_path / "chunky.jpg").read_bytes() == payload
+
+
+# ---------------------------------------------------------------------------
+# Direct media-server URLs
+# ---------------------------------------------------------------------------
+
+
+class TestDirectDownloadUrl:
+    CONFIG = {"domain": "pawchive.pw", "base_url": "https://pawchive.pw"}
+
+    def test_builds_the_media_server_url(self):
+        assert (
+            cd.direct_download_url(
+                "https://n1.pawchive.pw", "/data/aa/bb/x.png", "x.png", self.CONFIG
+            )
+            == "https://n1.pawchive.pw/data/aa/bb/x.png?f=x.png"
+        )
+
+    def test_adds_the_data_prefix(self):
+        assert (
+            cd.direct_download_url(
+                "https://n1.pawchive.pw", "aa/bb/x.png", "x.png", self.CONFIG
+            )
+            == "https://n1.pawchive.pw/data/aa/bb/x.png?f=x.png"
+        )
+
+    def test_omits_the_query_without_a_name(self):
+        assert (
+            cd.direct_download_url(
+                "https://n1.pawchive.pw", "/data/aa/x.png", "", self.CONFIG
+            )
+            == "https://n1.pawchive.pw/data/aa/x.png"
+        )
+
+    @pytest.mark.parametrize(
+        "server",
+        [
+            None,
+            "",
+            "http://n1.pawchive.pw",
+            "https://evil.example",
+            "https://n1.pawchive.pw/some/path",
+            "https://n1.pawchive.pw:8443",
+            "https://pawchive.pw.evil.example",
+        ],
+    )
+    def test_rejects_untrusted_servers(self, server):
+        assert (
+            cd.direct_download_url(server, "/data/x.png", "x.png", self.CONFIG) is None
+        )
+
+    def test_rejects_a_missing_path(self):
+        assert (
+            cd.direct_download_url("https://n1.pawchive.pw", "", "x.png", self.CONFIG)
+            is None
+        )
+
+
+def test_download_requests_the_remembered_media_server(monkeypatch, tmp_path):
+    """A remembered media server is asked directly, with its own origin."""
+    payload = b"direct"
+    file_url = "https://file.pawchive.pw/data/ab/cd/x.png?f=x.png"
+    direct_url = "https://n1.pawchive.pw/data/ab/cd/x.png?f=x.png"
+    du.remember_direct_url(file_url, direct_url)
+    seen = []
+
+    class Session:
+        def get(self, url, headers=None, **kwargs):
+            seen.append((url, headers))
+            return _Resp(payload)
+
+    monkeypatch.setattr(cd, "get_session", lambda *a, **k: Session())
+
+    thread = make_stream_thread(tmp_path, file_url)
+    thread.generate_filename_and_folder = lambda *a, **k: (str(tmp_path), "x.png")
+    thread.hash_db = SimpleNamespace(lookup=lambda h: None, store=lambda *a, **k: None)
+
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
+
+    # The warm-up hits the media host's root; the file itself comes from it.
+    assert seen[-1][0] == direct_url
+    assert seen[-1][1]["Referer"] == "https://n1.pawchive.pw/"
+    assert (tmp_path / "x.png").read_bytes() == payload
+
+
+def test_a_missing_file_on_the_media_server_falls_back(monkeypatch, tmp_path):
+    """A 404 from the media server must not condemn the file.
+
+    Media servers are rotated: the API can still name one that no longer has
+    the file while ``file.<domain>`` serves it, so the usual address gets its
+    own attempt without spending a retry on it.
+    """
+    payload = b"fallback"
+    file_url = "https://file.pawchive.pw/data/ab/cd/x.png?f=x.png"
+    direct_url = "https://n1.pawchive.pw/data/ab/cd/x.png?f=x.png"
+    du.remember_direct_url(file_url, direct_url)
+    seen = []
+
+    class NotFound:
+        status_code = 404
+        headers = {}
+        text = ""
+
+        def raise_for_status(self):
+            raise requests.HTTPError("404 Client Error", response=self)
+
+        def close(self):
+            return None
+
+    class Session:
+        def get(self, url, headers=None, **kwargs):
+            seen.append(url)
+            if url == direct_url:
+                return NotFound()
+            return _Resp(payload)
+
+    monkeypatch.setattr(cd, "get_session", lambda *a, **k: Session())
+
+    # One retry only: the fallback must not need a second one.
+    settings = SimpleNamespace(settings_tab=None, file_download_max_retries=1)
+    thread = cd.CreatorDownloadThread(
+        "service",
+        "creator",
+        str(tmp_path),
+        ["1"],
+        [file_url],
+        {file_url: "1"},
+        None,
+        str(tmp_path),
+        {},
+        settings,
+    )
+    thread.domain_config = {
+        "domain": "pawchive.pw",
+        "base_url": "https://pawchive.pw",
+        "api_base": "https://pawchive.pw/api/v1",
+        "referer": "https://pawchive.pw/",
+        "file_base_url": "https://file.pawchive.pw",
+    }
+    thread.generate_filename_and_folder = lambda *a, **k: (str(tmp_path), "x.png")
+    thread.hash_db = SimpleNamespace(lookup=lambda h: None, store=lambda *a, **k: None)
+
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
+
+    # The media server was asked first, the usual address second and served it.
+    assert seen[-1] == file_url
+    assert (tmp_path / "x.png").read_bytes() == payload
+    assert file_url in thread.completed_files
+    assert file_url not in thread.failed_files
+
+
+def test_a_failing_media_server_does_not_spend_a_retry(monkeypatch, tmp_path):
+    """A timeout or 5xx from the media server is free: the usual URL is next.
+
+    Media servers are rotated, so what one of them answers says nothing about
+    ``file.<domain>``.  Charging that failure to the file would fail a download
+    the usual address would have served, which a single retry setting cannot
+    afford, and it is reported as a debug line so the rotation is not silent.
+    """
+    payload = b"fallback"
+    file_url = "https://file.pawchive.pw/data/ab/cd/y.png?f=y.png"
+    direct_url = "https://n1.pawchive.pw/data/ab/cd/y.png?f=y.png"
+    du.remember_direct_url(file_url, direct_url)
+    seen = []
+
+    class ServerError:
+        status_code = 500
+        headers = {}
+        text = ""
+
+        def raise_for_status(self):
+            raise requests.HTTPError("500 Server Error", response=self)
+
+        def close(self):
+            return None
+
+    class Session:
+        def get(self, url, headers=None, **kwargs):
+            seen.append(url)
+            if url == direct_url:
+                return ServerError()
+            return _Resp(payload)
+
+    monkeypatch.setattr(cd, "get_session", lambda *a, **k: Session())
+
+    settings = SimpleNamespace(settings_tab=None, file_download_max_retries=1)
+    thread = cd.CreatorDownloadThread(
+        "service",
+        "creator",
+        str(tmp_path),
+        ["1"],
+        [file_url],
+        {file_url: "1"},
+        None,
+        str(tmp_path),
+        {},
+        settings,
+    )
+    thread.domain_config = {
+        "domain": "pawchive.pw",
+        "base_url": "https://pawchive.pw",
+        "api_base": "https://pawchive.pw/api/v1",
+        "referer": "https://pawchive.pw/",
+        "file_base_url": "https://file.pawchive.pw",
+    }
+    thread.generate_filename_and_folder = lambda *a, **k: (str(tmp_path), "y.png")
+    thread.hash_db = SimpleNamespace(lookup=lambda h: None, store=lambda *a, **k: None)
+    logs = []
+    thread.log.connect(lambda message, level: logs.append((message, level)))
+
+    asyncio.run(thread.download_file(file_url, str(tmp_path), 0, 1, page_number=1))
+
+    assert seen[-1] == file_url
+    assert (tmp_path / "y.png").read_bytes() == payload
+    assert file_url in thread.completed_files
+    assert file_url not in thread.failed_files
+    assert any("using the usual address" in message for message, _ in logs)
+    assert ("DEBUG" in [level for _, level in logs]) is True

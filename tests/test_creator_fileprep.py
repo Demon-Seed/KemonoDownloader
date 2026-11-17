@@ -222,8 +222,8 @@ def test_fetch_and_detect_files_does_not_retry_a_404(monkeypatch, qapp):
     assert calls["i"] == 1
 
 
-def test_preparation_warns_when_the_deadline_drops_work(monkeypatch, qapp):
-    """Files a straggler was about to queue used to vanish without a word."""
+def test_cancelled_preparation_warns_when_workers_are_abandoned(monkeypatch, qapp):
+    """Files a straggler was about to queue must not vanish without a word."""
     import itertools
     import threading
 
@@ -238,7 +238,7 @@ def test_preparation_warns_when_the_deadline_drops_work(monkeypatch, qapp):
         creator_content_check=True,
         settings=SimpleNamespace(post_data_max_retries=1, settings_tab=None),
     )
-    thread.fetch_and_detect_files = lambda pid, curl: release.wait(5) or (
+    thread.fetch_and_detect_files = lambda pid, curl: release.wait(10) or (
         pid,
         [("a.png", "https://n1.kemono.cr/a.png")],
     )
@@ -249,12 +249,17 @@ def test_preparation_warns_when_the_deadline_drops_work(monkeypatch, qapp):
     thread.finished = SimpleNamespace(emit=lambda *a, **k: None)
     thread.progress = SimpleNamespace(emit=lambda *a, **k: None)
 
-    # Walk the clock past the 30 s deadline without waiting for it.
+    # A cancelled run stops waiting once the grace period is over: the fake
+    # clock jumps 100 s per reading, and the first sleep is the cancellation.
     ticks = itertools.count(0, 100)
+
+    def fake_sleep(_seconds):
+        thread.is_running = False
+
     monkeypatch.setattr(
         cd,
         "time",
-        SimpleNamespace(monotonic=lambda: next(ticks), sleep=lambda *_: None),
+        SimpleNamespace(monotonic=lambda: next(ticks), sleep=fake_sleep),
     )
 
     try:

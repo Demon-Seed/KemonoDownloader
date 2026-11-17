@@ -31,7 +31,7 @@ class TestDefaultSettings:
             assert defaults["language"] == "english"
             assert defaults["creator_posts_max_attempts"] == 200
             assert defaults["post_data_max_retries"] == 7
-            assert defaults["file_download_max_retries"] == 50
+            assert defaults["file_download_max_retries"] == 10
             assert defaults["api_request_max_retries"] == 3
             assert defaults["show_only_found_filetypes"] == "on_with_count"
             assert defaults["creator_filename_template"] == (

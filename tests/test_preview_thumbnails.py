@@ -252,7 +252,7 @@ class _Session:
     def __init__(self):
         self.urls = []
 
-    def get(self, url, headers=None, stream=None):
+    def get(self, url, headers=None, stream=None, timeout=None):
         self.urls.append(url)
         return _Response(_png_bytes())
 
