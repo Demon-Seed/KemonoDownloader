@@ -110,6 +110,45 @@ def test_A2_a_retry_keeps_the_original_numbers(qtbot, tmp_path, monkeypatch):
     assert recorded[-1]["post_file_counts"] == {"42": 3}
 
 
+def test_the_download_thread_reuses_the_queued_creator_name(
+    qtbot, tmp_path, monkeypatch
+):
+    """The tab already read the name when the creator was queued.
+
+    Handing it over saves one API request per run, and means a rate-limited
+    profile fetch cannot put the files in an Unknown_Creator folder.
+    """
+    recorded = []
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            recorded.append(kwargs)
+            for signal in (
+                "file_progress",
+                "file_completed",
+                "post_completed",
+                "creator_folder_ready",
+                "log",
+                "finished",
+            ):
+                setattr(self, signal, SimpleNamespace(connect=lambda *a, **k: None))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(cd, "CreatorDownloadThread", FakeThread)
+    tab = make_tab(qtbot, tmp_path)
+    url = "https://kemono.cr/f1.jpg"
+
+    # Unknown creator: the thread falls back to fetching the profile.
+    tab._start_download_thread([url], {url: "42"}, CREATOR_URL)
+    assert recorded[-1]["creator_name"] is None
+
+    tab._creator_names[CREATOR_URL.rstrip("/")] = "Some Creator"
+    tab._start_download_thread([url], {url: "42"}, CREATOR_URL)
+    assert recorded[-1]["creator_name"] == "Some Creator"
+
+
 def test_A6_a_run_that_never_started_still_signals_finished():
     """Without the signal the tab never runs its cleanup and stays busy."""
     emitted = []

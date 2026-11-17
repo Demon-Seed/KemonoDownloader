@@ -127,6 +127,9 @@ class TestTerminalErrors:
 def test_creator_fetch_and_detect_uses_the_short_countdown(monkeypatch):
     sleeps = []
     monkeypatch.setattr(cd.time, "sleep", lambda seconds: sleeps.append(seconds))
+    # The 429 also defers the request gate for the rest of the phase; this stub
+    # has no real gate, and the retry must not wait out those five seconds.
+    monkeypatch.setattr(cd, "wait_for_pawchive_cooldown", lambda *a, **k: True)
     responses = [
         SimpleNamespace(status_code=429),
         SimpleNamespace(status_code=200, json=lambda: {"post": {}}),

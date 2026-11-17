@@ -223,14 +223,63 @@ class TestSettingsUIInteractions:
         st = SettingsTab(MockParent())
         try:
             # Update via slider
-            st.download_slider.setValue(10)
-            assert st.temp_settings["simultaneous_downloads"] == 10
-            assert st.download_spinbox.value() == 10
+            st.download_slider.setValue(4)
+            assert st.temp_settings["simultaneous_downloads"] == 4
+            assert st.download_spinbox.value() == 4
 
             # Update via spinbox
-            st.download_spinbox.setValue(15)
-            assert st.temp_settings["simultaneous_downloads"] == 15
-            assert st.download_slider.value() == 15
+            st.download_spinbox.setValue(5)
+            assert st.temp_settings["simultaneous_downloads"] == 5
+            assert st.download_slider.value() == 5
+        finally:
+            st.deleteLater()
+
+    def test_each_numeric_setting_stops_at_its_useful_maximum(self, qapp):
+        """The ranges match what the code can honour, not a round number.
+
+        File retries end when the per-file retry budget does, preparation runs
+        three posts at a time, and the API retry count only governs the
+        creator-name fetch.
+        """
+        from kemonodownloader.kd_settings import SettingsTab
+
+        class MockParent:
+            def log(self, m):
+                pass
+
+        st = SettingsTab(MockParent())
+        try:
+            assert st.download_slider.maximum() == 5
+            assert st.download_spinbox.maximum() == 5
+            assert st.post_data_max_retries_spinbox.maximum() == 20
+            assert st.file_download_max_retries_spinbox.maximum() == 20
+            assert st.api_request_max_retries_spinbox.maximum() == 10
+        finally:
+            st.deleteLater()
+
+    def test_a_stored_value_above_the_range_is_clamped(self, qapp):
+        """A setting saved before the range shrank must not outlive it.
+
+        The download threads read the getters, so clamping there applies the
+        new limit on the next run instead of waiting for Apply.
+        """
+        from kemonodownloader.kd_settings import SettingsTab
+
+        class MockParent:
+            def log(self, m):
+                pass
+
+        st = SettingsTab(MockParent())
+        try:
+            st.settings["simultaneous_downloads"] = 20
+            st.settings["post_data_max_retries"] = 100
+            st.settings["file_download_max_retries"] = 200
+            st.settings["api_request_max_retries"] = 50
+
+            assert st.get_simultaneous_downloads() == 5
+            assert st.get_post_data_max_retries() == 20
+            assert st.get_file_download_max_retries() == 20
+            assert st.get_api_request_max_retries() == 10
         finally:
             st.deleteLater()
 

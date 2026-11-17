@@ -589,3 +589,30 @@ def test_a_clean_run_logs_no_rate_limit_summary():
     thread._log_rate_limit_summary()
 
     assert logs == []
+
+
+def test_the_run_summary_reports_preparation_rate_limits():
+    """Preparation runs before the download thread, so it reports separately.
+
+    Its counts live in download_utils; the summary folds them in and clears
+    them, so the next run does not inherit them.
+    """
+    from kemonodownloader import download_utils as du
+
+    du.note_rate_limit(429)
+    du.note_rate_limit(429)
+    du.note_rate_limit(403)
+
+    thread = cd.CreatorDownloadThread.__new__(cd.CreatorDownloadThread)
+    thread._destroyed = False
+    thread.rate_limit_hits = {}
+    logs = []
+    thread.log = SimpleNamespace(emit=lambda message, level: logs.append(message))
+
+    thread._log_rate_limit_summary()
+
+    assert len(logs) == 1
+    assert "Preparing files" in logs[0]
+    assert "2" in logs[0]
+    assert "1" in logs[0]
+    assert du.rate_limit_counts() == {}

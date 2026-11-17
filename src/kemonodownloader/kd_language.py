@@ -17,7 +17,7 @@ STRINGS = {
     "all_files_attempted_for_creator": "All files attempted for current creator. Finalizing.",
     "all_posts_and_files_completed": "All posts and files completed for current creator.",
     "allowed_extensions_for_download": "Allowed extensions for download: {0}",
-    "api_request_max_retries": "API Request Max Retries:",
+    "api_request_max_retries": "Creator Name Max Retries:",
     "app_title": "Kemono Downloader",
     "apply_changes": "Apply Changes",
     "attachments": "Attachments",
@@ -275,6 +275,7 @@ STRINGS = {
     "posts_to_download": "Posts to Download",
     "posts_to_download_num": "Posts to download: {0}",
     "posts_without_details_not_filtered": "Left {0} post(s) unfiltered: no stored details for them. Re-fetch this creator to filter them too.",
+    "preparation_rate_limited": "Rate limited while preparing {0}; Retry-After: {1}",
     "prepared_files_for_download": "Prepared {0} files for download",
     "prepared_posts_for_population": "Prepared {0} posts for population, unique titles: {1}",
     "preparing_files": "Preparing files to download...",
@@ -298,6 +299,7 @@ STRINGS = {
     "queue_input_load_first": "Load First Creator",
     "rate_limit_hit": "Rate limit hit for {0} (attempt {1}/{2}). Retrying...",
     "rate_limit_summary": "File host answered {0} x HTTP 403 and {1} x HTTP 429 this run.",
+    "rate_limit_summary_preparation": "Preparing files: the file API answered {0} x HTTP 403 and {1} x HTTP 429.",
     "queued_post_hidden_by_filters": "{0} of the posts you queued are hidden by the current filters or search, so they will not be downloaded.",
     "reached_last_page": "Reached last page for creator {0}. Total posts fetched: {1}",
     "received_less_than_page_size": "Received {0} posts (less than page size {1}), indicating last page reached",
@@ -442,6 +444,7 @@ STRINGS = {
     "using_cached_posts_fallback": "Fetching failed, using cached posts for {0}",
     "viewing_creator": "Viewing creator: {0}",
     "waiting_for_remaining_files": "Waiting for remaining files: {0}/{1}, Failed: {2}, Active threads: {3}",
+    "waiting_retry_after": "Waiting {0} s, as the file API asked, before preparing the next post.",
 }
 
 DEFAULT_LANGUAGE = "english"

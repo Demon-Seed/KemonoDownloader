@@ -76,10 +76,15 @@ from kemonodownloader.download_utils import (
     ProgressTracker,
     acquire_pawchive_slot,
     create_connection_guard,
+    defer_pawchive_requests,
     direct_url_for,
     forget_direct_url,
+    note_rate_limit,
+    rate_limit_counts,
     remember_direct_url,
+    reset_rate_limit_counts,
     response_content_length,
+    wait_for_pawchive_cooldown,
 )
 from kemonodownloader.hash_db import HashDB
 from kemonodownloader.kd_language import translate
@@ -3185,6 +3190,9 @@ class FilePreparationThread(_StoppableThread, QThread):
         self.settings = settings
         self.max_concurrent = max_concurrent
         self.is_running = True
+        # One debug line is enough to say the API is throttling preparation;
+        # repeating it for every worker would bury the log.
+        self._rate_limit_logged = False
         # Independent, always-on, filename-only skip list.
         # It can be combined freely with whole-post skipping.
         self.file_skip_keywords = (
@@ -3468,12 +3476,20 @@ class FilePreparationThread(_StoppableThread, QThread):
         retry_delay_seconds = 2
         for attempt in range(1, max_retries + 1):
             try:
+                # Preparation requests are not paced - there are far fewer of
+                # them than files - but a pause the host asked for applies to
+                # all of them, not only to the worker that was told to wait.
+                if not wait_for_pawchive_cooldown(lambda: self.is_running):
+                    return None
                 headers = get_headers().copy()
                 headers["Referer"] = domain_config["referer"]
                 response = get_session(self.settings.settings_tab).get(
                     api_url, headers=headers, timeout=(15, 30)
                 )
                 if response.status_code != 200:
+                    # The end-of-run summary reports these counts; preparation
+                    # has no download thread of its own to keep them.
+                    note_rate_limit(response.status_code)
                     # A 429 is a rate limit and a 5xx is the server having a bad
                     # day; both are worth the retry budget. Other 4xx mean the
                     # request itself is wrong, so retrying cannot help.
@@ -3481,7 +3497,9 @@ class FilePreparationThread(_StoppableThread, QThread):
                         500 <= response.status_code < 600
                     )
                     if retryable_status and attempt < max_retries:
+                        requested = None
                         if response.status_code == 429:
+                            requested = retry_after_seconds(response)
                             self.log.emit(
                                 translate(
                                     "log_warning",
@@ -3494,6 +3512,28 @@ class FilePreparationThread(_StoppableThread, QThread):
                                 ),
                                 "WARNING",
                             )
+                            # Quiet the whole phase: the other workers are what
+                            # keeps the block alive.
+                            defer_pawchive_requests(
+                                requested if requested is not None else 5.0
+                            )
+                            if not getattr(self, "_rate_limit_logged", False):
+                                self._rate_limit_logged = True
+                                self.log.emit(
+                                    translate(
+                                        "log_debug",
+                                        translate(
+                                            "preparation_rate_limited",
+                                            post_id,
+                                            (
+                                                "not sent"
+                                                if requested is None
+                                                else f"{requested:g} s"
+                                            ),
+                                        ),
+                                    ),
+                                    "DEBUG",
+                                )
                         else:
                             self.log.emit(
                                 translate(
@@ -3509,14 +3549,31 @@ class FilePreparationThread(_StoppableThread, QThread):
                                 "WARNING",
                             )
                         delay = countdown_seconds(attempt, retry_delay_seconds)
-                        for i in range(delay, 0, -1):
-                            if not self.is_running:
-                                return None
+                        if requested is not None:
+                            # The server named its own wait; ignoring it is what
+                            # kept the block alive.
+                            delay = max(delay, requested)
                             self.log.emit(
-                                translate("log_info", translate("trying_again_in", i)),
+                                translate(
+                                    "log_info",
+                                    translate("waiting_retry_after", int(delay)),
+                                ),
                                 "INFO",
                             )
-                            self._interruptible_sleep(1)
+                            self._interruptible_sleep(delay)
+                            if not self.is_running:
+                                return None
+                        else:
+                            for i in range(delay, 0, -1):
+                                if not self.is_running:
+                                    return None
+                                self.log.emit(
+                                    translate(
+                                        "log_info", translate("trying_again_in", i)
+                                    ),
+                                    "INFO",
+                                )
+                                self._interruptible_sleep(1)
                         continue
                     self.log.emit(
                         translate(
@@ -3819,6 +3876,7 @@ class CreatorDownloadThread(_StoppableThread, QThread):
         post_times_map=None,
         file_numbers=None,
         post_file_counts=None,
+        creator_name=None,
     ):
         super().__init__()
         self.service = service
@@ -3856,6 +3914,10 @@ class CreatorDownloadThread(_StoppableThread, QThread):
         self.file_numbers = dict(file_numbers or {})
         self.post_file_counts = dict(post_file_counts or {})
         self.creator_name = None
+        # Display name the tab already read when the creator was queued.  Using
+        # it saves one API request per run, and keeps a rate-limited profile
+        # fetch from renaming the folder.
+        self._known_creator_name = str(creator_name or "").strip()
         self.skip_folder_enabled = skip_folder_enabled
         self.skip_folder_threshold = skip_folder_threshold
         self.force_folder_for_compressed = force_folder_for_compressed
@@ -3917,16 +3979,17 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                 post_files_map[post_id].append(file_url)
         return post_files_map
 
-    def fetch_creator_and_post_info(self):
-        """Fetch creator name and retrieve post titles from post_titles_map."""
+    def _fetch_creator_name(self):
+        """Ask the API for the creator's display name.
+
+        The name becomes a folder name, so a single blip must not rename it:
+        falling back to "Unknown_Creator" split a creator's files across two
+        folders.  Retry before accepting the fallback, using the "Creator Name
+        Max Retries" setting (the count used to be hard-coded to 3).
+        """
         profile_url = creator_profile_url(
             self.domain_config, self.service, self.creator_id
         )
-        # The creator name becomes a folder name, so a single blip must not
-        # rename it: falling back to "Unknown_Creator" split a creator's files
-        # across two folders. Retry before accepting the fallback, using the
-        # "API Request Max Retries" setting (this was the knob's only user
-        # left unwired - the count was hard-coded to 3).
         attempts = getattr(self.settings, "api_request_max_retries", 3)
         if not isinstance(attempts, int) or attempts < 1:
             # Stub settings (mocks) and junk fall back to the old default.
@@ -3993,6 +4056,16 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                 )
                 self.creator_name = "Unknown_Creator"
                 break
+
+    def fetch_creator_and_post_info(self):
+        """Fetch creator name and retrieve post titles from post_titles_map."""
+        if self._known_creator_name:
+            # The tab already read this name when the creator was queued, so
+            # asking again would be one request per run for a value we have -
+            # and a rate-limited profile fetch here can only cost a folder name.
+            self.creator_name = sanitize_filename(self._known_creator_name)
+        else:
+            self._fetch_creator_name()
 
         for post_id in self.selected_posts:
             key = (self.service, self.creator_id, post_id)
@@ -5065,23 +5138,40 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                 queue.task_done()
 
     def _log_rate_limit_summary(self):
-        """One log line with the 403/429 counts, when the host sent any.
+        """Log the 403/429 counts for the run, when the host sent any.
 
         The counts are the signal for tuning the request pacing: a run with no
         403s needs nothing, while a run full of them wants a slower gate.
+        Preparation is reported separately because it runs in its own thread,
+        before this one exists, and is not paced; its counts are cleared once
+        reported so the next run does not inherit them.
         """
         hits = getattr(self, "rate_limit_hits", None) or {}
         forbidden = hits.get(403, 0)
         throttled = hits.get(429, 0)
-        if not forbidden and not throttled:
-            return
-        self._safe_emit(
-            self.log,
-            translate(
-                "log_info", translate("rate_limit_summary", forbidden, throttled)
-            ),
-            "INFO",
-        )
+        prepared = rate_limit_counts()
+        reset_rate_limit_counts()
+        if forbidden or throttled:
+            self._safe_emit(
+                self.log,
+                translate(
+                    "log_info", translate("rate_limit_summary", forbidden, throttled)
+                ),
+                "INFO",
+            )
+        if prepared:
+            self._safe_emit(
+                self.log,
+                translate(
+                    "log_info",
+                    translate(
+                        "rate_limit_summary_preparation",
+                        prepared.get(403, 0),
+                        prepared.get(429, 0),
+                    ),
+                ),
+                "INFO",
+            )
 
     def run(self):
         try:
@@ -8318,7 +8408,7 @@ class CreatorDownloaderTab(QWidget):
             self.creator_attachments_check.isChecked(),
             self.creator_content_check.isChecked(),
             self._create_thread_settings(),
-            max_concurrent=5,
+            max_concurrent=3,
             file_skip_keywords=file_skip_keywords,
             file_skip_lenient=lenient_files,
             lenient_punctuation=lenient_punctuation,
@@ -8515,6 +8605,7 @@ class CreatorDownloaderTab(QWidget):
             post_times_map=post_times,
             file_numbers=file_numbers,
             post_file_counts=post_file_counts,
+            creator_name=self._creator_names.get(url),
         )
         thread.file_progress.connect(self.update_creator_file_progress)
         thread.file_completed.connect(self.update_file_completion)

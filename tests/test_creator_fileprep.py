@@ -114,6 +114,9 @@ def test_fetch_and_detect_files_success(monkeypatch, qapp):
 def test_fetch_and_detect_files_429_retry(monkeypatch, qapp):
     # Ensure we don't actually sleep during retries
     monkeypatch.setattr(cd, "time", SimpleNamespace(sleep=lambda *_: None))
+    # The 429 defers the request gate for the whole phase; the retry inside
+    # this test must not sit out those five seconds.
+    monkeypatch.setattr(cd, "wait_for_pawchive_cooldown", lambda *a, **k: True)
 
     creator_ext_checks = {".png": _mk_checkbox(True)}
     thread = cd.FilePreparationThread(
@@ -147,6 +150,56 @@ def test_fetch_and_detect_files_429_retry(monkeypatch, qapp):
 
     res = thread.fetch_and_detect_files("p1", "https://kemono.cr/artist/user/10")
     assert res is not None and res[0] == "p1"
+
+
+def test_a_429_retry_after_is_obeyed(monkeypatch, qapp):
+    """The host's own wait wins over the built-in countdown.
+
+    The flat 2-5 s countdown retried sooner than the server asked, which is
+    what kept the block alive.  Preparation now sleeps what Retry-After says,
+    and the count is kept for the end-of-run summary.
+    """
+    from kemonodownloader import download_utils as du
+
+    monkeypatch.setattr(cd, "wait_for_pawchive_cooldown", lambda *a, **k: True)
+
+    thread = cd.FilePreparationThread(
+        post_ids=[],
+        all_files_map={},
+        creator_ext_checks={".png": _mk_checkbox(True)},
+        creator_main_check=True,
+        creator_attachments_check=True,
+        creator_content_check=True,
+        settings=SimpleNamespace(post_data_max_retries=3, settings_tab=None),
+    )
+    waits = []
+    thread._interruptible_sleep = lambda seconds: waits.append(seconds)
+
+    class Resp429:
+        status_code = 429
+        headers = {"Retry-After": "7"}
+
+    class Resp200:
+        status_code = 200
+
+        def json(self):
+            return {"id": "p1", "file": {"path": "/media/1.png", "name": "img1.png"}}
+
+    calls = {"i": 0}
+
+    class S:
+        def get(self, url, headers=None, **kwargs):
+            calls["i"] += 1
+            return Resp429() if calls["i"] == 1 else Resp200()
+
+    monkeypatch.setattr(cd, "get_session", lambda st: S())
+
+    res = thread.fetch_and_detect_files("p1", "https://kemono.cr/artist/user/10")
+
+    assert res is not None and res[0] == "p1"
+    # One wait of seven seconds, not a countdown of five one-second naps.
+    assert waits == [7.0]
+    assert du.rate_limit_counts() == {429: 1}
 
 
 def test_fetch_and_detect_files_retries_a_server_error(monkeypatch, qapp):

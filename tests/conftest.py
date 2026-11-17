@@ -126,15 +126,18 @@ def reset_pawchive_request_gate():
 
     The gate is process-wide by design (it paces real runs), so without this
     a test that downloads several Pawchive files would wait 250 ms per file
-    for no reason.
+    for no reason.  The preparation rate-limit counters are reset for the same
+    reason: they are folded into a later run's summary.
     """
     from kemonodownloader import download_utils
 
     download_utils.reset_pawchive_gate()
     download_utils.clear_direct_urls()
+    download_utils.reset_rate_limit_counts()
     yield
     download_utils.reset_pawchive_gate()
     download_utils.clear_direct_urls()
+    download_utils.reset_rate_limit_counts()
 
 
 @pytest.fixture(autouse=True)

@@ -81,6 +81,45 @@ def test_fetch_creator_and_post_info_populates(monkeypatch, tmp_path):
     assert thread.post_titles_map[key] == sanitize_filename("Post Title")
 
 
+def test_a_known_creator_name_skips_the_profile_request(monkeypatch, tmp_path):
+    """The tab already reads the name when a creator is queued.
+
+    Reusing it saves one request per run, and means a rate-limited profile
+    fetch cannot rename the folder.  The name is sanitised here because it
+    comes from the queue, not from the API response.
+    """
+    calls = []
+
+    class NoRequests:
+        def get(self, url, *args, **kwargs):
+            calls.append(url)
+            return FakeResponse({}, 500)
+
+    thread = CreatorDownloadThread(
+        service="svc",
+        creator_id="creator123",
+        download_folder=str(tmp_path / "out"),
+        selected_posts=[],
+        files_to_download=[],
+        files_to_posts_map={},
+        console=None,
+        other_files_dir=str(tmp_path / "other"),
+        post_titles_map={},
+        settings=make_settings(),
+        download_text=False,
+        creator_name="  Some Creator: Vol. 2  ",
+    )
+    monkeypatch.setattr(
+        "kemonodownloader.creator_downloader.get_session",
+        lambda settings_tab=None: NoRequests(),
+    )
+
+    thread.fetch_creator_and_post_info()
+
+    assert calls == []
+    assert thread.creator_name == sanitize_filename("Some Creator: Vol. 2")
+
+
 def test_creator_name_is_retried_before_falling_back(monkeypatch, tmp_path):
     """One failed profile request must not rename the creator's folder.
 

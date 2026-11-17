@@ -42,6 +42,36 @@ from kemonodownloader.kd_theme import scoped
 # Main repository (VoxDroid) used by the in-app update/repository links.
 GITHUB_REPO_URL = "https://github.com/VoxDroid/KemonoDownloader"
 
+# Upper bounds for the numeric settings.  Above these a value is either
+# unreachable in practice (a file's retries end when its 120 s retry budget
+# does) or something no user should ask for by accident (more concurrent
+# Pawchive downloads than the host tolerates).  The spin boxes and the
+# getters share them so the two cannot drift apart.
+MAX_SIMULTANEOUS_DOWNLOADS = 5
+MAX_POST_DATA_RETRIES = 20
+MAX_FILE_DOWNLOAD_RETRIES = 20
+MAX_API_REQUEST_RETRIES = 10
+
+# Values used when a stored setting is missing or unreadable.
+DEFAULT_SIMULTANEOUS_DOWNLOADS = 5
+DEFAULT_POST_DATA_RETRIES = 7
+DEFAULT_FILE_DOWNLOAD_RETRIES = 10
+DEFAULT_API_REQUEST_RETRIES = 3
+
+
+def _bounded_setting(value, maximum, default):
+    """Return *value* as an int in ``1..maximum``, or *default* when unusable.
+
+    A stored setting can outlive a range change: it was allowed when it was
+    saved.  Clamping here means shrinking a spin box takes effect on the next
+    run instead of waiting for someone to press Apply.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return min(max(number, 1), maximum)
+
 
 # Modes for "Filetype Display". Kept as plain strings
 # and validated on load so a hand-edited settings file cannot land on an
@@ -510,7 +540,7 @@ class SettingsTab(QWidget):
         self.simultaneous_downloads_label = QLabel()
         download_layout.addWidget(self.simultaneous_downloads_label, 0, 0)
         self.download_slider = QSlider(Qt.Orientation.Horizontal)
-        self.download_slider.setRange(1, 20)
+        self.download_slider.setRange(1, MAX_SIMULTANEOUS_DOWNLOADS)
         self.download_slider.setValue(self.temp_settings["simultaneous_downloads"])
         self.download_slider.setStyleSheet(
             "QSlider::groove:horizontal { border: 1px solid #4A5B7A; height: 8px; background: #2A3B5A; margin: 2px 0; }"
@@ -519,7 +549,7 @@ class SettingsTab(QWidget):
         self.download_slider.valueChanged.connect(self.update_simultaneous_downloads)
         download_layout.addWidget(self.download_slider, 0, 1)
         self.download_spinbox = QSpinBox()
-        self.download_spinbox.setRange(1, 20)
+        self.download_spinbox.setRange(1, MAX_SIMULTANEOUS_DOWNLOADS)
         self.download_spinbox.setValue(self.temp_settings["simultaneous_downloads"])
         self.download_spinbox.setStyleSheet(
             scoped("QSpinBox", "padding: 5px; border-radius: 5px;")
@@ -555,7 +585,7 @@ class SettingsTab(QWidget):
         self.post_data_max_retries_label = QLabel()
         retry_layout.addWidget(self.post_data_max_retries_label, 1, 0)
         self.post_data_max_retries_spinbox = QSpinBox()
-        self.post_data_max_retries_spinbox.setRange(1, 100)
+        self.post_data_max_retries_spinbox.setRange(1, MAX_POST_DATA_RETRIES)
         self.post_data_max_retries_spinbox.setValue(
             self.temp_settings["post_data_max_retries"]
         )
@@ -570,7 +600,7 @@ class SettingsTab(QWidget):
         self.file_download_max_retries_label = QLabel()
         retry_layout.addWidget(self.file_download_max_retries_label, 2, 0)
         self.file_download_max_retries_spinbox = QSpinBox()
-        self.file_download_max_retries_spinbox.setRange(1, 200)
+        self.file_download_max_retries_spinbox.setRange(1, MAX_FILE_DOWNLOAD_RETRIES)
         self.file_download_max_retries_spinbox.setValue(
             self.temp_settings["file_download_max_retries"]
         )
@@ -585,7 +615,7 @@ class SettingsTab(QWidget):
         self.api_request_max_retries_label = QLabel()
         retry_layout.addWidget(self.api_request_max_retries_label, 3, 0)
         self.api_request_max_retries_spinbox = QSpinBox()
-        self.api_request_max_retries_spinbox.setRange(1, 50)
+        self.api_request_max_retries_spinbox.setRange(1, MAX_API_REQUEST_RETRIES)
         self.api_request_max_retries_spinbox.setValue(
             self.temp_settings["api_request_max_retries"]
         )
@@ -2088,19 +2118,35 @@ class SettingsTab(QWidget):
         self.reset_button.setText(translate("reset_to_defaults"))
 
     def get_simultaneous_downloads(self):
-        return self.settings["simultaneous_downloads"]
+        return _bounded_setting(
+            self.settings["simultaneous_downloads"],
+            MAX_SIMULTANEOUS_DOWNLOADS,
+            DEFAULT_SIMULTANEOUS_DOWNLOADS,
+        )
 
     def get_creator_posts_max_attempts(self):
         return self.settings["creator_posts_max_attempts"]
 
     def get_post_data_max_retries(self):
-        return self.settings["post_data_max_retries"]
+        return _bounded_setting(
+            self.settings["post_data_max_retries"],
+            MAX_POST_DATA_RETRIES,
+            DEFAULT_POST_DATA_RETRIES,
+        )
 
     def get_file_download_max_retries(self):
-        return self.settings["file_download_max_retries"]
+        return _bounded_setting(
+            self.settings["file_download_max_retries"],
+            MAX_FILE_DOWNLOAD_RETRIES,
+            DEFAULT_FILE_DOWNLOAD_RETRIES,
+        )
 
     def get_api_request_max_retries(self):
-        return self.settings["api_request_max_retries"]
+        return _bounded_setting(
+            self.settings["api_request_max_retries"],
+            MAX_API_REQUEST_RETRIES,
+            DEFAULT_API_REQUEST_RETRIES,
+        )
 
     def get_verbose_logging(self):
         """True when internal debug lines should reach the log."""

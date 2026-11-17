@@ -200,11 +200,11 @@ def test_template_help_tooltips_are_not_squeezed_by_the_button_style(tmp_path, q
     tab = make_tab(tmp_path)
     # initial getters
     assert isinstance(tab.get_creator_folder_strategy(), str)
-    tab.update_temp_setting("simultaneous_downloads", 7)
-    tab.update_simultaneous_downloads(7)
-    assert tab.temp_settings["simultaneous_downloads"] == 7
-    assert tab.download_slider.value() == 7
-    assert tab.download_spinbox.value() == 7
+    tab.update_temp_setting("simultaneous_downloads", 4)
+    tab.update_simultaneous_downloads(4)
+    assert tab.temp_settings["simultaneous_downloads"] == 4
+    assert tab.download_slider.value() == 4
+    assert tab.download_spinbox.value() == 4
 
 
 def test_proxy_type_and_get_proxy_settings(tmp_path, monkeypatch):

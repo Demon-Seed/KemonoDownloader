@@ -139,6 +139,31 @@ class RequestGate:
                 wait_for = self._next_at - now
             time.sleep(min(max(wait_for, 0.01), 0.05))
 
+    def defer(self, seconds: float) -> None:
+        """Push every later Pawchive request back by *seconds*.
+
+        Used when the host answers 429: the wait it asked for applies to the
+        whole process, not only to the worker that was told.
+        """
+        with self._lock:
+            now = time.monotonic()
+            self._next_at = max(self._next_at, now + max(float(seconds), 0.0))
+
+    def wait_out(self, is_running: Optional[Callable[[], bool]] = None) -> bool:
+        """Sleep while a deferral is pending; ``False`` only when cancelled.
+
+        Unlike :meth:`acquire` this never reserves a slot, so requests that
+        are not paced (preparation) still honour a pause the host asked for.
+        """
+        while True:
+            if is_running is not None and not is_running():
+                return False
+            with self._lock:
+                wait_for = self._next_at - time.monotonic()
+            if wait_for <= 0:
+                return True
+            time.sleep(min(max(wait_for, 0.01), 0.1))
+
 
 _gate = RequestGate()
 
@@ -153,6 +178,16 @@ def acquire_pawchive_slot(url: str, is_running=None) -> bool:
 def reset_pawchive_gate() -> None:
     """Clear the gate's next-allowed time (used by the test suite)."""
     _gate.reset()
+
+
+def defer_pawchive_requests(seconds: float) -> None:
+    """Pause every Pawchive request for *seconds* (a 429 asked for it)."""
+    _gate.defer(seconds)
+
+
+def wait_for_pawchive_cooldown(is_running=None) -> bool:
+    """Block while a deferral is pending; ``False`` only when cancelled."""
+    return _gate.wait_out(is_running)
 
 
 # Download URL -> the URL on the media server the API named, filled while the
@@ -187,3 +222,34 @@ def clear_direct_urls() -> None:
     """Drop every remembered media-server URL (new run, and tests)."""
     with _direct_urls_lock:
         _direct_urls.clear()
+
+
+# 403/429 answers seen while preparing files.  Preparation runs in its own
+# thread, before the download thread that prints the end-of-run summary
+# exists, so its counts are kept here and folded into that summary.
+_prepare_rate_limit_hits = {}
+_prepare_rate_limit_lock = threading.Lock()
+
+
+def note_rate_limit(status_code) -> None:
+    """Count one 403 or 429 answer from the file API."""
+    try:
+        code = int(status_code)
+    except (TypeError, ValueError):
+        return
+    if code not in (403, 429):
+        return
+    with _prepare_rate_limit_lock:
+        _prepare_rate_limit_hits[code] = _prepare_rate_limit_hits.get(code, 0) + 1
+
+
+def rate_limit_counts() -> dict:
+    """Snapshot of the preparation phase's 403/429 counts."""
+    with _prepare_rate_limit_lock:
+        return dict(_prepare_rate_limit_hits)
+
+
+def reset_rate_limit_counts() -> None:
+    """Clear the preparation counters (after a summary, and by the tests)."""
+    with _prepare_rate_limit_lock:
+        _prepare_rate_limit_hits.clear()

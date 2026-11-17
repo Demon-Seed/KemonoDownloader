@@ -42,15 +42,15 @@ def _wheel(widget, delta=-120):
 def test_the_wheel_does_not_change_a_number(qapp):
     tab = SettingsTab(_Parent())
     try:
-        tab.download_spinbox.setValue(7)
-        tab.download_slider.setValue(7)
+        tab.download_spinbox.setValue(4)
+        tab.download_slider.setValue(4)
 
         _wheel(tab.download_spinbox)
         _wheel(tab.download_slider)
 
-        assert tab.download_spinbox.value() == 7
-        assert tab.download_slider.value() == 7
-        assert tab.temp_settings["simultaneous_downloads"] == 7
+        assert tab.download_spinbox.value() == 4
+        assert tab.download_slider.value() == 4
+        assert tab.temp_settings["simultaneous_downloads"] == 4
     finally:
         tab.deleteLater()
 

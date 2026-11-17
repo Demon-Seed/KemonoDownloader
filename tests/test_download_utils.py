@@ -169,6 +169,39 @@ class TestRequestGate:
             is False
         )
 
+    def test_defer_pushes_the_next_grant_back(self):
+        gate = du.RequestGate(0.01)
+        gate.defer(0.05)
+        started = time.monotonic()
+
+        assert gate.acquire() is True
+
+        assert time.monotonic() - started >= 0.04
+
+    def test_wait_out_sleeps_for_a_deferral(self):
+        gate = du.RequestGate(0)
+        gate.defer(0.05)
+        started = time.monotonic()
+
+        assert gate.wait_out() is True
+
+        assert time.monotonic() - started >= 0.04
+
+    def test_wait_out_does_not_reserve_a_slot(self):
+        gate = du.RequestGate(0.05)
+
+        assert gate.wait_out() is True
+        # Nothing was granted, so the first acquire must not wait.
+        started = time.monotonic()
+        assert gate.acquire() is True
+        assert time.monotonic() - started < 0.04
+
+    def test_wait_out_stops_when_the_run_is_cancelled(self):
+        gate = du.RequestGate(0)
+        gate.defer(5.0)
+
+        assert gate.wait_out(lambda: False) is False
+
 
 class TestDirectUrlRegistry:
     def test_remembers_and_forgets(self):
@@ -202,3 +235,20 @@ class TestDirectUrlRegistry:
         du.clear_direct_urls()
 
         assert du.direct_url_for("a") is None
+
+
+class TestPreparationRateLimitCounts:
+    def test_counts_only_403_and_429(self):
+        du.note_rate_limit(403)
+        du.note_rate_limit(429)
+        du.note_rate_limit(500)
+        du.note_rate_limit("nope")
+
+        assert du.rate_limit_counts() == {403: 1, 429: 1}
+
+    def test_reset_clears_them(self):
+        du.note_rate_limit(429)
+
+        du.reset_rate_limit_counts()
+
+        assert du.rate_limit_counts() == {}
