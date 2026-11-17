@@ -7,6 +7,7 @@
 <br>
 
 * ### This is a Personal Fork Using 100% AI, I use it myself so it should be functional, but be aware anyway. Feel free to report bugs, though I am lazy.<br> 
+* Primary source: **Pawchive.pw** (<https://pawchive.pw>). URL parsing, previews, and headers default to it.<br>
 # Additions:<br>
 * Last-downloaded tracking: each post shows its publish date and the date its files were last downloaded, with the creator's most recent date next to the post count.<br>
 * File and Post filtering, they can be used in many combinations, number skipped and by what displayed in run summary. The ammount of filters has grown beyond being worth listing here.<br>

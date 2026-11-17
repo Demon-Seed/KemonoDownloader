@@ -104,6 +104,23 @@ def isolated_hash_dir(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def offline_domain_list(monkeypatch):
+    """Pin domain discovery to the bundled list.
+
+    ``get_domains()`` otherwise fetches the list from GitHub once per process,
+    which makes tests depend on the network and on the remote file's order.
+    """
+    from kemonodownloader import domain_config
+
+    monkeypatch.setattr(
+        domain_config,
+        "_domains_cache",
+        list(domain_config._FALLBACK_DOMAINS),
+        raising=False,
+    )
+
+
+@pytest.fixture(autouse=True)
 def offline_creator_name_lookups(monkeypatch):
     """Keep the queue's decorative profile lookups off the network in tests.
 

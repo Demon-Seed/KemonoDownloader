@@ -63,10 +63,10 @@ from requests.adapters import HTTPAdapter  # type: ignore[import]
 
 from kemonodownloader.creator_config import CreatorConfigStore
 from kemonodownloader.domain_config import (
+    DEFAULT_DOMAIN,
     clean_file_url,
     file_host_headers,
     get_domain_config,
-    get_domains,
     preview_thumbnail_url,
     warm_file_host,
 )
@@ -324,7 +324,7 @@ def parse_post_tags(tags):
     """Parse a post's ``tags`` field into a plain list of strings.
 
     Tolerates every shape the APIs are known to return:
-    - A PostgreSQL array string: "{tag1,tag2,tag3}" (Kemono/Coomer style)
+    - A PostgreSQL array string: "{tag1,tag2,tag3}" (archive API style)
     - A comma-separated string: "tag1, tag2, tag3"
     - A semicolon-separated string: "tag1; tag2; tag3"
     - A list of plain strings, or of dicts with a 'name', 'tag', 'label',
@@ -894,14 +894,12 @@ def get_user_agent() -> str:
 
 # Default headers (will be updated per request based on domain)
 def _build_headers() -> dict:
-    # The generic header set belongs to the default domain, not to whatever
-    # URL a caller happens to preview. Reading the domain list directly keeps
-    # a per-request domain override from changing the shared headers.
-    domains = get_domains()
-    default_domain = domains[0] if domains else "kemono.cr"
+    # The generic header set belongs to the primary archive, not to whatever
+    # URL a caller happens to preview. Reading DEFAULT_DOMAIN directly keeps
+    # the remote domain-list order from changing the shared headers.
     return {
         "User-Agent": get_user_agent(),
-        "Referer": f"https://{default_domain}/",
+        "Referer": f"https://{DEFAULT_DOMAIN}/",
         "Accept": "text/css",
         "Accept-Language": accept_language,
         "Accept-Encoding": "gzip, deflate",
@@ -3843,7 +3841,7 @@ class CreatorDownloadThread(_StoppableThread, QThread):
             first_url = self.files_to_download[0]
             return get_domain_config(first_url)
         # Default fallback
-        return get_domain_config("https://kemono.cr/")
+        return get_domain_config(f"https://{DEFAULT_DOMAIN}/")
 
     def build_post_files_map(self):
         post_files_map = {post_id: [] for post_id in self.selected_posts}
@@ -5243,7 +5241,7 @@ class LogsWindow(QDialog):
 
         # Default filename with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_filename = f"kemono_logs_{timestamp}.txt"
+        default_filename = f"kemonodownloader_logs_{timestamp}.txt"
 
         # Open file dialog
         file_path, _ = QFileDialog.getSaveFileName(

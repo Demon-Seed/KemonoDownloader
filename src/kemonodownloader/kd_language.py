@@ -187,7 +187,7 @@ STRINGS = {
     "invalid_file_count_ignored": "Invalid 'File Count' value ignored (use a whole number)",
     "invalid_input": "Invalid Input",
     "invalid_posts_data_type": "Invalid posts data type: {0}",
-    "invalid_url_format": "Invalid URL format. Expected: https://kemono.cr/[service]/user/[user_id]/post/[post_id]",
+    "invalid_url_format": "Invalid URL format. Expected: https://pawchive.pw/[service]/user/[user_id]/post/[post_id]",
     "invalid_url_format_from_txt": "Invalid URL format, skipping",
     "invalid_url_type": "Invalid URL type: {0}. Expected string.",
     "keyword_matching_default": "Default",

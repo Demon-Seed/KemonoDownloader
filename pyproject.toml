@@ -10,8 +10,8 @@ author_email = "izeno.contact@gmail.com"
 
 [tool.briefcase.app.kemonodownloader]
 formal_name = "KemonoDownloader"
-description = "A cross-platform Python app built with PyQt6 to download posts and creator content from Kemono.cr and Coomer.st."
-long_description = """A cross-platform Python app built with PyQt6 to download posts and creator content from Kemono.cr and Coomer.st. Supports concurrent downloads, file deduplication, and customizable settings."""
+description = "A cross-platform Python app built with PyQt6 to download posts and creator content from Pawchive.pw."
+long_description = """A cross-platform Python app built with PyQt6 to download posts and creator content from Pawchive.pw. Supports concurrent downloads, file deduplication, and customizable settings."""
 signing_identity = ""
 icon = "assets/icons/KemonoDownloader"  
 

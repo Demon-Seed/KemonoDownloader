@@ -1,7 +1,0 @@
-{
-  "manifest_version": 2,
-  "name": "Kemono Downloader - Choose Manifest",
-  "version": "0.0.0",
-  "description": "This repo now contains browser-specific manifests: 'chrome_manifest.json' (MV3) and 'firefox_manifest.json' (MV2). Rename the appropriate file to 'manifest.json' before loading your browser's extension page.",
-  "permissions": ["storage"]
-}

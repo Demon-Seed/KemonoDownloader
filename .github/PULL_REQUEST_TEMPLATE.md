@@ -1,6 +1,6 @@
 # Pull Request
 
-Thank you for contributing to KemonoDownloader! Please complete this template to help us review your changes efficiently. Ensure your submission complies with our Contributing Guidelines, Code of Conduct, and Security Policy. Do not include unverified links or promotional content, as they will be considered spam.
+Thank you for contributing to KemonoDownloader! Please complete this template to help us review your changes efficiently. Ensure your submission complies with our Contributing Guidelines. Do not include unverified links or promotional content, as they will be considered spam.
 
 ## Description
 
@@ -26,19 +26,18 @@ Describe how you tested your changes, including:
 - Platforms tested (e.g., Windows, macOS, Linux).
 - Python version (e.g., 3.9.5).
 - Briefcase command used (e.g., `briefcase run windows`).
-- Specific scenarios (e.g., downloading a post, UI interaction).
+- Specific scenarios (e.g., downloading a creator archive, UI interaction).
 - Any automated tests added or updated.
 
 ## Checklist
 
-- \[ \] My code follows the Contributing Guidelines and Code of Conduct.
+- \[ \] My code follows the Contributing Guidelines.
 - \[ \] My changes adhere to PEP 8 style guidelines.
 - \[ \] I have tested my changes thoroughly using Briefcase on at least one supported platform.
-- \[ \] I have updated the documentation (e.g., `README.md`, `SUPPORT.md`, in-app Help tab) if necessary.
+- \[ \] I have updated the documentation (e.g., `README.md`, `index.html`, `assets/js/i18n.js`) if necessary.
 - \[ \] My changes do not introduce new dependencies without prior discussion.
-- \[ \] My changes respect the intellectual property rights and terms of service of Kemono.su and related platforms, as outlined in the README.
+- \[ \] My changes respect the intellectual property rights and terms of service of Pawchive.pw and related platforms, as outlined in the README.
 - \[ \] I have not included unverified links or promotional content.
-- \[ \] For security-related changes, I have followed the Security Policy.
 
 ## Screenshots or Logs (if applicable)
 

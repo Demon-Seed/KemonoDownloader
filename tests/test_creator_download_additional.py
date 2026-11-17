@@ -29,7 +29,7 @@ def test_get_domain_config_from_files_choice(tmp_path):
     dom = t._get_domain_config_from_files()
     assert dom["domain"] == "coomer.st"
 
-    # Without files, default to kemono.cr
+    # Without files, default to pawchive.pw
     t2 = CreatorDownloadThread(
         "svc",
         "cid",
@@ -43,7 +43,7 @@ def test_get_domain_config_from_files_choice(tmp_path):
         ThreadSettings(1, 1, 1, 1, 1, settings_tab=SimpleNamespace()),
     )
     dom2 = t2._get_domain_config_from_files()
-    assert dom2["domain"] == "kemono.cr"
+    assert dom2["domain"] == "pawchive.pw"
 
 
 def test_build_post_files_map_filters(tmp_path):

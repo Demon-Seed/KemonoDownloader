@@ -19,7 +19,7 @@ body:
     attributes:
       label: Documentation Issue
       description: Describe the issue or improvement needed in the documentation.
-      placeholder: e.g., Missing steps in README, unclear instructions in Help tab...
+      placeholder: e.g., Missing steps in README, unclear instructions on the website...
     validations:
       required: true
   - type: input
@@ -27,7 +27,7 @@ body:
     attributes:
       label: Documentation Location
       description: Where is the issue located?
-      placeholder: e.g., README.md, SUPPORT.md, in-app Help tab
+      placeholder: e.g., README.md, index.html, assets/js/i18n.js
     validations:
       required: true
   - type: textarea

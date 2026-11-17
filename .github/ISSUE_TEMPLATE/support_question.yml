@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Please follow our [Contributing Guidelines](https://github.com/VoxDroid/KemonoDownloader/blob/main/CONTRIBUTING.md). Do not post unverified links or promotional content, as they will be considered spam and may lead to restrictions.
-        For general help, consider checking the [Support page](https://github.com/VoxDroid/KemonoDownloader/blob/main/SUPPORT.md) or starting a thread in [Discussions](https://github.com/VoxDroid/KemonoDownloader/discussions).
+        For general help, start a thread in [Discussions](https://github.com/VoxDroid/KemonoDownloader/discussions).
   - type: checkboxes
     id: guidelines
     attributes:

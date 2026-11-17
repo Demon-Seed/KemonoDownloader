@@ -21,7 +21,7 @@ Each domain in the list follows a consistent API structure:
     referer   = https://<domain>/
 
 ``get_domain_config(url)`` inspects the URL and returns the matching
-config dict, defaulting to the first domain in the list (kemono.cr).
+config dict, defaulting to the first domain in the list (pawchive.pw).
 """
 
 from __future__ import annotations
@@ -47,12 +47,16 @@ DOMAIN_LIST_URL = (
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LOCAL_DOMAIN_FILE = os.path.join(_HERE, "..", "..", "assets", "config", "domain")
 
+# Primary archive. Kept separate from the fetched list so the default cannot
+# drift with the remote config order.
+DEFAULT_DOMAIN = "pawchive.pw"
+
 # Hardcoded last-resort fallback (used when both remote fetch and local file
 # are unavailable).
 _FALLBACK_DOMAINS: List[str] = [
+    DEFAULT_DOMAIN,
     "kemono.cr",
     "coomer.st",
-    "pawchive.pw",
 ]
 
 # ---------------------------------------------------------------------------
@@ -276,12 +280,12 @@ def get_domain_config(url: str) -> Dict[str, str]:
     """Return the domain configuration that matches *url*.
 
     The function checks each known domain (in order) against the URL.  The
-    first match wins.  If no domain matches, the first domain in the list
-    (kemono.cr) is used as the default.
+    first match wins.  If no domain matches, :data:`DEFAULT_DOMAIN`
+    (pawchive.pw) is used as the default.
     """
     domains = get_domains()
     for domain in domains:
         if domain in url:
             return _build_config(domain)
-    # Default: first domain in list
-    return _build_config(domains[0])
+    # Default: the primary archive, independent of the fetched list's order.
+    return _build_config(DEFAULT_DOMAIN)

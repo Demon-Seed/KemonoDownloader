@@ -139,16 +139,16 @@ class TestGetDomainConfig:
         assert config["domain"] == "coomer.st"
         assert config["base_url"] == "https://coomer.st"
 
-    def test_unknown_url_defaults_to_kemono(self):
-        """Test that unknown URLs default to kemono.cr configuration."""
+    def test_unknown_url_defaults_to_pawchive(self):
+        """Test that unknown URLs default to the pawchive.pw configuration."""
         config = get_domain_config("https://example.com/something")
-        assert config["domain"] == "kemono.cr"
-        assert config["base_url"] == "https://kemono.cr"
+        assert config["domain"] == "pawchive.pw"
+        assert config["base_url"] == "https://pawchive.pw"
 
-    def test_empty_url_defaults_to_kemono(self):
-        """Test that empty URL defaults to kemono.cr."""
+    def test_empty_url_defaults_to_pawchive(self):
+        """Test that an empty URL defaults to pawchive.pw."""
         config = get_domain_config("")
-        assert config["domain"] == "kemono.cr"
+        assert config["domain"] == "pawchive.pw"
 
     def test_url_case_sensitivity(self):
         """Test that domain detection is case-insensitive (in the URL itself)."""
@@ -174,7 +174,6 @@ class TestLanguageManager:
         finally:
             language_manager.set_language(original)
 
-
     def test_translate_english(self):
         """Test translation returns English text."""
         original = language_manager.current_language
@@ -184,7 +183,6 @@ class TestLanguageManager:
             assert result == "Added to queue"
         finally:
             language_manager.set_language(original)
-
 
     def test_translate_with_formatting(self):
         """Test translation with format arguments."""
