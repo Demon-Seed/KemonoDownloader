@@ -82,15 +82,45 @@ def test_template_help_lists_every_placeholder():
         "{service}",
     ):
         assert placeholder in text
-    # The separators note stays: both work.
-    assert "{post_id}-{orig_name}" in text
-    assert "{post_id}_{orig_name}" in text
+    # The separators note explains the rule, without placeholder examples.
+    assert "Use any separator between placeholders, or none." in text
+    # Headings, that note and the fallback are bold; <br> keeps the breaks.
+    assert "<b>Placeholders:</b>" in text
+    assert "<b>Use any separator between placeholders, or none.</b>" in text
+    assert "<b>Fallback: {post_id}_{orig_name}.</b>" in text
+    assert "<br>" in text
     # Zero padding is documented with its worked examples.
-    assert "{file_number:03d}" in text
+    assert "{file_number:0>3}" in text
     assert "{post_id:0>10}" in text
-    # The dupe warning stays; the other row's explanation does not.
-    assert "Warning" in text
+    # Neither row's explanation belongs here.
+    assert "In Creator Folder" not in text
     assert "In Post Folder" not in text
+    assert "Warning" not in text
+
+
+def test_shared_template_help_adds_the_pooled_files_warning(qapp, monkeypatch):
+    shown = []
+    monkeypatch.setattr(
+        QMessageBox, "information", lambda *args, **kwargs: shown.append(args)
+    )
+    st = SettingsTab(None)
+    try:
+        st.show_template_help()
+        st.show_shared_template_help()
+    finally:
+        st.deleteLater()
+
+    post_folder, shared = shown[-2][2], shown[-1][2]
+    body = translate("filename_template_help_body")
+    warning = translate("filename_template_shared_warning")
+    fallback = translate("filename_template_fallback")
+    # The post-folder dialog stays free of the pooled-files paragraph; the
+    # shared dialog is the same help with that paragraph before the fallback.
+    assert warning not in post_folder
+    assert post_folder.startswith(body) and post_folder.endswith(fallback)
+    assert shared.startswith(body) and shared.endswith(fallback)
+    assert warning in shared
+    assert shared.index(warning) < shared.index(fallback)
 
 
 def test_invalid_template_falls_back_and_logs(qapp):
@@ -137,6 +167,10 @@ def test_folder_name_help_explains_padding():
     text = translate("folder_name_template_help_text")
     assert "{post_id:0>10}" in text
     assert "Zero-pad" in text
+    # Same layout as the filename help: bold headings/fallback, <br> breaks.
+    assert "<b>Placeholders:</b>" in text
+    assert "<b>Fallback: {post_id}_{post_title}.</b>" in text
+    assert "If it fails to format" not in text
 
 
 def test_the_dedup_row_follows_the_folder_name_template(qapp):

@@ -159,6 +159,31 @@ def make_tab(tmp_path):
     return ks.SettingsTab(parent)
 
 
+def test_settings_help_buttons_match_the_creator_tab_info_buttons(tmp_path, qapp):
+    """Every settings help popup opens from the Creator tab's icon button."""
+    tab = make_tab(tmp_path)
+    try:
+        buttons = (
+            tab.creator_template_help_btn,
+            tab.creator_shared_template_help_btn,
+            tab.creator_folder_name_help_btn,
+            tab.filetype_display_help_btn,
+            tab.lenient_keyword_matching_help_btn,
+            tab.punctuation_matching_help_btn,
+            tab.queue_input_behavior_help_btn,
+        )
+        for button in buttons:
+            # Icon-only 26x26 square, exactly like the Creator tab's
+            # info buttons (`qta.icon("fa5s.info-circle")`).
+            assert button.text() == ""
+            assert not button.icon().isNull()
+            assert button.width() == 26 and button.height() == 26
+            # With no text, the tooltip is what names the button.
+            assert button.toolTip() != ""
+    finally:
+        tab.deleteLater()
+
+
 def test_template_help_tooltips_are_not_squeezed_by_the_button_style(tmp_path, qapp):
     from PyQt6.QtCore import QEvent, QPoint
     from PyQt6.QtGui import QHelpEvent
@@ -275,6 +300,7 @@ def test_reset_to_defaults_and_template_help(tmp_path, monkeypatch):
     # change some fields
     tab.data_directory_input.setText("X")
     tab.directory_input.setText(str(tmp_path))
+    tab.update_post_data_max_retries(19)
     # Reset should restore defaults
     monkeypatch.setattr(
         "kemonodownloader.kd_settings.QMessageBox.information", lambda *a, **k: None
@@ -283,6 +309,15 @@ def test_reset_to_defaults_and_template_help(tmp_path, monkeypatch):
     # The data folder is fixed, so the field reads it back rather than a
     # stored default.
     assert tab.data_directory_input.text() == kd_paths.data_directory()
+    # The retry bars follow the defaults too, not just the stored dict.
+    assert (
+        tab.post_data_max_retries_slider.value()
+        == tab.default_settings["post_data_max_retries"]
+    )
+    assert (
+        tab.post_data_max_retries_spinbox.value()
+        == tab.default_settings["post_data_max_retries"]
+    )
 
 
 def test_reset_also_restores_the_creator_templates(tmp_path, monkeypatch):

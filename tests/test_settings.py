@@ -234,6 +234,40 @@ class TestSettingsUIInteractions:
         finally:
             st.deleteLater()
 
+    def test_the_retry_settings_are_bars_like_the_download_setting(self, qapp):
+        """Every Retry Settings row is the same slider + spin box pair.
+
+        Both ends report through one handler, so either can be moved and
+        temp_settings - what Apply reads - keeps up.
+        """
+        from kemonodownloader.kd_settings import SettingsTab
+
+        class MockParent:
+            def log(self, m):
+                pass
+
+        st = SettingsTab(MockParent())
+        try:
+            for key in (
+                "creator_posts_max_attempts",
+                "post_data_max_retries",
+                "file_download_max_retries",
+                "api_request_max_retries",
+            ):
+                slider = getattr(st, f"{key}_slider")
+                spinbox = getattr(st, f"{key}_spinbox")
+                assert slider.minimum() == spinbox.minimum() == 1
+
+                slider.setValue(slider.maximum())
+                assert st.temp_settings[key] == slider.maximum()
+                assert spinbox.value() == slider.maximum()
+
+                spinbox.setValue(1)
+                assert st.temp_settings[key] == 1
+                assert slider.value() == 1
+        finally:
+            st.deleteLater()
+
     def test_each_numeric_setting_stops_at_its_useful_maximum(self, qapp):
         """The ranges match what the code can honour, not a round number.
 
@@ -251,9 +285,16 @@ class TestSettingsUIInteractions:
         try:
             assert st.download_slider.maximum() == 5
             assert st.download_spinbox.maximum() == 5
-            assert st.post_data_max_retries_spinbox.maximum() == 20
-            assert st.file_download_max_retries_spinbox.maximum() == 20
-            assert st.api_request_max_retries_spinbox.maximum() == 10
+            for key, maximum in (
+                ("creator_posts_max_attempts", 1000),
+                ("post_data_max_retries", 20),
+                ("file_download_max_retries", 20),
+                ("api_request_max_retries", 10),
+            ):
+                # The bar and the number share the range, so neither can offer
+                # a value the other cannot show.
+                assert getattr(st, f"{key}_slider").maximum() == maximum
+                assert getattr(st, f"{key}_spinbox").maximum() == maximum
         finally:
             st.deleteLater()
 

@@ -138,13 +138,19 @@ def test_widgets_default_and_have_no_hover_dialog(qtbot, tmp_path):
         for i in range(tab.show_only_found_filetypes_combo.count())
     ] == ["Show all", "Show found only", "Show found only (with counts)"]
     assert tab.creator_unique_filenames_label.text() == "Name Dedup:"
-    # The help lives in the ? box; there is no hover tooltip.
+    # The help lives in the info-circle button; the combos have no tooltip.
     assert tab.lenient_keyword_matching_combo.toolTip() == ""
     assert tab.punctuation_matching_rules_combo.toolTip() == ""
     assert tab.show_only_found_filetypes_combo.toolTip() == ""
-    assert tab.lenient_keyword_matching_help_btn.text() == "?"
-    assert tab.punctuation_matching_help_btn.text() == "?"
-    assert tab.filetype_display_help_btn.text() == "?"
+    for button in (
+        tab.lenient_keyword_matching_help_btn,
+        tab.punctuation_matching_help_btn,
+        tab.filetype_display_help_btn,
+    ):
+        # Icon-only, like the Creator tab's info buttons.
+        assert button.text() == ""
+        assert not button.icon().isNull()
+        assert button.toolTip() != ""
 
 
 def test_help_boxes_explain_each_setting(qtbot, tmp_path, monkeypatch):

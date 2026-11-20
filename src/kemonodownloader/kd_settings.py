@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 
+import qtawesome as qta
 from PyQt6.QtCore import (
     QEvent,
     QObject,
@@ -51,12 +52,25 @@ MAX_SIMULTANEOUS_DOWNLOADS = 5
 MAX_POST_DATA_RETRIES = 20
 MAX_FILE_DOWNLOAD_RETRIES = 20
 MAX_API_REQUEST_RETRIES = 10
+# This one is a page count, not a retry count: 50 posts a page, so 1 000 is
+# already far past any real profile.  It is named anyway, so every bar in the
+# Retry Settings group takes its limits from a constant and not a literal.
+MAX_CREATOR_POSTS_ATTEMPTS = 1000
 
 # Values used when a stored setting is missing or unreadable.
 DEFAULT_SIMULTANEOUS_DOWNLOADS = 5
 DEFAULT_POST_DATA_RETRIES = 7
 DEFAULT_FILE_DOWNLOAD_RETRIES = 10
 DEFAULT_API_REQUEST_RETRIES = 3
+
+# Look shared by every slider bar, so the Retry Settings rows match the
+# Download Settings one.
+BAR_STYLESHEET = (
+    "QSlider::groove:horizontal { border: 1px solid #4A5B7A; height: 8px; "
+    "background: #2A3B5A; margin: 2px 0; }"
+    "QSlider::handle:horizontal { background: #4A5B7A; width: 18px; "
+    "margin: -2px 0; border-radius: 9px; }"
+)
 
 
 def _bounded_setting(value, maximum, default):
@@ -71,6 +85,22 @@ def _bounded_setting(value, maximum, default):
     except (TypeError, ValueError):
         return default
     return min(max(number, 1), maximum)
+
+
+def make_info_button(parent=None):
+    """The Creator tab's info button, used for every settings help popup.
+
+    Both tabs therefore open their help from the same control: a 26x26
+    rounded square with the FontAwesome info-circle glyph.  The rule is
+    scoped to QPushButton so its size cannot leak into the tooltip label Qt
+    parents to the button.
+    """
+    button = QPushButton(qta.icon("fa5s.info-circle", color="#A0C0FF"), "", parent)
+    button.setFixedSize(26, 26)
+    button.setStyleSheet(
+        scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
+    )
+    return button
 
 
 # Modes for "Filetype Display". Kept as plain strings
@@ -466,6 +496,24 @@ class SettingsTab(QWidget):
         )
         self.qsettings.sync()
 
+    def _create_setting_bar(self, key, maximum, on_change):
+        """Build a slider with its spin box, as the Download Settings row does.
+
+        Both widgets cover ``1..maximum`` and report through ``on_change``, so
+        the bar and the number cannot drift apart.
+        """
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(1, maximum)
+        slider.setValue(self.temp_settings[key])
+        slider.setStyleSheet(BAR_STYLESHEET)
+        slider.valueChanged.connect(on_change)
+        spinbox = QSpinBox()
+        spinbox.setRange(1, maximum)
+        spinbox.setValue(self.temp_settings[key])
+        spinbox.setStyleSheet(scoped("QSpinBox", "padding: 5px; border-radius: 5px;"))
+        spinbox.valueChanged.connect(on_change)
+        return slider, spinbox
+
     def setup_ui(self):
         layout = QVBoxLayout(self)
 
@@ -539,22 +587,12 @@ class SettingsTab(QWidget):
 
         self.simultaneous_downloads_label = QLabel()
         download_layout.addWidget(self.simultaneous_downloads_label, 0, 0)
-        self.download_slider = QSlider(Qt.Orientation.Horizontal)
-        self.download_slider.setRange(1, MAX_SIMULTANEOUS_DOWNLOADS)
-        self.download_slider.setValue(self.temp_settings["simultaneous_downloads"])
-        self.download_slider.setStyleSheet(
-            "QSlider::groove:horizontal { border: 1px solid #4A5B7A; height: 8px; background: #2A3B5A; margin: 2px 0; }"
-            "QSlider::handle:horizontal { background: #4A5B7A; width: 18px; margin: -2px 0; border-radius: 9px; }"
+        self.download_slider, self.download_spinbox = self._create_setting_bar(
+            "simultaneous_downloads",
+            MAX_SIMULTANEOUS_DOWNLOADS,
+            self.update_simultaneous_downloads,
         )
-        self.download_slider.valueChanged.connect(self.update_simultaneous_downloads)
         download_layout.addWidget(self.download_slider, 0, 1)
-        self.download_spinbox = QSpinBox()
-        self.download_spinbox.setRange(1, MAX_SIMULTANEOUS_DOWNLOADS)
-        self.download_spinbox.setValue(self.temp_settings["simultaneous_downloads"])
-        self.download_spinbox.setStyleSheet(
-            scoped("QSpinBox", "padding: 5px; border-radius: 5px;")
-        )
-        self.download_spinbox.valueChanged.connect(self.update_simultaneous_downloads)
         download_layout.addWidget(self.download_spinbox, 0, 2)
 
         self.download_group.setLayout(download_layout)
@@ -569,63 +607,55 @@ class SettingsTab(QWidget):
 
         self.creator_posts_max_attempts_label = QLabel()
         retry_layout.addWidget(self.creator_posts_max_attempts_label, 0, 0)
-        self.creator_posts_max_attempts_spinbox = QSpinBox()
-        self.creator_posts_max_attempts_spinbox.setRange(1, 1000)
-        self.creator_posts_max_attempts_spinbox.setValue(
-            self.temp_settings["creator_posts_max_attempts"]
+        (
+            self.creator_posts_max_attempts_slider,
+            self.creator_posts_max_attempts_spinbox,
+        ) = self._create_setting_bar(
+            "creator_posts_max_attempts",
+            MAX_CREATOR_POSTS_ATTEMPTS,
+            self.update_creator_posts_max_attempts,
         )
-        self.creator_posts_max_attempts_spinbox.setStyleSheet(
-            scoped("QSpinBox", "padding: 5px; border-radius: 5px;")
-        )
-        self.creator_posts_max_attempts_spinbox.valueChanged.connect(
-            lambda value: self.update_temp_setting("creator_posts_max_attempts", value)
-        )
-        retry_layout.addWidget(self.creator_posts_max_attempts_spinbox, 0, 1)
+        retry_layout.addWidget(self.creator_posts_max_attempts_slider, 0, 1)
+        retry_layout.addWidget(self.creator_posts_max_attempts_spinbox, 0, 2)
 
         self.post_data_max_retries_label = QLabel()
         retry_layout.addWidget(self.post_data_max_retries_label, 1, 0)
-        self.post_data_max_retries_spinbox = QSpinBox()
-        self.post_data_max_retries_spinbox.setRange(1, MAX_POST_DATA_RETRIES)
-        self.post_data_max_retries_spinbox.setValue(
-            self.temp_settings["post_data_max_retries"]
+        (
+            self.post_data_max_retries_slider,
+            self.post_data_max_retries_spinbox,
+        ) = self._create_setting_bar(
+            "post_data_max_retries",
+            MAX_POST_DATA_RETRIES,
+            self.update_post_data_max_retries,
         )
-        self.post_data_max_retries_spinbox.setStyleSheet(
-            scoped("QSpinBox", "padding: 5px; border-radius: 5px;")
-        )
-        self.post_data_max_retries_spinbox.valueChanged.connect(
-            lambda value: self.update_temp_setting("post_data_max_retries", value)
-        )
-        retry_layout.addWidget(self.post_data_max_retries_spinbox, 1, 1)
+        retry_layout.addWidget(self.post_data_max_retries_slider, 1, 1)
+        retry_layout.addWidget(self.post_data_max_retries_spinbox, 1, 2)
 
         self.file_download_max_retries_label = QLabel()
         retry_layout.addWidget(self.file_download_max_retries_label, 2, 0)
-        self.file_download_max_retries_spinbox = QSpinBox()
-        self.file_download_max_retries_spinbox.setRange(1, MAX_FILE_DOWNLOAD_RETRIES)
-        self.file_download_max_retries_spinbox.setValue(
-            self.temp_settings["file_download_max_retries"]
+        (
+            self.file_download_max_retries_slider,
+            self.file_download_max_retries_spinbox,
+        ) = self._create_setting_bar(
+            "file_download_max_retries",
+            MAX_FILE_DOWNLOAD_RETRIES,
+            self.update_file_download_max_retries,
         )
-        self.file_download_max_retries_spinbox.setStyleSheet(
-            scoped("QSpinBox", "padding: 5px; border-radius: 5px;")
-        )
-        self.file_download_max_retries_spinbox.valueChanged.connect(
-            lambda value: self.update_temp_setting("file_download_max_retries", value)
-        )
-        retry_layout.addWidget(self.file_download_max_retries_spinbox, 2, 1)
+        retry_layout.addWidget(self.file_download_max_retries_slider, 2, 1)
+        retry_layout.addWidget(self.file_download_max_retries_spinbox, 2, 2)
 
         self.api_request_max_retries_label = QLabel()
         retry_layout.addWidget(self.api_request_max_retries_label, 3, 0)
-        self.api_request_max_retries_spinbox = QSpinBox()
-        self.api_request_max_retries_spinbox.setRange(1, MAX_API_REQUEST_RETRIES)
-        self.api_request_max_retries_spinbox.setValue(
-            self.temp_settings["api_request_max_retries"]
+        (
+            self.api_request_max_retries_slider,
+            self.api_request_max_retries_spinbox,
+        ) = self._create_setting_bar(
+            "api_request_max_retries",
+            MAX_API_REQUEST_RETRIES,
+            self.update_api_request_max_retries,
         )
-        self.api_request_max_retries_spinbox.setStyleSheet(
-            scoped("QSpinBox", "padding: 5px; border-radius: 5px;")
-        )
-        self.api_request_max_retries_spinbox.valueChanged.connect(
-            lambda value: self.update_temp_setting("api_request_max_retries", value)
-        )
-        retry_layout.addWidget(self.api_request_max_retries_spinbox, 3, 1)
+        retry_layout.addWidget(self.api_request_max_retries_slider, 3, 1)
+        retry_layout.addWidget(self.api_request_max_retries_spinbox, 3, 2)
 
         self.retry_group.setLayout(retry_layout)
         layout.addWidget(self.retry_group)
@@ -659,14 +689,7 @@ class SettingsTab(QWidget):
         creator_custom_layout.addWidget(self.creator_filename_input, 0, 1, 1, 2)
 
         # Help button for template variables (covers both template rows)
-        self.creator_template_help_btn = QPushButton("?")
-        self.creator_template_help_btn.setStyleSheet(
-            scoped(
-                "QPushButton",
-                "background: #4A5B7A; padding: 5px; border-radius: 5px; "
-                "min-width: 26px; max-width: 26px;",
-            )
-        )
+        self.creator_template_help_btn = make_info_button()
         self.creator_template_help_btn.clicked.connect(self.show_template_help)
         creator_custom_layout.addWidget(self.creator_template_help_btn, 0, 3)
 
@@ -689,15 +712,10 @@ class SettingsTab(QWidget):
         )
         creator_custom_layout.addWidget(self.creator_shared_filename_input, 1, 1, 1, 2)
 
-        self.creator_shared_template_help_btn = QPushButton("?")
-        self.creator_shared_template_help_btn.setStyleSheet(
-            scoped(
-                "QPushButton",
-                "background: #4A5B7A; padding: 5px; border-radius: 5px; "
-                "min-width: 26px; max-width: 26px;",
-            )
+        self.creator_shared_template_help_btn = make_info_button()
+        self.creator_shared_template_help_btn.clicked.connect(
+            self.show_shared_template_help
         )
-        self.creator_shared_template_help_btn.clicked.connect(self.show_template_help)
         creator_custom_layout.addWidget(self.creator_shared_template_help_btn, 1, 3)
 
         self.creator_folder_name_label = QLabel(translate("folder_name_template"))
@@ -717,14 +735,7 @@ class SettingsTab(QWidget):
         )
         creator_custom_layout.addWidget(self.creator_folder_name_input, 2, 1, 1, 2)
 
-        self.creator_folder_name_help_btn = QPushButton("?")
-        self.creator_folder_name_help_btn.setStyleSheet(
-            scoped(
-                "QPushButton",
-                "background: #4A5B7A; padding: 5px; border-radius: 5px; "
-                "min-width: 26px; max-width: 26px;",
-            )
-        )
+        self.creator_folder_name_help_btn = make_info_button()
         self.creator_folder_name_help_btn.clicked.connect(
             self.show_folder_name_template_help
         )
@@ -825,14 +836,7 @@ class SettingsTab(QWidget):
             self.show_only_found_filetypes_combo, 5, 1, 1, 2
         )
 
-        self.filetype_display_help_btn = QPushButton("?")
-        self.filetype_display_help_btn.setStyleSheet(
-            scoped(
-                "QPushButton",
-                "background: #4A5B7A; padding: 5px; border-radius: 5px; "
-                "min-width: 26px; max-width: 26px;",
-            )
-        )
+        self.filetype_display_help_btn = make_info_button()
         self.filetype_display_help_btn.clicked.connect(self.show_filetype_display_help)
         creator_custom_layout.addWidget(self.filetype_display_help_btn, 5, 3)
 
@@ -869,14 +873,7 @@ class SettingsTab(QWidget):
             self.lenient_keyword_matching_combo, 6, 1, 1, 2
         )
 
-        self.lenient_keyword_matching_help_btn = QPushButton("?")
-        self.lenient_keyword_matching_help_btn.setStyleSheet(
-            scoped(
-                "QPushButton",
-                "background: #4A5B7A; padding: 5px; border-radius: 5px; "
-                "min-width: 26px; max-width: 26px;",
-            )
-        )
+        self.lenient_keyword_matching_help_btn = make_info_button()
         self.lenient_keyword_matching_help_btn.clicked.connect(
             self.show_keyword_matching_rules_help
         )
@@ -915,14 +912,7 @@ class SettingsTab(QWidget):
             self.punctuation_matching_rules_combo, 7, 1, 1, 2
         )
 
-        self.punctuation_matching_help_btn = QPushButton("?")
-        self.punctuation_matching_help_btn.setStyleSheet(
-            scoped(
-                "QPushButton",
-                "background: #4A5B7A; padding: 5px; border-radius: 5px; "
-                "min-width: 26px; max-width: 26px;",
-            )
-        )
+        self.punctuation_matching_help_btn = make_info_button()
         self.punctuation_matching_help_btn.clicked.connect(
             self.show_punctuation_matching_help
         )
@@ -957,16 +947,7 @@ class SettingsTab(QWidget):
         )
         creator_custom_layout.addWidget(self.queue_input_behavior_combo, 8, 1, 1, 2)
 
-        self.queue_input_behavior_help_btn = QPushButton("?")
-        self.queue_input_behavior_help_btn.setStyleSheet(
-            # Scoped to QPushButton so the size cap does not reach the tooltip
-            # label Qt parents to this button.
-            scoped(
-                "QPushButton",
-                "background: #4A5B7A; padding: 5px; border-radius: 5px; "
-                "min-width: 26px; max-width: 26px;",
-            )
-        )
+        self.queue_input_behavior_help_btn = make_info_button()
         self.queue_input_behavior_help_btn.clicked.connect(
             self.show_queue_input_behavior_help
         )
@@ -1292,6 +1273,35 @@ class SettingsTab(QWidget):
                 "{post_date}, {creator_id}, {creator_name}, {service}",
             )
 
+    def show_shared_template_help(self):
+        """Show the filename help plus the note that applies to pooled files.
+
+        The shared ("In Creator Folder") template takes the same placeholders
+        as the post-folder one; the extra paragraph is what tells the user
+        that files from different posts can end up in the same folder.
+        """
+        try:
+            QMessageBox.information(
+                self,
+                translate("filename_template_help_title"),
+                translate("filename_template_help_body")
+                + "<br><br>"
+                + translate("filename_template_shared_warning")
+                + "<br><br>"
+                + translate("filename_template_fallback"),
+            )
+        except Exception:
+            # In case translation lookup or UI fails, fall back to a simple message
+            QMessageBox.information(
+                self,
+                "Template Help",
+                "Placeholders: {post_id}, {post_title}, {orig_name}, {ext}, "
+                "{file_number}, {file_index}, {post_file_count}, {total_files}, "
+                "{post_date}, {creator_id}, {creator_name}, {service}. "
+                "A combo without {post_id} or {post_date} can give two posts' "
+                "files the same name.",
+            )
+
     def show_folder_name_template_help(self):
         """Show help text explaining the available folder name template placeholders."""
         try:
@@ -1305,8 +1315,6 @@ class SettingsTab(QWidget):
                 self,
                 "Folder Name Template Help",
                 "Placeholders: {post_id}, {post_title}, {creator_id}, {creator_name}. "
-                "Example: {post_title} (drops the post id). "
-                "Example: {post_title} drops the post ID from the folder name. "
                 "Only applies when Folder Structure is 'Per-post folders'.",
             )
 
@@ -1604,14 +1612,55 @@ class SettingsTab(QWidget):
             (signature, "proxies", proxies) if proxies else (signature, "none", None)
         )
 
+    def _update_setting_bar(self, key, value, slider, spinbox):
+        """Record a bar's value and mirror it into the other widget, silently."""
+        self.temp_settings[key] = value
+        slider.blockSignals(True)
+        spinbox.blockSignals(True)
+        slider.setValue(value)
+        spinbox.setValue(value)
+        slider.blockSignals(False)
+        spinbox.blockSignals(False)
+
     def update_simultaneous_downloads(self, value):
-        self.temp_settings["simultaneous_downloads"] = value
-        self.download_slider.blockSignals(True)
-        self.download_spinbox.blockSignals(True)
-        self.download_slider.setValue(value)
-        self.download_spinbox.setValue(value)
-        self.download_slider.blockSignals(False)
-        self.download_spinbox.blockSignals(False)
+        self._update_setting_bar(
+            "simultaneous_downloads",
+            value,
+            self.download_slider,
+            self.download_spinbox,
+        )
+
+    def update_creator_posts_max_attempts(self, value):
+        self._update_setting_bar(
+            "creator_posts_max_attempts",
+            value,
+            self.creator_posts_max_attempts_slider,
+            self.creator_posts_max_attempts_spinbox,
+        )
+
+    def update_post_data_max_retries(self, value):
+        self._update_setting_bar(
+            "post_data_max_retries",
+            value,
+            self.post_data_max_retries_slider,
+            self.post_data_max_retries_spinbox,
+        )
+
+    def update_file_download_max_retries(self, value):
+        self._update_setting_bar(
+            "file_download_max_retries",
+            value,
+            self.file_download_max_retries_slider,
+            self.file_download_max_retries_spinbox,
+        )
+
+    def update_api_request_max_retries(self, value):
+        self._update_setting_bar(
+            "api_request_max_retries",
+            value,
+            self.api_request_max_retries_slider,
+            self.api_request_max_retries_spinbox,
+        )
 
     @staticmethod
     def _same_setting_value(left, right):
@@ -1879,14 +1928,26 @@ class SettingsTab(QWidget):
         self.data_directory_input.setText(kd_paths.data_directory())
         self.download_slider.setValue(self.temp_settings["simultaneous_downloads"])
         self.download_spinbox.setValue(self.temp_settings["simultaneous_downloads"])
+        self.creator_posts_max_attempts_slider.setValue(
+            self.temp_settings["creator_posts_max_attempts"]
+        )
         self.creator_posts_max_attempts_spinbox.setValue(
             self.temp_settings["creator_posts_max_attempts"]
+        )
+        self.post_data_max_retries_slider.setValue(
+            self.temp_settings["post_data_max_retries"]
         )
         self.post_data_max_retries_spinbox.setValue(
             self.temp_settings["post_data_max_retries"]
         )
+        self.file_download_max_retries_slider.setValue(
+            self.temp_settings["file_download_max_retries"]
+        )
         self.file_download_max_retries_spinbox.setValue(
             self.temp_settings["file_download_max_retries"]
+        )
+        self.api_request_max_retries_slider.setValue(
+            self.temp_settings["api_request_max_retries"]
         )
         self.api_request_max_retries_spinbox.setValue(
             self.temp_settings["api_request_max_retries"]
@@ -2084,7 +2145,7 @@ class SettingsTab(QWidget):
         except Exception:
             pass
 
-        # Tooltip/help for template
+        # Tooltip/help for the template and filter info buttons
         self.creator_template_help_btn.setToolTip(
             translate("filename_template_help_title")
         )
@@ -2093,6 +2154,16 @@ class SettingsTab(QWidget):
         )
         self.creator_folder_name_help_btn.setToolTip(
             translate("folder_name_template_help_title")
+        )
+        # These three are icon-only, so the tooltip is their only label.
+        self.filetype_display_help_btn.setToolTip(
+            translate("filetype_display_help_title")
+        )
+        self.lenient_keyword_matching_help_btn.setToolTip(
+            translate("keyword_matching_rules_help_title")
+        )
+        self.punctuation_matching_help_btn.setToolTip(
+            translate("punctuation_matching_help_title")
         )
 
         # Update proxy and other text

@@ -44,13 +44,20 @@ def test_the_wheel_does_not_change_a_number(qapp):
     try:
         tab.download_spinbox.setValue(4)
         tab.download_slider.setValue(4)
+        tab.post_data_max_retries_spinbox.setValue(6)
+        tab.post_data_max_retries_slider.setValue(6)
 
         _wheel(tab.download_spinbox)
         _wheel(tab.download_slider)
+        _wheel(tab.post_data_max_retries_spinbox)
+        _wheel(tab.post_data_max_retries_slider)
 
         assert tab.download_spinbox.value() == 4
         assert tab.download_slider.value() == 4
         assert tab.temp_settings["simultaneous_downloads"] == 4
+        assert tab.post_data_max_retries_spinbox.value() == 6
+        assert tab.post_data_max_retries_slider.value() == 6
+        assert tab.temp_settings["post_data_max_retries"] == 6
     finally:
         tab.deleteLater()
 

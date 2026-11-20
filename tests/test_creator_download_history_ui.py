@@ -497,7 +497,7 @@ def test_box_info_dialog_shows_only_the_row_format(qtbot, tmp_path, monkeypatch)
     assert captured["text"] == translate("downloader_box_info_text")
     assert captured["text"].count("\n") == 1, "two lines"
     assert "Key: Post Title | (Publish Date) | [Last Downloaded Date]" in captured["text"]
-    assert "and Double Click to view a posts thumbnail." in captured["text"]
+    assert "and Double Click to view a post." in captured["text"]
 
 
 def test_new_translation_keys_exist_in_every_language():

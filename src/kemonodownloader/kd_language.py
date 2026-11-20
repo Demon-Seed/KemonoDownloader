@@ -4,6 +4,26 @@ The application ships a single language, so ``STRINGS`` is a flat
 ``key -> text`` table; the old per-language nesting is gone.
 """
 
+# The filename help is a body plus a fallback line.  Keeping them apart lets
+# the shared ("In Creator Folder") dialog slot its warning paragraph between
+# them without duplicating the placeholder list.
+_FILENAME_HELP_BODY = (
+    "<b>Placeholders:</b><br>{post_id} - post id<br>{post_title} - post title<br>"
+    "{orig_name} - server file name<br>{ext} - extension (no dot)<br>"
+    "{file_number} - file's place in its post (1, 2, 3)<br>"
+    "{file_index} - file's place in the whole run<br>"
+    "{post_file_count} - files in this post<br>{total_files} - files in the whole run<br>"
+    "{post_date} - publish date (YYYY-MM-DD)<br>{post_time} - publish time (HHMM)<br>"
+    "{creator_id} - creator id<br>{creator_name} - creator name<br>"
+    "{service} - site (patreon, fanbox, ...)<br>"
+    "<b>Use any separator between placeholders, or none.</b><br><br>"
+    "Zero-pad for sorting: add :0>width to any placeholder - 0 fills the left "
+    "with zeros, > right-aligns, width is the total length (not a count of zeros).<br>"
+    "{file_number:0>3} = 001, {post_id:0>10} = 0174925070."
+)
+_FILENAME_HELP_FALLBACK = "<b>Fallback: {post_id}_{orig_name}.</b>"
+
+
 STRINGS = {
     "add_creator_and_load_tooltip": "Add this creator and load its posts",
     "add_links_from_file_title": "Import from TXT File",
@@ -102,7 +122,7 @@ STRINGS = {
     "download_settings": "Download Settings",
     "download_text": "Download Post Text",
     "download_tor": "Download Tor",
-    "downloader_box_info_text": "Key: Post Title | (Publish Date) | [Last Downloaded Date]\nand Double Click to view a posts thumbnail.",
+    "downloader_box_info_text": "Key: Post Title | (Publish Date) | [Last Downloaded Date]\nand Double Click to view a post.",
     "downloader_box_info_title": "Downloader Box Help",
     "downloading": "Downloading...",
     "downloading_tor": "Downloading Tor...",
@@ -162,16 +182,21 @@ STRINGS = {
     "file_read_error_title": "File Read Error",
     "filename_template": "Filename Template (In Post Folder):",
     "filename_template_error": "Filename template failed to format, using fallback: {0}",
-    "filename_template_help_text": "Placeholders:\n{post_id} - post id\n{post_title} - post title\n{orig_name} - server file name\n{ext} - extension (no dot)\n{file_number} - file's place in its post (1, 2, 3)\n{file_index} - file's place in the whole run\n{post_file_count} - files in this post\n{total_files} - files in the whole run\n{post_date} - publish date (YYYY-MM-DD)\n{post_time} - publish time (HHMM)\n{creator_id} - creator id\n{creator_name} - creator name\n{service} - site (patreon, fanbox, ...)\n\nSeparators are free: {post_id}-{orig_name} and {post_id}_{orig_name} both work.\nZero-pad for sorting: {file_number:03d} = 001, {post_id:0>10} = 0174925070.\n\n'In Creator Folder' names files pooled with other posts ('Single creator folder', 'Subfolders by file type', or a skipped post folder). Warning: a combo without {post_id} or {post_date} can give two posts' files the same name.\n\nFallback: {post_id}_{orig_name}.",
+    "filename_template_fallback": _FILENAME_HELP_FALLBACK,
+    "filename_template_help_body": _FILENAME_HELP_BODY,
+    "filename_template_help_text": (
+        _FILENAME_HELP_BODY + "<br><br>" + _FILENAME_HELP_FALLBACK
+    ),
     "filename_template_help_title": "Filename Template Help",
     "filename_template_shared": "Filename Template (In Creator Folder):",
+    "filename_template_shared_warning": "'In Creator Folder' names files pooled with other posts ('Single creator folder', 'Subfolders by file type', or a skipped post folder). Warning: a combo without {post_id} or {post_date} can give two posts' files the same name.",
     "files_skipped_by_keyword": "Skipped {0} file(s) matching skip-keywords: {1}",
     "filtering_already_in_progress": "Filtering already in progress. Please wait.",
     "filtering_completed_displayed_posts": "Filtering completed, displayed {0} posts",
     "filtering_posts": "Filtering posts...",
     "folder_name_template": "Folder Name Template:",
     "folder_name_template_error": "Folder name template failed to format, using fallback: {0}",
-    "folder_name_template_help_text": "Placeholders:\n{post_id} - post id\n{post_title} - post title\n{creator_id} - creator id\n{creator_name} - creator name\n\nExample: {post_title} (drops the post id).\nZero-pad for sorting: {post_id:0>10} = 0174925070.\nOnly used when Folder Structure is 'Per-post folders'. If it fails to format, {post_id}_{post_title} is used.",
+    "folder_name_template_help_text": "<b>Placeholders:</b><br>{post_id} - post id<br>{post_title} - post title<br>{creator_id} - creator id<br>{creator_name} - creator name<br><br>Zero-pad for sorting: add :0>width to any placeholder - 0 fills the left with zeros, > right-aligns, width is the total length (not a count of zeros).<br>{post_id:0>10} = 0174925070.<br>Only used when Folder Structure is 'Per-post folders'.<br><br><b>Fallback: {post_id}_{post_title}.</b>",
     "folder_name_template_help_title": "Folder Name Template Help",
     "folder_settings": "Folder Settings",
     "folder_strategy": "Folder Structure:",
