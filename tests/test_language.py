@@ -90,6 +90,11 @@ class TestBatchInputTranslations:
         "creator_queue_input_placeholder",
         "creator_queue_input_tooltip",
         "add_creator_and_load_tooltip",
+        "queue_more_posts",
+        "load_full_creator_tooltip",
+        "linked_posts_menu",
+        "detecting_linked_posts",
+        "linked_post_fetch_failed",
     ]
 
     def setup_method(self):

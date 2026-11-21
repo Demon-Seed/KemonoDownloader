@@ -2279,10 +2279,14 @@ class PostDetectionThread(_StoppableThread, QThread):
         found_extensions=None,
         post_filters=None,
         report_creator_name=False,
+        post_ids=None,
     ):
         super().__init__()
         self.url = url
         self.report_creator_name = bool(report_creator_name)
+        # Post ids to fetch directly. Empty means the normal creator paging
+        # pass; non-empty means a post-link load of just those posts.
+        self.post_ids = [str(post_id) for post_id in (post_ids or ()) if post_id]
         self.post_titles_map = post_titles_map  # Shared dictionary to store post titles
         self.post_dates_map = post_dates_map if post_dates_map is not None else {}
         self.settings = settings
@@ -2395,6 +2399,181 @@ class PostDetectionThread(_StoppableThread, QThread):
         except Exception:
             return
 
+    def _process_posts(
+        self, posts_data, service, creator_id, all_posts, all_processed_posts
+    ):
+        """Analyse a set of posts and emit their display batch.
+
+        The normal paging pass calls this once per page and the post-link
+        pass calls it once for the linked posts, so both update the shared
+        title/date/search maps and the same skip counters.
+        """
+        for post in posts_data:
+            if not isinstance(post, dict):
+                continue
+            post_id = post.get("id")
+            if not post_id:
+                continue
+            title = post.get("title", f"Post {post_id}")
+            self.log.emit(
+                translate("log_debug", translate("post_id_and_title", post_id, title)),
+                "DEBUG",
+            )
+            # Store title in shared post_titles_map
+            self.post_titles_map[(service, creator_id, post_id)] = sanitize_filename(
+                title
+            )
+            # One analysis per post carries the publish date, the search text
+            # and every fact a post filter needs, so the tab can re-apply
+            # filters later without fetching the posts again.
+            analysis = self._analyze(post)
+            parsed_date = analysis.get("published")
+            self.post_dates_map[post_id] = (
+                parsed_date.strftime("%Y-%m-%d") if parsed_date else "Unknown date"
+            )
+            if self.post_search_index is not None:
+                self.post_search_index[post_id] = {
+                    "filenames": analysis["filenames"],
+                    "description": analysis["description"],
+                    "tags": analysis["tags"],
+                    "filenames_list": analysis.get("filenames_list") or [],
+                    "tag_list": analysis.get("tag_list") or [],
+                    "description_glued": analysis.get("description_glued") or "",
+                    "file_count": analysis.get("file_count", 0),
+                    "has_compressed": bool(analysis.get("has_compressed")),
+                    "extensions": analysis.get("extensions") or [],
+                    "published": parsed_date,
+                }
+            self._record_found_extensions(analysis)
+
+        batch_posts = []
+        for post in posts_data:
+            if not isinstance(post, dict):
+                continue
+            post_id = post.get("id")
+            if not post_id:
+                continue
+            title = post.get("title", f"Post {post_id}")
+            facts = self._analyze(post)
+            reason, keyword = post_skip_reason(title, facts, self.post_filters)
+
+            # The post is booked under the first filter that caught it, so the
+            # per-filter numbers stay mutually exclusive and add up to the
+            # number of skipped posts. It is still listed: the tab keeps the
+            # whole fetched list so a filter change can bring it straight back
+            # without another fetch.
+            if reason == "keywords":
+                self._keyword_skipped_count += 1
+                self.keyword_skip_counts[keyword] = (
+                    self.keyword_skip_counts.get(keyword, 0) + 1
+                )
+                if keyword_needed_rejoin(keyword, facts, self.post_filters):
+                    self.log.emit(
+                        translate(
+                            "log_debug",
+                            translate("skip_keyword_matched_after_rejoin", keyword),
+                        ),
+                        "DEBUG",
+                    )
+            elif reason == "date":
+                self._date_skipped_count += 1
+            elif reason == "file_count":
+                self._file_count_skipped_count += 1
+            elif reason == "filetypes":
+                self._filetype_skipped_count += 1
+            if reason is not None:
+                self._skipped_count += 1
+            thumbnail_url = None
+            # The API has been seen to send ``"attachments": null`` and a
+            # non-dict ``file``; neither is a reason to lose the whole fetch,
+            # so anything unexpected is simply "no thumbnail".
+            main_file = post.get("file")
+            if isinstance(main_file, dict) and main_file.get("path"):
+                if (
+                    main_file["path"]
+                    .lower()
+                    .endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
+                ):
+                    thumbnail_url = clean_file_url(
+                        main_file["path"], self.domain_config
+                    )
+            attachments = post.get("attachments")
+            if not thumbnail_url and isinstance(attachments, list):
+                for attachment in attachments:
+                    if (
+                        isinstance(attachment, dict)
+                        and "path" in attachment
+                        and attachment["path"]
+                        .lower()
+                        .endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
+                    ):
+                        thumbnail_url = clean_file_url(
+                            attachment["path"], self.domain_config
+                        )
+                        break
+            if (
+                not thumbnail_url
+                and isinstance(main_file, dict)
+                and main_file.get("path")
+            ):
+                thumbnail_url = clean_file_url(main_file["path"], self.domain_config)
+            batch_posts.append((title, (post_id, thumbnail_url)))
+
+        # Accumulate raw posts for pagination checks
+        all_posts.extend(posts_data)
+        # Accumulate processed tuples for the final finished.emit()
+        all_processed_posts.extend(batch_posts)
+        # Emit batch of processed posts
+        if batch_posts:
+            self.posts_batch.emit(batch_posts)
+        return batch_posts
+
+    def _finish_detection(self, all_posts, all_processed_posts):
+        """Publish this run's counters and final post list."""
+        self.filtered_count = self._skipped_count
+        self.date_skipped_count = self._date_skipped_count
+        self.keyword_skipped_count = self._keyword_skipped_count
+        self.file_count_skipped_count = self._file_count_skipped_count
+        self.filetype_skipped_count = self._filetype_skipped_count
+        self.total_detected = len(all_posts)
+        self.finished.emit(all_processed_posts)
+
+    def _run_linked_posts(self, service, creator_id):
+        """Fetch only the linked posts instead of paging the whole creator."""
+        settings_tab = getattr(self.settings, "settings_tab", None)
+        max_retries = max(
+            1, int(getattr(self.settings, "post_data_max_retries", 1) or 1)
+        )
+        posts_data = []
+        for post_id in self.post_ids:
+            if not self.is_running:
+                return
+            post, message = fetch_post_data(
+                post_id, self.url, settings_tab, max_retries
+            )
+            if post is None:
+                self.log.emit(
+                    translate(
+                        "log_warning",
+                        translate("linked_post_fetch_failed", post_id, message),
+                    ),
+                    "WARNING",
+                )
+                continue
+            posts_data.append(post)
+
+        if not self.is_running:
+            return
+        all_posts = []
+        all_processed_posts = []
+        self._process_posts(
+            posts_data, service, creator_id, all_posts, all_processed_posts
+        )
+        if self.is_running:
+            self._finish_detection(all_posts, all_processed_posts)
+            if self.report_creator_name:
+                self._report_creator_name(service, creator_id)
+
     def run(self):
         """Run the detection pass, always leaving the tab able to continue.
 
@@ -2487,6 +2666,17 @@ class PostDetectionThread(_StoppableThread, QThread):
         self.log.emit(
             translate("log_debug", translate("base_api_url", base_api_url)), "DEBUG"
         )
+
+        if self.post_ids:
+            self.log.emit(
+                translate(
+                    "log_info",
+                    translate("detecting_linked_posts", len(self.post_ids)),
+                ),
+                "INFO",
+            )
+            self._run_linked_posts(service, creator_id)
+            return
 
         # Parse query parameters
         query_params = parse_qs(parsed_url.query)
@@ -2770,46 +2960,6 @@ class PostDetectionThread(_StoppableThread, QThread):
                     "INFO",
                 )
 
-            for post in posts_data:
-                if not isinstance(post, dict):
-                    continue
-                post_id = post.get("id")
-                if not post_id:
-                    continue
-                title = post.get("title", f"Post {post_id}")
-                self.log.emit(
-                    translate(
-                        "log_debug", translate("post_id_and_title", post_id, title)
-                    ),
-                    "DEBUG",
-                )
-                # Store title in shared post_titles_map
-                self.post_titles_map[(service, creator_id, post_id)] = (
-                    sanitize_filename(title)
-                )
-                # One analysis per post carries the publish date, the search
-                # text and every fact a post filter needs, so the tab can
-                # re-apply filters later without fetching the posts again.
-                analysis = self._analyze(post)
-                parsed_date = analysis.get("published")
-                self.post_dates_map[post_id] = (
-                    parsed_date.strftime("%Y-%m-%d") if parsed_date else "Unknown date"
-                )
-                if self.post_search_index is not None:
-                    self.post_search_index[post_id] = {
-                        "filenames": analysis["filenames"],
-                        "description": analysis["description"],
-                        "tags": analysis["tags"],
-                        "filenames_list": analysis.get("filenames_list") or [],
-                        "tag_list": analysis.get("tag_list") or [],
-                        "description_glued": analysis.get("description_glued") or "",
-                        "file_count": analysis.get("file_count", 0),
-                        "has_compressed": bool(analysis.get("has_compressed")),
-                        "extensions": analysis.get("extensions") or [],
-                        "published": parsed_date,
-                    }
-                self._record_found_extensions(analysis)
-
             if not posts_data:
                 self.log.emit(
                     translate("log_info", translate("no_more_posts_at_offset", offset)),
@@ -2817,91 +2967,9 @@ class PostDetectionThread(_StoppableThread, QThread):
                 )
                 break
 
-            # Process posts for this batch (thumbnail extraction + skip filtering)
-            batch_posts = []
-            for post in posts_data:
-                if not isinstance(post, dict):
-                    continue
-                post_id = post.get("id")
-                if not post_id:
-                    continue
-                title = post.get("title", f"Post {post_id}")
-                facts = self._analyze(post)
-                reason, keyword = post_skip_reason(title, facts, self.post_filters)
-
-                # The post is booked under the first filter that caught it,
-                # so the per-filter numbers stay mutually exclusive and add
-                # up to the number of skipped posts. It is still listed: the
-                # tab keeps the whole fetched list so a filter change can
-                # bring it straight back without another fetch.
-                if reason == "keywords":
-                    self._keyword_skipped_count += 1
-                    self.keyword_skip_counts[keyword] = (
-                        self.keyword_skip_counts.get(keyword, 0) + 1
-                    )
-                    if keyword_needed_rejoin(keyword, facts, self.post_filters):
-                        self.log.emit(
-                            translate(
-                                "log_debug",
-                                translate("skip_keyword_matched_after_rejoin", keyword),
-                            ),
-                            "DEBUG",
-                        )
-                elif reason == "date":
-                    self._date_skipped_count += 1
-                elif reason == "file_count":
-                    self._file_count_skipped_count += 1
-                elif reason == "filetypes":
-                    self._filetype_skipped_count += 1
-                if reason is not None:
-                    self._skipped_count += 1
-                thumbnail_url = None
-                # The API has been seen to send ``"attachments": null`` and a
-                # non-dict ``file``; neither is a reason to lose the whole
-                # fetch, so anything unexpected is simply "no thumbnail".
-                main_file = post.get("file")
-                if isinstance(main_file, dict) and main_file.get("path"):
-                    if (
-                        main_file["path"]
-                        .lower()
-                        .endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
-                    ):
-                        thumbnail_url = clean_file_url(
-                            main_file["path"], self.domain_config
-                        )
-                attachments = post.get("attachments")
-                if not thumbnail_url and isinstance(attachments, list):
-                    for attachment in attachments:
-                        if (
-                            isinstance(attachment, dict)
-                            and "path" in attachment
-                            and attachment["path"]
-                            .lower()
-                            .endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
-                        ):
-                            thumbnail_url = clean_file_url(
-                                attachment["path"], self.domain_config
-                            )
-                            break
-                if (
-                    not thumbnail_url
-                    and isinstance(main_file, dict)
-                    and main_file.get("path")
-                ):
-                    thumbnail_url = clean_file_url(
-                        main_file["path"], self.domain_config
-                    )
-                batch_posts.append((title, (post_id, thumbnail_url)))
-
-            # Accumulate raw posts for pagination checks
-            all_posts.extend(posts_data)
-
-            # Accumulate processed tuples for the final finished.emit()
-            all_processed_posts.extend(batch_posts)
-
-            # Emit batch of processed posts
-            if batch_posts:
-                self.posts_batch.emit(batch_posts)
+            self._process_posts(
+                posts_data, service, creator_id, all_posts, all_processed_posts
+            )
 
             # If user requested a single page (via offset parameter), stop after the first successful batch
             if single_page_target:
@@ -2931,13 +2999,7 @@ class PostDetectionThread(_StoppableThread, QThread):
             time.sleep(0.5)
 
         if self.is_running:
-            self.filtered_count = self._skipped_count
-            self.date_skipped_count = self._date_skipped_count
-            self.keyword_skipped_count = self._keyword_skipped_count
-            self.file_count_skipped_count = self._file_count_skipped_count
-            self.filetype_skipped_count = self._filetype_skipped_count
-            self.total_detected = len(all_posts)
-            self.finished.emit(all_processed_posts)
+            self._finish_detection(all_posts, all_processed_posts)
             # Decoration only, and after the posts are already on their way:
             # the queue row shows the creator's name once this answers. Off by
             # default so a detection pass makes exactly the requests it did
@@ -5648,10 +5710,29 @@ class CreatorDownloaderTab(QWidget):
         self.current_page = 1
         self.total_pages = 1
         self.filtered_posts = []  # Cache of filtered posts for pagination
-        # Creator URL -> set of post ids requested via pasted post links. When a
-        # creator is queued from a post link, viewing that creator auto-selects
-        # only those posts instead of every post the creator has.
+        # Creator URL -> set of post ids requested via pasted post links. The
+        # ids are shown as one aggregated post row, separate from the creator
+        # row.
         self._batch_post_ids: dict[str, set] = {}
+        # What the view currently represents: "creator" for the full creator
+        # list, "posts" for a linked-posts-only view, or None when cleared.
+        self._view_kind: Optional[str] = None
+        # The queue row that launched the current view, so only that row is
+        # marked processed and only that row can clear the view when removed.
+        self.current_queue_link: Optional[str] = None
+        # Posts the current detection pass fetches directly. Empty means the
+        # normal full-creator paging pass.
+        self._fetch_post_ids: set[str] = set()
+        # Posts that should be checked once the loaded list is built.
+        self._requested_post_ids: set[str] = set()
+        # Posts whose page should be revealed after a load; usually the same
+        # as _requested_post_ids, but live appends reveal the new post.
+        self._reveal_post_ids: set[str] = set()
+        # New linked post ids waiting for a running fetch to finish before
+        # they are appended to the open linked-posts view.
+        self._pending_live_post_ids: dict[str, set] = {}
+        # The exact queue row most recently added/updated by the input row.
+        self._last_queued_link: Optional[str] = None
         # Creator URL -> display name reported by the profile endpoint while
         # that creator was loaded. Names are decoration on a queue row and are
         # never required, so a failed lookup simply leaves the row as the URL.
@@ -7175,23 +7256,57 @@ class CreatorDownloaderTab(QWidget):
         """Show a dialog explaining what Skip Images if Compressed does."""
         self._show_info("skip_images_info_title", "skip_images_info_text")
 
-    def _queue_creator_url(self, url_text, refresh=True):
-        """Queue one creator URL, returning "added", "duplicate" or "invalid".
+    @staticmethod
+    def _queue_resolved(link):
+        creator_url, post_id = resolve_creator_url(link)
+        return (creator_url or "").rstrip("/"), (str(post_id) if post_id else None)
 
-        Post URLs collapse to their parent creator and remember their post id,
-        so a post link still drives the post-link auto-select.
+    def _queue_creator_row(self, creator_url):
+        """Return this creator's creator-row key, or None."""
+        key = (creator_url or "").rstrip("/")
+        for row_link, _checked in self.creator_queue:
+            row_creator, row_post = resolve_creator_url(row_link)
+            if row_post is None and row_creator.rstrip("/") == key:
+                return row_link
+        return None
+
+    def _queue_post_row(self, creator_url):
+        """Return this creator's aggregated post-row key, or None."""
+        key = (creator_url or "").rstrip("/")
+        for row_link, _checked in self.creator_queue:
+            row_creator, row_post = resolve_creator_url(row_link)
+            if row_post is not None and row_creator.rstrip("/") == key:
+                return row_link
+        return None
+
+    def _linked_post_ids(self, creator_url):
+        return set(self._batch_post_ids.get((creator_url or "").rstrip("/"), ()))
+
+    @staticmethod
+    def _post_id_sort_key(post_id):
+        text = str(post_id)
+        return (0, int(text)) if text.isdigit() else (1, text)
+
+    def _post_session_loaded_for(self, creator_url):
+        """True when the linked-posts-only view for this creator is open."""
+        return self._view_kind == "posts" and (self.current_creator_url or "").rstrip(
+            "/"
+        ) == (creator_url or "").rstrip("/")
+
+    def _queue_creator_url(self, url_text, refresh=True):
+        """Queue one creator or post link.
+
+        Returns "added" for a new row, "updated" when a post id joins an
+        existing aggregated post row, "duplicate", or "invalid".
         """
-        # Accept both creator and post URLs; post URLs collapse to the parent
-        # creator so the queue only ever holds creator URLs.
-        normalized_url, post_id = resolve_creator_url(url_text)
-        normalized_url = normalized_url.rstrip("/")
+        creator_url, post_id = self._queue_resolved(url_text)
 
         # Validate URL format (same rules as the detection thread)
-        parts = normalized_url.split("/")
-        domain_config = get_domain_config(normalized_url)
+        parts = creator_url.split("/")
+        domain_config = get_domain_config(creator_url)
         if (
             len(parts) < 5
-            or domain_config["domain"] not in normalized_url
+            or domain_config["domain"] not in creator_url
             or parts[-2] != "user"
         ):
             self.append_log_to_console(
@@ -7200,29 +7315,62 @@ class CreatorDownloaderTab(QWidget):
             )
             return "invalid"
 
-        # A post link means "just this post"; accumulate them so several post
-        # links for one creator all get selected. A plain creator link means
-        # "everything", so it drops any earlier restriction.
-        post_ids_changed = self._remember_batch_post_id(normalized_url, post_id)
+        self._last_queued_link = None
 
-        if any(item[0].rstrip("/") == normalized_url for item in self.creator_queue):
+        if post_id is not None:
+            post_row = self._queue_post_row(creator_url)
+            known_post_ids = self._batch_post_ids.setdefault(creator_url, set())
+            if post_row is not None:
+                if post_id in known_post_ids:
+                    self._last_queued_link = post_row
+                    self.append_log_to_console(
+                        translate("log_warning", translate("url_already_in_queue")),
+                        "WARNING",
+                    )
+                    return "duplicate"
+                known_post_ids.add(post_id)
+                self._last_queued_link = post_row
+                if refresh:
+                    self.update_creator_queue_list()
+                self.append_log_to_console(
+                    translate(
+                        "log_info",
+                        translate("added_to_queue") + f": {creator_url}/post/{post_id}",
+                    ),
+                    "INFO",
+                )
+                return "updated"
+
+            known_post_ids.add(post_id)
+            post_url = f"{creator_url}/post/{post_id}"
+            self.creator_queue.append((post_url, False))
+            self._last_queued_link = post_url
+            self._request_creator_name(creator_url)
+            if refresh:
+                self.update_creator_queue_list(scroll=True)
+            self.append_log_to_console(
+                translate("log_info", translate("added_to_queue") + f": {post_url}"),
+                "INFO",
+            )
+            return "added"
+
+        if self._queue_creator_row(creator_url) is not None:
+            self._last_queued_link = creator_url
             self.append_log_to_console(
                 translate("log_warning", translate("url_already_in_queue")),
                 "WARNING",
             )
-            # A post link for an already-queued creator still adds its tag.
-            if refresh and post_ids_changed:
-                self.update_creator_queue_list()
             return "duplicate"
 
-        self.creator_queue.append((normalized_url, False))
+        self.creator_queue.append((creator_url, False))
+        self._last_queued_link = creator_url
         # The profile name is a single small request; ask for it straight away
         # so the row reads as a creator name rather than a bare URL.
-        self._request_creator_name(normalized_url)
+        self._request_creator_name(creator_url)
         if refresh:
             self.update_creator_queue_list(scroll=True)
         self.append_log_to_console(
-            translate("log_info", translate("added_to_queue") + f": {normalized_url}"),
+            translate("log_info", translate("added_to_queue") + f": {creator_url}"),
             "INFO",
         )
         return "added"
@@ -7236,10 +7384,10 @@ class CreatorDownloaderTab(QWidget):
     def add_creator_to_queue(self, auto_load=True):
         """Commit the URL in the queue's blank row, then empty the field.
 
-        Enter and Space both land here. Adding never fetches by itself: the
-        Settings mode decides whether the new creator is then opened. The
-        row's eye passes ``auto_load=False`` so it can open the creator once,
-        itself, without a second fetch from the mode.
+        Enter and Space both land here. A post link added while its creator's
+        linked-posts view is open updates that view immediately; otherwise the
+        Settings mode decides whether the new row is opened. The row's eye
+        passes ``auto_load=False`` so it can open the row once, itself.
         """
         url_text = self.creator_queue_input.text().strip()
         if not url_text:
@@ -7252,35 +7400,34 @@ class CreatorDownloaderTab(QWidget):
         if outcome == "invalid":
             # Keep the text so it can be corrected in place.
             return outcome
-        # Added or already queued: the URL was understood either way, so the
-        # field empties and stays focused for the next one.
+        # Added, updated or already queued: the URL was understood either way,
+        # so the field empties and stays focused for the next one.
         self.creator_queue_input.clear()
         self.creator_queue_input.setFocus()
-        if outcome == "added" and auto_load:
-            self._auto_load_queued_creator()
+        if outcome in ("added", "updated") and auto_load:
+            new_creator_url, new_post_id = self._queue_resolved(url_text)
+            if new_post_id is not None and self._post_session_loaded_for(
+                new_creator_url
+            ):
+                # A new linked post for the creator already on screen is
+                # appended live, whatever the input setting says.
+                self._live_append_linked_posts(new_creator_url, {new_post_id})
+            else:
+                self._auto_load_queued_link(self._last_queued_link)
         return outcome
 
     def add_creator_and_load(self):
         """The blank row's eye: add the URL, then open it whatever the mode."""
-        url_text = self.creator_queue_input.text().strip()
-        normalized_url = ""
-        if url_text:
-            normalized_url, _post_id = resolve_creator_url(url_text)
-            normalized_url = normalized_url.rstrip("/")
-
         outcome = self.add_creator_to_queue(auto_load=False)
-        if outcome == "added":
-            self.check_creator_from_queue(self.creator_queue[-1][0])
-        elif outcome == "duplicate":
-            # Already queued: still honour the explicit "show me this one".
-            self.check_creator_from_queue(normalized_url)
+        if outcome != "invalid" and self._last_queued_link:
+            self.check_creator_from_queue(self._last_queued_link)
 
-    def _auto_load_queued_creator(self):
-        """Open the just-queued creator when Settings asks for it.
+    def _auto_load_queued_link(self, link):
+        """Open the just-queued row when Settings asks for it.
 
         "load_first" only opens while nothing is being viewed, so adding more
         links never yanks the page away from the creator being set up.
-        "load_every" opens every creator that is added.
+        "load_every" opens every link that is added.
         """
         mode = self._queue_input_behavior()
         if mode == "load_every" or (
@@ -7290,12 +7437,10 @@ class CreatorDownloaderTab(QWidget):
             # to it once the fetch finishes so the next URL can be typed. The
             # flag is set from the result so a refused fetch (one already
             # running, a rejected URL) cannot move focus on some later run.
-            self._restore_queue_input_focus = self.check_creator_from_queue(
-                self.creator_queue[-1][0]
-            )
+            self._restore_queue_input_focus = self.check_creator_from_queue(link)
 
     def _show_queue_context_menu(self, position):
-        """Queue context menu: copy a creator's link or import a .txt file."""
+        """Queue context menu: copy a link, open linked posts, or import."""
         menu = QMenu(self.creator_queue_list)
         menu.setStyleSheet(MENU_STYLE)
         item = self.creator_queue_list.itemAt(position)
@@ -7306,6 +7451,20 @@ class CreatorDownloaderTab(QWidget):
                 copy_action.triggered.connect(
                     lambda _checked=False, link=url: self._copy_queue_link(link)
                 )
+                creator_url, post_id = self._queue_resolved(url)
+                linked_ids = self._linked_post_ids(creator_url) if post_id else set()
+                if len(linked_ids) > 1:
+                    linked_menu = menu.addMenu(translate("linked_posts_menu"))
+                    for linked_id in sorted(linked_ids, key=self._post_id_sort_key):
+                        link = f"{creator_url}/post/{linked_id}"
+                        action = linked_menu.addAction(link)
+                        action.triggered.connect(
+                            lambda _checked=False, row=url, pid=linked_id: self.check_creator_from_queue(
+                                row,
+                                fetch_post_ids={pid},
+                                select_post_ids={pid},
+                            )
+                        )
                 menu.addSeparator()
         import_action = menu.addAction(translate("add_links_from_file_title"))
         import_action.triggered.connect(self.add_creators_from_file)
@@ -7313,20 +7472,23 @@ class CreatorDownloaderTab(QWidget):
         menu.deleteLater()
 
     def _copy_queue_link(self, url):
-        """Put a queued creator's URL on the clipboard."""
+        """Put a queued row's link on the clipboard."""
         QApplication.clipboard().setText(url)
         self.append_log_to_console(
             translate("log_info", translate("link_copied", url)), "INFO"
         )
 
     def _queue_row_text(self, url):
-        """Return ``(label_text, use_rich_text)`` for a queued creator row."""
-        requested_post_ids = self._batch_post_ids.get(url.rstrip("/"))
+        """Return ``(label_text, use_rich_text)`` for a queued row."""
+        creator_url, post_id = self._queue_resolved(url)
         label_text = url
-        if requested_post_ids:
-            ids = ", ".join(sorted(str(p) for p in requested_post_ids))
-            label_text = f"{url} ({translate('batch_post_link_tag', ids)})"
-        creator_name = self._creator_names.get(url.rstrip("/"))
+        if post_id is not None:
+            linked_ids = self._linked_post_ids(creator_url)
+            if len(linked_ids) > 1:
+                label_text = (
+                    f"{url} " f"({translate('queue_more_posts', len(linked_ids) - 1)})"
+                )
+        creator_name = self._creator_names.get(creator_url)
         if creator_name:
             # The name arrives once the creator's profile has been read;
             # bolding it mirrors the last-download date on the post rows, and
@@ -7337,29 +7499,45 @@ class CreatorDownloaderTab(QWidget):
             )
         return label_text, False
 
-    def _refresh_queue_row(self, url):
-        """Update one queue row's label in place; a name just arrived.
+    def _queue_row_tooltip(self, url):
+        """All links a queue row represents, one per line."""
+        creator_url, post_id = self._queue_resolved(url)
+        if post_id is None:
+            return url
+        linked_ids = self._linked_post_ids(creator_url)
+        links = [url]
+        for linked_id in sorted(linked_ids, key=self._post_id_sort_key):
+            if str(linked_id) == post_id:
+                continue
+            links.append(f"{creator_url}/post/{linked_id}")
+        return "\n".join(links)
+
+    def _refresh_queue_row(self, creator_url):
+        """Update every queue row for this creator in place.
 
         Rebuilding the whole list for a single name costs ~70 ms at 100
         creators and would reset the queue's selection, so only the matching
-        label is rewritten.
+        labels are rewritten. A creator can have both a creator row and a
+        post row, and both show the same name.
         """
-        key = (url or "").rstrip("/")
+        key = (creator_url or "").rstrip("/")
         for index in range(self.creator_queue_list.count()):
             item = self.creator_queue_list.item(index)
             item_url = item.data(Qt.ItemDataRole.UserRole)
-            if (item_url or "").rstrip("/") != key:
+            item_creator, _item_post = self._queue_resolved(item_url)
+            if item_creator != key:
                 continue
             widget = self.creator_queue_list.itemWidget(item)
             if widget is None:
-                return
+                continue
             text, rich = self._queue_row_text(item_url)
             widget.label.setTextFormat(
                 Qt.TextFormat.RichText if rich else Qt.TextFormat.PlainText
             )
             widget.label.setText(text)
+            widget.setToolTip(self._queue_row_tooltip(item_url))
+            item.setToolTip(self._queue_row_tooltip(item_url))
             item.setSizeHint(widget.sizeHint())
-            return
 
     def on_creator_name_found(self, url, name):
         """Cache a creator's display name and refresh its queue row."""
@@ -7430,12 +7608,102 @@ class CreatorDownloaderTab(QWidget):
 
         return handler
 
+    def create_full_creator_handler(self, post_row):
+        def handler():
+            self._load_full_creator_from_post_row(post_row)
+
+        return handler
+
+    def _ensure_creator_row(self, creator_url, insert_after=None):
+        """Return the creator row key, creating one if the queue lacks it."""
+        existing = self._queue_creator_row(creator_url)
+        if existing is not None:
+            return existing
+
+        key = (creator_url or "").rstrip("/")
+        entry = (key, False)
+        if insert_after is not None:
+            for index, (queue_url, _checked) in enumerate(self.creator_queue):
+                if queue_url == insert_after:
+                    self.creator_queue.insert(index + 1, entry)
+                    break
+            else:
+                self.creator_queue.append(entry)
+        else:
+            self.creator_queue.append(entry)
+        self._request_creator_name(key)
+        self.update_creator_queue_list(scroll=True)
+        self.append_log_to_console(
+            translate("log_info", translate("added_to_queue") + f": {key}"), "INFO"
+        )
+        return key
+
+    def _load_full_creator_from_post_row(self, post_row):
+        """Fold a post row into a creator session with its posts selected."""
+        creator_url, row_post_id = self._queue_resolved(post_row)
+        select_ids = self._linked_post_ids(creator_url)
+        if not select_ids and row_post_id:
+            select_ids = {row_post_id}
+        creator_row = self._ensure_creator_row(creator_url, insert_after=post_row)
+
+        # Already looking at this creator's full list: apply the selection
+        # without paging the creator again.
+        known_ids = {
+            str(post_id) for _title, (post_id, _thumb) in self.all_detected_posts
+        }
+        if (
+            self._view_kind == "creator"
+            and (self.current_creator_url or "").rstrip("/") == creator_url
+            and select_ids <= known_ids
+        ):
+            self.current_queue_link = creator_row
+            self._requested_post_ids = set(select_ids)
+            self._reveal_post_ids = set(select_ids)
+            self._post_link_selection_pending = False
+            self._apply_post_link_selection()
+            self.display_current_page(preserve_scroll=True)
+            self.update_check_all_state()
+            self.update_checked_posts()
+            self._mark_queue_row_processed(creator_row)
+            return
+
+        self.check_creator_from_queue(
+            creator_row, fetch_post_ids=set(), select_post_ids=select_ids
+        )
+
+    def _mark_queue_row_processed(self, link):
+        """Mark one queue row as the row that produced the open view."""
+        target = link
+        if target is None and self.current_creator_url:
+            key = self.current_creator_url.rstrip("/")
+            for queue_url, _checked in self.creator_queue:
+                queue_creator, queue_post = self._queue_resolved(queue_url)
+                if queue_post is None and queue_creator == key:
+                    target = queue_url
+                    break
+        for index, (queue_url, _checked) in enumerate(self.creator_queue):
+            if queue_url == target:
+                self.creator_queue[index] = (queue_url, True)
+                self.update_creator_queue_list()
+                break
+
     def create_remove_handler(self, url):
         def handler():
+            creator_url, post_id = self._queue_resolved(url)
+            if post_id is not None:
+                post_count = len(self._linked_post_ids(creator_url)) or 1
+                message_key = (
+                    "confirm_removal_post_link_message"
+                    if post_count == 1
+                    else "confirm_removal_post_links_message"
+                )
+                message = translate(message_key, post_count)
+            else:
+                message = translate("confirm_removal_message", url)
             reply = QMessageBox.question(
                 self,
                 translate("confirm_removal"),
-                translate("confirm_removal_message", url),
+                message,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.Yes:
@@ -7446,17 +7714,23 @@ class CreatorDownloaderTab(QWidget):
                         found = True
                         break
                 if found:
-                    self._batch_post_ids.pop(url.rstrip("/"), None)
+                    if post_id is not None:
+                        # Removing the aggregated post row clears its linked
+                        # ids; the creator row is a separate link.
+                        self._batch_post_ids.pop(creator_url, None)
                     self.update_creator_queue_list()
                     self.append_log_to_console(
                         translate("log_info", translate("link_removed", url)), "INFO"
                     )
-                    # Clear the view only when the creator being viewed is the
-                    # one that was removed. Removing a different link used to
-                    # clear (or keep) the list based on the queue's processed
-                    # flags, which left a removed creator's posts on screen and
-                    # downloadable.
-                    if url.rstrip("/") == (self.current_creator_url or "").rstrip("/"):
+                    # Clear the view only when the row that launched it was
+                    # removed. Removing the other row for the same creator
+                    # leaves the open view alone.
+                    legacy_active = (
+                        self.current_queue_link is None
+                        and post_id is None
+                        and creator_url == (self.current_creator_url or "").rstrip("/")
+                    )
+                    if url == self.current_queue_link or legacy_active:
                         self.creator_post_list.clear()
                         self.post_widget_cache.clear()
                         self.all_detected_posts = []
@@ -7466,6 +7740,12 @@ class CreatorDownloaderTab(QWidget):
                         self.all_files_map = {}
                         self._clear_preview_caches()
                         self.current_creator_url = None
+                        self.current_queue_link = None
+                        self._view_kind = None
+                        self._fetch_post_ids = set()
+                        self._requested_post_ids = set()
+                        self._reveal_post_ids = set()
+                        self._pending_live_post_ids.clear()
                         self._clear_filetype_selection()
                         self._reset_found_extensions()
                         # The creator's saved profile goes with it: hand every
@@ -7493,8 +7773,10 @@ class CreatorDownloaderTab(QWidget):
             queue_scroll = self.creator_queue_list.verticalScrollBar().value()
         self.creator_queue_list.clear()
         for url, checked in self.creator_queue:
+            creator_url, post_id = self._queue_resolved(url)
+            is_post_row = post_id is not None
             item = QListWidgetItem()
-            # Double-clicking the row (its URL, its gaps) loads the creator;
+            # Double-clicking the row (its URL, its gaps) loads the row;
             # the eye and the ✕ stay one-click buttons of their own.
             widget = _CreatorQueueRow(lambda u=url: self.check_creator_from_queue(u))
             layout = QHBoxLayout()
@@ -7513,15 +7795,35 @@ class CreatorDownloaderTab(QWidget):
             view_button.clicked.connect(self.create_view_handler(url, checked))
             layout.addWidget(view_button)
 
-            # The URL, its post-link tag and the creator's name (once known) are
-            # built by one helper so an in-place name refresh cannot drift from
-            # a full rebuild.
+            full_creator_button = None
+            if is_post_row:
+                full_creator_button = QPushButton(
+                    qta.icon("fa5s.layer-group", color="white"), ""
+                )
+                full_creator_button.setStyleSheet(
+                    scoped(
+                        "QPushButton",
+                        "background: #4A5B7A; padding: 2px; border-radius: 5px; "
+                        "min-width: 30px; max-width: 30px; min-height: 30px; "
+                        "max-height: 30px;",
+                    )
+                )
+                full_creator_button.setToolTip(translate("load_full_creator_tooltip"))
+                full_creator_button.clicked.connect(
+                    self.create_full_creator_handler(url)
+                )
+                layout.addWidget(full_creator_button)
+
+            # The URL and the creator's name (once known) are built by one
+            # helper so an in-place name refresh cannot drift from a rebuild.
             label_text, rich_label = self._queue_row_text(url)
             label = QLabel()
             label.setTextFormat(
                 Qt.TextFormat.RichText if rich_label else Qt.TextFormat.PlainText
             )
             label.setText(label_text)
+            # The label is mouse-transparent, so the row widget owns the
+            # tooltip; a label tooltip would never receive the hover.
             # The window's stylesheet paints every descendant, which put a dark
             # band over the row's selection highlight; a transparent label lets
             # the highlight show through.
@@ -7547,13 +7849,16 @@ class CreatorDownloaderTab(QWidget):
             layout.addWidget(remove_button)
 
             widget.setLayout(layout)
+            widget.setToolTip(self._queue_row_tooltip(url))
             item.setSizeHint(widget.sizeHint())
             # The URL rides on the item so the context menu can copy the link
             # that was right-clicked, even though the row is a child widget.
             item.setData(Qt.ItemDataRole.UserRole, url)
+            item.setToolTip(self._queue_row_tooltip(url))
             self.creator_queue_list.addItem(item)
             self.creator_queue_list.setItemWidget(item, widget)
             setattr(widget, "view_button", view_button)
+            setattr(widget, "full_creator_button", full_creator_button)
             setattr(widget, "label", label)
             setattr(widget, "remove_button", remove_button)
 
@@ -7564,8 +7869,15 @@ class CreatorDownloaderTab(QWidget):
         elif queue_scroll:
             self.creator_queue_list.verticalScrollBar().setValue(queue_scroll)
 
-    def check_creator_from_queue(self, url):
-        """Open a queued creator; return True when a fetch actually started."""
+    def check_creator_from_queue(self, url, fetch_post_ids=None, select_post_ids=None):
+        """Open a queued row; return True when a fetch actually started.
+
+        A creator row fetches the full creator. A post row fetches only its
+        linked posts. ``fetch_post_ids`` overrides what is fetched and
+        ``select_post_ids`` overrides what is checked once the list is built,
+        which lets the post row's full-creator button fetch everything while
+        keeping the linked posts selected.
+        """
         if not isinstance(url, str):
             self.append_log_to_console(
                 translate("log_error", translate("invalid_url_type", type(url))),
@@ -7584,13 +7896,37 @@ class CreatorDownloaderTab(QWidget):
                 "WARNING",
             )
             return False
+
+        creator_url, row_post_id = self._queue_resolved(url)
+        creator_url = creator_url.rstrip("/")
+        if row_post_id is not None:
+            linked_ids = self._linked_post_ids(creator_url) or {row_post_id}
+            if fetch_post_ids is None:
+                fetch_post_ids = linked_ids
+            if select_post_ids is None:
+                select_post_ids = linked_ids
+        else:
+            if fetch_post_ids is None:
+                fetch_post_ids = set()
+            if select_post_ids is None:
+                select_post_ids = set()
+        fetch_ids = {str(post_id) for post_id in fetch_post_ids}
+        select_ids = {str(post_id) for post_id in select_post_ids}
+
+        self.current_queue_link = url
+        self._view_kind = "posts" if fetch_ids else "creator"
+        self._fetch_post_ids = fetch_ids
+        self._requested_post_ids = select_ids
+        self._reveal_post_ids = set(select_ids)
+        self._pending_live_post_ids.clear()
+
         self.append_log_to_console(
-            translate("log_info", translate("viewing_creator", url)), "INFO"
+            translate("log_info", translate("viewing_creator", creator_url)), "INFO"
         )
 
         previous_creator_url = self.current_creator_url
-        self.current_creator_url = url
-        if (previous_creator_url or "").rstrip("/") != str(url).rstrip("/"):
+        self.current_creator_url = creator_url
+        if (previous_creator_url or "").rstrip("/") != creator_url:
             # Preview caches describe one creator's posts; holding them after
             # switching wastes memory and could show stale records.  Clear the
             # shared thumbnail LRU and the post records together.
@@ -7650,9 +7986,11 @@ class CreatorDownloaderTab(QWidget):
                 self.update_creator_queue_list()
                 break
 
-        # Always attempt to fetch/refetch posts when viewing a creator
-        # This allows users to refresh the post list even if already cached
-        self.background_task_label.setText(translate("detecting_posts"))
+        # Always attempt to fetch/refetch posts when viewing a row. A post row
+        # fetches only its linked posts; a creator row fetches everything.
+        self.background_task_label.setText(
+            translate("detecting_linked_posts" if fetch_ids else "detecting_posts")
+        )
         self.background_task_progress.setRange(0, 0)
 
         # Disable UI elements during fetching
@@ -7669,7 +8007,7 @@ class CreatorDownloaderTab(QWidget):
             )
 
         self.post_detection_thread = PostDetectionThread(
-            url,
+            creator_url,
             self.post_titles_map,
             self._create_thread_settings(),
             post_dates_map=self.post_dates_map,
@@ -7679,9 +8017,10 @@ class CreatorDownloaderTab(QWidget):
             # Names are normally fetched when the URL is queued; this is the
             # fallback for a lookup that failed or is still in flight.
             report_creator_name=(
-                url.rstrip("/") not in self._creator_names
-                and url.rstrip("/") not in self._name_lookup_wanted
+                creator_url not in self._creator_names
+                and creator_url not in self._name_lookup_wanted
             ),
+            post_ids=sorted(fetch_ids) or None,
         )
         self.post_detection_thread.finished.connect(self.on_post_detection_finished)
         self.post_detection_thread.posts_batch.connect(self.on_posts_batch_received)
@@ -7767,12 +8106,136 @@ class CreatorDownloaderTab(QWidget):
                 batch_posts
             )
 
-        # Update checked_urls for new posts
+        # Update checked_urls for new posts. Linked posts that the current
+        # load is meant to select stay checked as they arrive.
         for post_title, (post_id, thumbnail_url) in batch_posts:
-            self.checked_urls[post_id] = False
+            self.checked_urls[post_id] = str(post_id) in self._requested_post_ids
 
         # Trigger incremental filtering to add new posts to UI
         self.filter_items_incremental(batch_posts)
+
+    def _post_detection_running(self):
+        thread = getattr(self, "post_detection_thread", None)
+        if thread is None:
+            return False
+        try:
+            return thread.isRunning()
+        except (AttributeError, RuntimeError):
+            return False
+
+    def _live_append_linked_posts(self, creator_url, post_ids):
+        """Append new linked posts to the open linked-posts view."""
+        creator_url = (creator_url or "").rstrip("/")
+        new_ids = {str(post_id) for post_id in post_ids if post_id}
+        if not new_ids or not self._post_session_loaded_for(creator_url):
+            return
+        filter_busy = bool(getattr(self, "_filter_refresh_pending", False))
+        filter_thread = getattr(self, "filter_thread", None)
+        if filter_thread is not None:
+            try:
+                filter_busy = filter_busy or filter_thread.isRunning()
+            except (AttributeError, RuntimeError):
+                pass
+        if self._post_detection_running() or filter_busy:
+            self._pending_live_post_ids.setdefault(creator_url, set()).update(new_ids)
+            return
+        self._start_live_append(creator_url, new_ids)
+
+    def _start_live_append(self, creator_url, new_ids):
+        """Fetch only the new linked posts and add them to the current list."""
+        self._pending_live_post_ids.pop(creator_url, None)
+        linked_ids = self._linked_post_ids(creator_url) or set(new_ids)
+        post_row = self._queue_post_row(creator_url)
+        if post_row is not None:
+            self.current_queue_link = post_row
+        self._view_kind = "posts"
+        self._fetch_post_ids = set(new_ids)
+        self._requested_post_ids = set(linked_ids)
+        self._reveal_post_ids = set(new_ids)
+        # Batches append to the existing list and cached post map.
+        self._fetch_batches_started = True
+        self.all_files_map.setdefault(creator_url, list(self.all_detected_posts))
+        self._restore_queue_input_focus = True
+
+        self.background_task_label.setText(translate("detecting_linked_posts"))
+        self.background_task_progress.setRange(0, 0)
+        self.set_fetching_ui_state(True)
+
+        post_filters, filter_warnings = self._post_filters_from_widgets()
+        for key in filter_warnings:
+            self.append_log_to_console(
+                translate("log_warning", translate(key)),
+                "WARNING",
+            )
+
+        self.post_detection_thread = PostDetectionThread(
+            creator_url,
+            self.post_titles_map,
+            self._create_thread_settings(),
+            post_dates_map=self.post_dates_map,
+            post_search_index=self.post_search_index,
+            found_extensions=self._found_type_counts,
+            post_filters=post_filters,
+            report_creator_name=False,
+            post_ids=sorted(new_ids, key=self._post_id_sort_key),
+        )
+        self.post_detection_thread.posts_batch.connect(self.on_posts_batch_received)
+        self.post_detection_thread.log.connect(self.append_log_to_console)
+        self.post_detection_thread.error.connect(self.on_live_post_detection_error)
+        # Cleanup first, so the finished handler sees no thread and can start
+        # a deferred append immediately.
+        self.post_detection_thread.finished.connect(self.cleanup_post_detection_thread)
+        self.post_detection_thread.finished.connect(
+            self.on_live_post_detection_finished
+        )
+        self.active_threads.append(self.post_detection_thread)
+        self.post_detection_thread.start()
+
+    def on_live_post_detection_finished(self, detected_posts):
+        """Finish a live append without rebuilding the whole post list."""
+        self._render_creator_ext_checks()
+        self._post_link_selection_pending = False
+        self._apply_post_link_selection()
+        self.display_current_page(preserve_scroll=True)
+        self.update_check_all_state()
+        self.update_checked_posts()
+        self.set_fetching_ui_state(False)
+        self.background_task_progress.setRange(0, 100)
+        self.background_task_progress.setValue(0)
+        self.background_task_label.setText(translate("idle"))
+        self._flush_pending_live_posts()
+
+    def on_live_post_detection_error(self, error_message):
+        """Unlock the tab when a live append fails."""
+        self.append_log_to_console(translate("log_error", error_message), "ERROR")
+        self._post_link_selection_pending = False
+        self.set_fetching_ui_state(False)
+        self.background_task_progress.setRange(0, 100)
+        self.background_task_progress.setValue(0)
+        self.background_task_label.setText(translate("idle"))
+        if self.post_detection_thread is not None:
+            self.cleanup_post_detection_thread()
+        QTimer.singleShot(0, self._flush_pending_live_posts)
+
+    def _flush_pending_live_posts(self):
+        """Start a deferred live append once no fetch is running."""
+        if not self._pending_live_post_ids or self._post_detection_running():
+            return
+        if getattr(self, "_filter_refresh_pending", False):
+            return
+        filter_thread = getattr(self, "filter_thread", None)
+        if filter_thread is not None:
+            try:
+                if filter_thread.isRunning():
+                    return
+            except (AttributeError, RuntimeError):
+                pass
+        for creator_url, post_ids in list(self._pending_live_post_ids.items()):
+            if self._post_session_loaded_for(creator_url):
+                self._pending_live_post_ids.pop(creator_url, None)
+                self._live_append_linked_posts(creator_url, post_ids)
+                return
+        self._pending_live_post_ids.clear()
 
     def _selected_search_scopes(self):
         """Return the scopes ticked in the "Search by" row.
@@ -8144,14 +8607,7 @@ class CreatorDownloaderTab(QWidget):
         self._load_post_history()
         for post_title, (post_id, thumbnail_url) in self.all_detected_posts:
             self.checked_urls[post_id] = False
-        for i, (queue_url, _) in enumerate(self.creator_queue):
-            if queue_url == self.current_creator_url:
-                self.creator_queue[i] = (
-                    self.current_creator_url,
-                    True,
-                )  # Mark as processed
-                self.update_creator_queue_list()
-                break
+        self._mark_queue_row_processed(self.current_queue_link)
         self.filter_items()
         self.set_fetching_ui_state(False)  # Re-enable UI when fetching is complete
         self.append_log_to_console(
@@ -8169,22 +8625,21 @@ class CreatorDownloaderTab(QWidget):
         self.background_task_progress.setValue(0)
         self.background_task_label.setText(translate("idle"))
 
-        # If this creator was queued from a post link, select that post as soon
-        # as its posts are loaded - not only during a batch download. The
-        # filtered list is rebuilt asynchronously, so flag it for
-        # on_filter_finished to re-apply (and reveal the page the post is on)
-        # once the rows actually exist.
-        self._post_link_selection_pending = bool(
-            self._batch_post_ids.get((self.current_creator_url or "").rstrip("/"))
-        )
+        # Select the posts this load asked for once the filtered rows exist.
+        self._post_link_selection_pending = bool(self._requested_post_ids)
         if self._post_link_selection_pending:
             self._apply_post_link_selection()
 
     def on_post_detection_error(self, error_message):
         self.append_log_to_console(translate("log_error", error_message), "ERROR")
 
-        # If fetching failed, try to use cached posts as fallback
-        if self.current_creator_url in self.all_files_map:
+        # If a full creator fetch failed, try to use cached posts as fallback.
+        # A linked-posts view must not fall back to the creator's whole cached
+        # list: that would show posts the user did not ask for.
+        if (
+            self._view_kind != "posts"
+            and self.current_creator_url in self.all_files_map
+        ):
             self.append_log_to_console(
                 translate(
                     "log_info",
@@ -8204,6 +8659,8 @@ class CreatorDownloaderTab(QWidget):
 
         if self.post_detection_thread is not None:
             self.cleanup_post_detection_thread()
+        # Let the worker finish before a deferred append starts another one.
+        QTimer.singleShot(0, self._flush_pending_live_posts)
 
     def start_creator_download(self):
         # Download is a single-creator action: it downloads exactly the posts
@@ -8269,33 +8726,15 @@ class CreatorDownloaderTab(QWidget):
         )
         self.prepare_files_for_download([self.current_creator_url])
 
-    def _remember_batch_post_id(self, creator_url, post_id):
-        """Record (or clear) the post-link restriction for a creator URL.
-
-        A post id adds to the set for that creator; passing ``None`` clears the
-        restriction, because a plain creator link means "all posts". Returns
-        True when the stored state actually changed.
-        """
-        creator_url = (creator_url or "").rstrip("/")
-        if post_id:
-            known_post_ids = self._batch_post_ids.setdefault(creator_url, set())
-            if str(post_id) not in known_post_ids:
-                known_post_ids.add(str(post_id))
-                return True
-            return False
-        return self._batch_post_ids.pop(creator_url, None) is not None
-
     def _apply_post_link_selection(self):
-        """Apply this creator's post-link restriction, if any.
+        """Apply this load's post selection.
 
         Marks the requested posts checked, re-stamps the cached rows and moves
-        to the page holding the first requested post. Idempotent and does not
+        to the page holding the first post to reveal. Idempotent and does not
         render, so it is safe to re-apply after the post list is rebuilt.
         Returns the selected post ids (empty list when nothing matched).
         """
-        requested_post_ids = self._batch_post_ids.get(
-            (self.current_creator_url or "").rstrip("/")
-        )
+        requested_post_ids = set(self._requested_post_ids)
         if not requested_post_ids:
             return []
         matching = [
@@ -8321,7 +8760,7 @@ class CreatorDownloaderTab(QWidget):
         # The tick stays, but a hidden post is not downloaded: the shared
         # recompute above would say that again, so let this warning stand.
         self.update_checked_posts(announce_hidden=False)
-        self._goto_page_for_post_ids(requested_post_ids)
+        self._goto_page_for_post_ids(self._reveal_post_ids or requested_post_ids)
         return matching
 
     def _sync_filtered_posts_checked(self):
@@ -9487,6 +9926,10 @@ class CreatorDownloaderTab(QWidget):
                         "INFO",
                     )
 
+        # A linked post added while the first fetch was still running waits
+        # until the list it belongs to has finished filtering.
+        self._flush_pending_live_posts()
+
         # A search-scope toggle (or fast typing) that arrived while the filter
         # pass was running was deferred; cleanup_filter_thread() applies it.
 
@@ -9502,6 +9945,10 @@ class CreatorDownloaderTab(QWidget):
         if getattr(self, "_filter_refresh_pending", False):
             self._filter_refresh_pending = False
             self.filter_items()
+        else:
+            # No replacement pass is queued, so a pending live append can
+            # start now that the list is stable.
+            self._flush_pending_live_posts()
 
     def add_list_item(self, text, url, is_checked):
         item = QListWidgetItem()
@@ -10534,6 +10981,7 @@ class CreatorDownloaderTab(QWidget):
 
             added_count = 0
             skipped_count = 0
+            live_updates = {}
 
             for line in lines:
                 original_url = line.strip()
@@ -10544,12 +10992,20 @@ class CreatorDownloaderTab(QWidget):
 
                 # Same normalisation, validation and duplicate rule as the
                 # queue's input row; the list is rebuilt once at the end.
-                if self._queue_creator_url(original_url, refresh=False) == "added":
+                outcome = self._queue_creator_url(original_url, refresh=False)
+                if outcome in ("added", "updated"):
                     added_count += 1
+                    creator_url, post_id = self._queue_resolved(original_url)
+                    if post_id is not None and self._post_session_loaded_for(
+                        creator_url
+                    ):
+                        live_updates.setdefault(creator_url, set()).add(post_id)
                 else:
                     skipped_count += 1
 
             self.update_creator_queue_list(scroll=True)
+            for creator_url, post_ids in live_updates.items():
+                self._live_append_linked_posts(creator_url, post_ids)
 
             # Show summary message
             summary = translate("bulk_add_summary", added_count, skipped_count)

@@ -802,7 +802,7 @@ def test_a_queued_post_hidden_by_filters_is_reported(qtbot, tmp_path, monkeypatc
     }
     tab.filtered_posts = [("visible", "1", None, False)]
     tab.checked_urls = {"1": False, "2": False}
-    tab._batch_post_ids = {url.rstrip("/"): {"2"}}
+    tab._requested_post_ids = {"2"}
     messages = []
     monkeypatch.setattr(
         tab,

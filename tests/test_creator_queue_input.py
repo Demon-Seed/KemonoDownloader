@@ -603,9 +603,286 @@ def test_load_mode_focus_flag_follows_the_fetch_result(make_tab, monkeypatch):
     tab.creator_queue = [("https://kemono.cr/fanbox/user/34", False)]
 
     monkeypatch.setattr(tab, "check_creator_from_queue", lambda url: False)
-    tab._auto_load_queued_creator()
+    tab._auto_load_queued_link("https://kemono.cr/fanbox/user/34")
     assert tab._restore_queue_input_focus is False
 
     monkeypatch.setattr(tab, "check_creator_from_queue", lambda url: True)
-    tab._auto_load_queued_creator()
+    tab._auto_load_queued_link("https://kemono.cr/fanbox/user/34")
     assert tab._restore_queue_input_focus is True
+
+
+def _capture_detection(monkeypatch, tab):
+    captured = {}
+
+    class FakeDetection:
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            self.finished = SimpleNamespace(connect=lambda cb: None)
+            self.posts_batch = SimpleNamespace(connect=lambda cb: None)
+            self.creator_name_found = SimpleNamespace(connect=lambda cb: None)
+            self.log = SimpleNamespace(connect=lambda cb: None)
+            self.error = SimpleNamespace(connect=lambda cb: None)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(cd, "PostDetectionThread", FakeDetection)
+    monkeypatch.setattr(tab, "set_fetching_ui_state", lambda *a, **k: None)
+    monkeypatch.setattr(tab, "_create_thread_settings", lambda: object())
+    return captured
+
+
+def test_creator_and_post_links_get_separate_rows(make_tab):
+    tab = make_tab("default")
+    creator = "https://kemono.cr/fanbox/user/40"
+    post_one = f"{creator}/post/1"
+    post_two = f"{creator}/post/2"
+
+    for link in (creator, post_one, post_two):
+        tab.creator_queue_input.setText(link)
+        tab.add_creator_to_queue()
+
+    assert [link for link, _checked in tab.creator_queue] == [creator, post_one]
+    assert tab._batch_post_ids[creator] == {"1", "2"}
+    text, _rich = tab._queue_row_text(post_one)
+    assert "+1 more" in text
+    tooltip = tab._queue_row_tooltip(post_one)
+    assert post_one in tooltip and post_two in tooltip
+
+    creator_row = tab.creator_queue_list.itemWidget(tab.creator_queue_list.item(0))
+    post_row = tab.creator_queue_list.itemWidget(tab.creator_queue_list.item(1))
+    assert creator_row.full_creator_button is None
+    assert post_row.full_creator_button is not None
+    assert creator_row.toolTip() == creator
+    assert post_one in post_row.toolTip()
+    assert post_two in post_row.toolTip()
+
+
+def test_duplicate_post_link_is_not_added_twice(make_tab):
+    tab = make_tab("default")
+    creator = "https://kemono.cr/fanbox/user/41"
+    post_link = f"{creator}/post/9"
+
+    tab.creator_queue_input.setText(post_link)
+    assert tab.add_creator_to_queue() == "added"
+    tab.creator_queue_input.setText(post_link)
+    assert tab.add_creator_to_queue() == "duplicate"
+
+    assert len(tab.creator_queue) == 1
+    assert tab._batch_post_ids[creator] == {"9"}
+
+
+def test_post_row_eye_fetches_only_its_linked_posts(make_tab, monkeypatch):
+    tab = make_tab("default")
+    creator = "https://kemono.cr/fanbox/user/42"
+    post_link = f"{creator}/post/1"
+    tab.creator_queue_input.setText(post_link)
+    tab.add_creator_to_queue()
+    tab.creator_queue_input.setText(f"{creator}/post/2")
+    tab.add_creator_to_queue()
+
+    captured = _capture_detection(monkeypatch, tab)
+    assert tab.check_creator_from_queue(post_link) is True
+
+    assert captured["kwargs"]["post_ids"] == ["1", "2"]
+    assert tab._view_kind == "posts"
+    assert tab._fetch_post_ids == {"1", "2"}
+    assert tab._requested_post_ids == {"1", "2"}
+
+
+def test_creator_row_eye_fetches_the_full_creator(make_tab, monkeypatch):
+    tab = make_tab("default")
+    creator = "https://kemono.cr/fanbox/user/43"
+    tab.creator_queue_input.setText(creator)
+    tab.add_creator_to_queue()
+
+    captured = _capture_detection(monkeypatch, tab)
+    assert tab.check_creator_from_queue(creator) is True
+
+    assert captured["kwargs"]["post_ids"] is None
+    assert tab._view_kind == "creator"
+    assert tab._fetch_post_ids == set()
+    assert tab._requested_post_ids == set()
+
+
+def test_full_creator_button_folds_the_post_row_into_a_creator_session(
+    make_tab, monkeypatch
+):
+    tab = make_tab("default")
+    creator = "https://kemono.cr/fanbox/user/44"
+    post_link = f"{creator}/post/1"
+    tab.creator_queue_input.setText(post_link)
+    tab.add_creator_to_queue()
+    tab.creator_queue_input.setText(f"{creator}/post/2")
+    tab.add_creator_to_queue()
+
+    captured = _capture_detection(monkeypatch, tab)
+    tab._load_full_creator_from_post_row(post_link)
+
+    assert tab._queue_creator_row(creator) == creator
+    assert captured["kwargs"]["post_ids"] is None
+    assert tab.current_queue_link == creator
+    assert tab._view_kind == "creator"
+    assert tab._requested_post_ids == {"1", "2"}
+
+
+def test_adding_a_post_link_updates_an_open_post_session_live(make_tab, monkeypatch):
+    tab = make_tab("default")
+    creator = "https://kemono.cr/fanbox/user/45"
+    post_link = f"{creator}/post/1"
+    tab.creator_queue_input.setText(post_link)
+    tab.add_creator_to_queue()
+    tab.current_creator_url = creator
+    tab.current_queue_link = post_link
+    tab._view_kind = "posts"
+    tab._batch_post_ids[creator] = {"1"}
+
+    live = []
+    reloads = []
+    monkeypatch.setattr(
+        tab,
+        "_live_append_linked_posts",
+        lambda url, ids: live.append((url, set(ids))),
+    )
+    monkeypatch.setattr(
+        tab, "_auto_load_queued_link", lambda link: reloads.append(link)
+    )
+
+    tab.creator_queue_input.setText(f"{creator}/post/2")
+    assert tab.add_creator_to_queue() == "updated"
+
+    assert live == [(creator, {"2"})]
+    assert reloads == []
+
+
+def test_adding_a_post_link_in_a_creator_session_uses_the_setting(
+    make_tab, monkeypatch
+):
+    tab = make_tab("default")
+    creator = "https://kemono.cr/fanbox/user/46"
+    post_link = f"{creator}/post/1"
+    tab.creator_queue_input.setText(post_link)
+    tab.add_creator_to_queue()
+    tab.current_creator_url = creator
+    tab.current_queue_link = creator
+    tab._view_kind = "creator"
+    tab._batch_post_ids[creator] = {"1"}
+
+    live = []
+    reloads = []
+    monkeypatch.setattr(
+        tab,
+        "_live_append_linked_posts",
+        lambda url, ids: live.append((url, set(ids))),
+    )
+    monkeypatch.setattr(
+        tab, "_auto_load_queued_link", lambda link: reloads.append(link)
+    )
+
+    tab.creator_queue_input.setText(f"{creator}/post/2")
+    tab.add_creator_to_queue()
+
+    assert live == []
+    assert reloads == [post_link]
+
+
+def test_a_name_refreshes_both_rows_for_a_creator(make_tab):
+    tab = make_tab("default")
+    creator = "https://kemono.cr/fanbox/user/47"
+    post_link = f"{creator}/post/1"
+    tab.creator_queue_input.setText(creator)
+    tab.add_creator_to_queue()
+    tab.creator_queue_input.setText(post_link)
+    tab.add_creator_to_queue()
+
+    tab.on_creator_name_found(creator, "Artist")
+
+    first = tab.creator_queue_list.itemWidget(tab.creator_queue_list.item(0))
+    second = tab.creator_queue_list.itemWidget(tab.creator_queue_list.item(1))
+    assert "[Artist]" in first.label.text()
+    assert "[Artist]" in second.label.text()
+
+
+def test_queue_title_and_input_placeholder(make_tab):
+    tab = make_tab("default")
+
+    assert tab.creator_queue_group.title() == "Queue"
+    assert tab.creator_queue_input.placeholderText() == "Enter Creator / Post"
+
+
+def test_live_append_keeps_existing_posts_and_fetches_only_new(make_tab, monkeypatch):
+    tab = make_tab("default")
+    creator = "https://kemono.cr/fanbox/user/48"
+    post_row = f"{creator}/post/1"
+    tab.creator_queue = [(post_row, False)]
+    tab._batch_post_ids = {creator: {"1", "2"}}
+    tab.current_creator_url = creator
+    tab.current_queue_link = post_row
+    tab._view_kind = "posts"
+    tab.all_detected_posts = [("One", ("1", None))]
+    tab.filtered_posts = [("One", "1", None, True)]
+    tab.all_files_map[creator] = [("One", ("1", None))]
+    tab.checked_urls = {"1": True}
+
+    captured = _capture_detection(monkeypatch, tab)
+    tab._start_live_append(creator, {"2"})
+
+    assert captured["kwargs"]["post_ids"] == ["2"]
+    assert tab.all_detected_posts == [("One", ("1", None))]
+    assert tab._requested_post_ids == {"1", "2"}
+    assert tab._fetch_post_ids == {"2"}
+    assert tab._fetch_batches_started is True
+    assert tab.current_queue_link == post_row
+
+
+def test_full_creator_button_reuses_an_already_loaded_creator_list(
+    make_tab, monkeypatch
+):
+    tab = make_tab("default")
+    creator = "https://kemono.cr/fanbox/user/49"
+    post_row = f"{creator}/post/1"
+    tab.creator_queue = [(post_row, False), (creator, False)]
+    tab._batch_post_ids = {creator: {"1"}}
+    tab.current_creator_url = creator
+    tab.current_queue_link = creator
+    tab._view_kind = "creator"
+    tab.all_detected_posts = [("One", ("1", None)), ("Two", ("2", None))]
+    tab.filtered_posts = [
+        ("One", "1", None, False),
+        ("Two", "2", None, False),
+    ]
+    tab.checked_urls = {"1": False, "2": False}
+    monkeypatch.setattr(
+        tab,
+        "check_creator_from_queue",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("refetched")),
+    )
+
+    tab._load_full_creator_from_post_row(post_row)
+
+    assert tab.current_queue_link == creator
+    assert tab._requested_post_ids == {"1"}
+    assert tab.checked_urls["1"] is True
+
+
+def test_removal_confirmation_counts_the_grouped_post_links(make_tab, monkeypatch):
+    tab = make_tab("default")
+    creator = "https://kemono.cr/fanbox/user/50"
+    post_row = f"{creator}/post/1"
+    tab.creator_queue = [(post_row, False)]
+    tab._batch_post_ids = {creator: {"1", "2"}}
+    seen = []
+
+    monkeypatch.setattr(
+        cd.QMessageBox,
+        "question",
+        lambda _parent, _title, text, *args, **kwargs: (
+            seen.append(text) or cd.QMessageBox.StandardButton.No
+        ),
+    )
+
+    tab.create_remove_handler(post_row)()
+
+    assert seen == ["Are you sure you want to remove 2 post links from the queue?"]
+

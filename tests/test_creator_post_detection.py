@@ -363,3 +363,87 @@ def test_detection_failure_reaches_the_tab(monkeypatch):
     assert thread.error.emit.called
     assert "boom" in str(thread.error.emit.call_args[0][0])
     assert "boom" in str(thread.log.emit.call_args_list[-1].args[0])
+
+
+def test_linked_post_ids_fetch_only_those_posts(monkeypatch):
+    """A post-link load asks for the linked posts, not the creator pages."""
+    settings = SimpleNamespace(
+        creator_posts_max_attempts=5,
+        post_data_max_retries=1,
+        settings_tab=None,
+    )
+    calls = []
+
+    def fake_fetch(post_id, creator_url, settings_tab=None, max_retries=1):
+        calls.append(post_id)
+        return {
+            "id": post_id,
+            "title": f"Post {post_id}",
+            "file": {"path": f"/media/{post_id}.png"},
+        }, ""
+
+    monkeypatch.setattr(cd, "fetch_post_data", fake_fetch)
+    # Any page request would go through get_session; fail loudly if it does.
+    monkeypatch.setattr(
+        cd,
+        "get_session",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("paged the creator")),
+    )
+
+    thread = cd.PostDetectionThread(
+        "https://kemono.cr/patreon/user/1",
+        {},
+        settings,
+        post_ids=["42", "43"],
+    )
+    batches = []
+    finished = []
+    thread.posts_batch.connect(batches.append)
+    thread.finished.connect(finished.append)
+
+    thread.run()
+
+    assert calls == ["42", "43"]
+    assert [title for batch in batches for title, _ in batch] == [
+        "Post 42",
+        "Post 43",
+    ]
+    assert [(pid, _thumb) for _title, (pid, _thumb) in finished[0]] == [
+        ("42", "https://kemono.cr/media/42.png"),
+        ("43", "https://kemono.cr/media/43.png"),
+    ]
+
+
+def test_linked_post_failure_keeps_the_other_posts(monkeypatch):
+    """One bad link warns without dropping the posts that did load."""
+    settings = SimpleNamespace(
+        creator_posts_max_attempts=1,
+        post_data_max_retries=1,
+        settings_tab=None,
+    )
+
+    def fake_fetch(post_id, creator_url, settings_tab=None, max_retries=1):
+        if post_id == "bad":
+            return None, "HTTP 404"
+        return {"id": post_id, "title": "Good", "file": None}, ""
+
+    monkeypatch.setattr(cd, "fetch_post_data", fake_fetch)
+    thread = cd.PostDetectionThread(
+        "https://kemono.cr/patreon/user/1",
+        {},
+        settings,
+        post_ids=["bad", "good"],
+    )
+    finished = []
+    warnings = []
+    thread.finished.connect(finished.append)
+    thread.log.connect(
+        lambda message, level: (
+            warnings.append((message, level)) if level == "WARNING" else None
+        )
+    )
+
+    thread.run()
+
+    assert [pid for _title, (pid, _thumb) in finished[0]] == ["good"]
+    assert any("bad" in message for message, _level in warnings)

@@ -78,7 +78,7 @@ def test_queue_input_behavior_combo_writes_the_temp_setting(tmp_path):
     assert [
         tab.queue_input_behavior_combo.itemText(i)
         for i in range(tab.queue_input_behavior_combo.count())
-    ] == ["Default", "Load First Creator", "Load Every Creator"]
+    ] == ["Default", "Load First", "Load Every"]
     assert tab.queue_input_behavior_combo.currentData() == "default"
 
     index = tab.queue_input_behavior_combo.findData("load_every")

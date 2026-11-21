@@ -592,14 +592,16 @@ class TestCreatorDownloaderTab:
         assert len(creator_tab.creator_queue) == 1
         assert creator_tab.creator_queue_input.text() == ""
 
-    def test_post_url_is_canonicalized_to_creator(self, creator_tab):
-        # A post URL queues the parent creator.
+    def test_post_url_keeps_its_own_queue_row(self, creator_tab):
+        # A post URL is queued as a post row, separate from a creator row.
         creator_tab.creator_queue_input.setText(
             "https://kemono.cr/fanbox/user/1/post/999"
         )
         creator_tab.add_creator_to_queue()
         assert creator_tab.creator_queue_list.count() == 1
-        assert creator_tab.creator_queue[0][0] == "https://kemono.cr/fanbox/user/1"
+        assert creator_tab.creator_queue[0][0] == (
+            "https://kemono.cr/fanbox/user/1/post/999"
+        )
 
     def test_remove_creator_from_queue(self, creator_tab, monkeypatch):
         url = "https://kemono.cr/fanbox/user/123"
