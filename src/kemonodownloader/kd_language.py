@@ -23,6 +23,35 @@ _FILENAME_HELP_BODY = (
 )
 _FILENAME_HELP_FALLBACK = "<b>Fallback: {post_id}_{orig_name}.</b>"
 
+# One wording for the keyword inputs: sorting rules, Skip Posts and Skip
+# Files share the comma/quote/wildcard language. Punctuation at literal
+# edges is governed by the separate Punctuation Matching Behavior setting.
+_KEYWORD_SYNTAX_HTML = (
+    "<h3>Keyword syntax</h3>"
+    "<ul>"
+    "<li>Separate values with commas. If a value contains a comma, put it in "
+    "double quotes: <code>\"Hello, world\"</code>. The quotes are not part of "
+    "the value.</li>"
+    "<li><code>*</code> = any text (including none); <code>?</code> = exactly "
+    "one character.</li>"
+    "<li>Case does not matter: <code>BlackCat</code> and <code>blackcat</code> "
+    "are the same.</li>"
+    "<li>A value made only of <code>*</code> or <code>?</code> is ignored; add "
+    "some text to it.</li>"
+    "</ul>"
+    "<table border='1' cellspacing='0' cellpadding='4'>"
+    "<tr><th>Pattern</th><th>Matches</th><th>Does not match</th></tr>"
+    "<tr><td><code>cat</code></td><td>the word/tag cat</td>"
+    "<td>cats, Catgirl, bobcat</td></tr>"
+    "<tr><td><code>cat*</code></td><td>cats, Catgirl</td><td>bobcat</td></tr>"
+    "<tr><td><code>*cat</code></td><td>bobcat</td>"
+    "<td>cats, Catgirl, scatter</td></tr>"
+    "<tr><td><code>*cat*</code></td><td>bobcat, Catgirl, scatter</td>"
+    "<td>dog</td></tr>"
+    "<tr><td><code>c?t</code></td><td>cat, cot, cut</td><td>cart</td></tr>"
+    "</table>"
+)
+
 
 STRINGS = {
     "add_creator_and_load_tooltip": "Add this link and load it",
@@ -232,13 +261,6 @@ STRINGS = {
     "invalid_url_format": "Invalid URL format. Expected: https://pawchive.pw/[service]/user/[user_id]/post/[post_id]",
     "invalid_url_format_from_txt": "Invalid URL format, skipping",
     "invalid_url_type": "Invalid URL type: {0}. Expected string.",
-    "keyword_matching_default": "Default",
-    "keyword_matching_relaxed_both": "Relaxed (Both)",
-    "keyword_matching_relaxed_files": "Relaxed (Files)",
-    "keyword_matching_relaxed_posts": "Relaxed (Posts)",
-    "keyword_matching_rules": "Keyword Matching Rules:",
-    "keyword_matching_rules_help_text": "Default matches whole words, so 'bean' does not match 'beanstoast'. Relaxed matches any part of a word; choose whether that applies to posts, files, or both. Punctuation at a keyword's edges follows 'Punctuation Matching Rules'.",
-    "keyword_matching_rules_help_title": "Keyword Matching Rules Help",
     "language": "Language:",
     "language_changed": "Language changed to English",
     "last_downloaded_creator": "Last Downloaded from Creator: {0}",
@@ -329,9 +351,9 @@ STRINGS = {
     "proxy_custom_url_empty_error": "A custom proxy is enabled but no address is set. Enter one (or turn the proxy off) before downloading.",
     "proxy_tor_not_running_error": "Tor is enabled as the proxy but is not running. Start Tor (or turn the proxy off) before downloading.",
     "proxy_type": "Proxy Type:",
-    "punctuation_matching_help_text": "Controls punctuation at the start or end of a keyword. Default treats brackets and quotes as their own boundaries, so '[JP]' matches '123[JP] art'; other punctuation still needs a real boundary, so '.5' does not match '1.5'. Relaxed treats any edge punctuation as a boundary.",
-    "punctuation_matching_help_title": "Punctuation Matching Rules Help",
-    "punctuation_matching_rules": "Punctuation Matching Rules:",
+    "punctuation_matching_help_text": "Controls punctuation at the start or end of a keyword or sorting value. Default treats brackets and quotes as their own boundaries, so '[JP]' matches '123[JP] art'; other punctuation still needs a real boundary, so '.5' does not match '1.5'. Relaxed treats any edge punctuation as a boundary. A '*' at an edge is unrestricted; whole-tag matches are unaffected.",
+    "punctuation_matching_help_title": "Punctuation Matching Behavior Help",
+    "punctuation_matching_rules": "Punctuation Matching Behavior:",
     "punctuation_rules_default": "Default",
     "punctuation_rules_relaxed": "Relaxed",
     "queue_input_behavior_help_text": "Controls what happens after a link is added to the Queue.\n\nDefault: only the link is added.\n\nLoad First: the first link is opened. Once something is open, adding more only queues them.\n\nLoad Every: every link is opened straight away, replacing the current view.\n\nA post link added while that creator's linked posts are already open updates the view immediately. The eye button always adds and opens the link.",
@@ -388,9 +410,9 @@ STRINGS = {
     "size_mismatch_error": "Downloaded size ({0} bytes) does not match expected size ({1} bytes) for {2}",
     "run_summary": "Run Summary",
     "skip_files_keywords": "Skip Files Containing",
-    "skip_files_keywords_help_text": "Comma-separated keywords (e.g. JP, ZH). Individual files matching any keyword (case-insensitive, whole word) are excluded from download. The file extension is ignored when matching. Only the matched file is skipped — never the whole post. Independent from 'Skip Posts Containing' above. Leave blank to disable.",
+    "skip_files_keywords_help_text": "<p>Skip individual files whose name matches any of these keywords. Only the matched file is skipped; the rest of the post is still downloaded. The file extension is ignored when matching.</p><p>Plain keywords are case-insensitive and whole-word. Use <code>*...*</code> to match part of a file name. Punctuation Matching Behavior controls punctuation at their edges.</p><p>Leave the box blank to disable.</p>" + _KEYWORD_SYNTAX_HTML,
     "skip_files_keywords_help_title": "Skip Files Help",
-    "skip_files_keywords_placeholder": "e.g. JP, ZH (comma-separated)",
+    "skip_files_keywords_placeholder": "e.g. JP, EN (comma-separated)",
     "skip_folder_for_few_images": "Skip Post Folder",
     "skip_folder_info_text": "When enabled, posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.\n\nFor example, if set to 1, single-image posts will not get their own folder — the image will be placed directly in the creator's folder.\n\nThis only applies when Folder Structure is set to 'Per-post folders'.\n\nThe archive icon toggle next to this button ignores compressed files (ZIP, 7z, RAR) when deciding whether to skip the post folder — those files will always be saved in their own post folder, even if Skip Post Folder would otherwise apply to that post.",
     "skip_folder_info_title": "Skip Post Folder Help",
@@ -400,9 +422,9 @@ STRINGS = {
     "skip_keyword_matched_after_rejoin": "[SKIP-KEYWORD] '{0}' matched the description after re-joining inline tags",
     "skip_keywords_scope": "Filter By",
     "skip_posts_keywords": "Skip Posts Containing",
-    "skip_posts_keywords_help_text": "Comma-separated keywords (e.g. AlienComic, sketch). Posts matching any keyword (case-insensitive, whole word) are excluded entirely.\n\nUse the 'Filter By' checkboxes to choose which fields are checked. Any combination can be enabled at once — a post is skipped if the keyword matches in ANY enabled field:\n  • Title — checks the post title\n  • Filenames — checks the main file and attachment names (extension ignored)\n  • Description — checks the post body text\n  • Tags — checks the post's tags\n\nMatching is case-insensitive and whole-word. For example, 'sketch' matches 'Sketch' but not 'SketchBook'. To match multiple variations, enter them as separate keywords: 'AlienComic, Alien Comic, alien_comic'.\n\nLeave the keyword box blank to disable.",
+    "skip_posts_keywords_help_text": "<p>Skip whole posts whose title, file names, description or tags match any of these keywords.</p><p>Use the <b>Filter By</b> boxes to choose which fields are checked. A post is skipped when a keyword matches in any enabled field:</p><ul><li><b>Title</b> - the post title</li><li><b>Filenames</b> - the main file and attachment names (extension ignored)</li><li><b>Description</b> - the post body text</li><li><b>Tags</b> - the post tags</li></ul><p>Plain keywords are case-insensitive and whole-word, so <code>black</code> matches \"Black\" but not \"BlackCat\". Use <code>*black*</code> to match part of a word. Punctuation Matching Behavior controls punctuation at their edges.</p><p>Leave the box blank to disable.</p>" + _KEYWORD_SYNTAX_HTML,
     "skip_posts_keywords_help_title": "Skip Posts Help",
-    "skip_posts_keywords_placeholder": "e.g. JP, ZH (comma-separated)",
+    "skip_posts_keywords_placeholder": "e.g. JP, EN (comma-separated)",
     "skip_scope_description_toggle": "Description",
     "skip_scope_filenames_toggle": "Filenames",
     "skip_scope_tags_toggle": "Tags",
@@ -412,6 +434,65 @@ STRINGS = {
     "skip_tooltip_no_keywords": "No keyword skips",
     "skip_tooltip_post_keywords": "Posts skipped by keyword:",
     "skipped_individual_file": "Skipped individual file (keyword match): {0}",
+    "sort_apply": "Apply",
+    "sort_by_keyword": "Sort posts by keyword",
+    "sort_by_keyword_tooltip": "Put posts that match a rule into <creator folder>/<rule folder>",
+    "sort_config_duplicate_folder": "Two sorting rules use the same folder name.",
+    "sort_config_invalid_folder": "A sorting rule has no usable folder name.",
+    "sort_config_missing_values": "A sorting rule has no usable values.",
+    "sort_config_wildcard_only": "A sorting rule contains a value made only of * or ?.",
+    "sort_duplicate_folder": "Rule {0}: the folder \"{1}\" is already used by another rule.",
+    "sort_help_back": "Back",
+    "sort_help_text": "<h2>Sort posts by keyword</h2><p>Posts that match a rule go into <code>&lt;creator folder&gt;/&lt;rule folder&gt;</code>. Everything else about the download stays the same.</p><h3>Rules</h3><p>Rules are checked in order and the first match wins. A post that matches no rule goes to the creator folder.</p><h3>Values and Match</h3><p>Each value is an alternative. <b>Any value</b> needs one match; <b>All values</b> needs every value to match.</p><h3>Look in</h3><ul><li><b>Tags</b> - the whole tag must match.</li><li><b>Title</b>, <b>Filenames</b>, <b>Description</b> - the pattern must match a word.</li></ul><p><b>Filenames</b> covers main files and attachments only; content images are not checked.</p>" + _KEYWORD_SYNTAX_HTML + "<h3>Hardlinks</h3><p>With <b>Also hardlink into every other matching folder</b>, every matching folder gets a hardlink. Hardlinks share the same bytes and cost no extra space, but some cloud-sync clients upload each name separately.</p><h3>Preview</h3><p>The preview uses the details from the current fetch. A post with no details can still match on its title; other scopes need the details.</p><p>The Punctuation Matching Behavior setting applies to literal edges in sorting values too; a <code>*</code> edge is unrestricted.</p><p>Apply changes on this page; use Save Config or Save Creator Config to keep the rules.</p>",
+    "sort_help_title": "Sort posts by keyword - Help",
+    "sort_invalid_folder": "Rule {0}: the folder name is empty or unusable.",
+    "sort_invalid_text": "Fix these before applying:\n{0}",
+    "sort_invalid_title": "Sort rules",
+    "sort_keyword_rules": "Keyword Rules",
+    "sort_keyword_rules_tooltip": "Edit the keyword sorting rules",
+    "sort_link_all": "Also hardlink into every other matching folder",
+    "sort_link_all_tooltip": "Hardlinks share the same bytes on disk, so they cost no extra space. Some cloud-sync clients upload each name as a separate file.",
+    "sort_link_failed": "Could not hardlink {0} into \"{1}\": {2}",
+    "sort_links_summary": "Auto-sort: created {0} extra hardlink(s), {1} failed.",
+    "sort_log_counts": "{0}: {1}",
+    "sort_log_multi": "Auto-sort: {0} post(s) match more than one rule; link mode keeps every match.",
+    "sort_log_no_rules": "Auto-sort is on, but no rule is enabled.",
+    "sort_log_none": "Auto-sort is on, but no selected post matched a rule.",
+    "sort_log_summary": "Auto-sort: {0}; {1} unsorted, {2} with no details.",
+    "sort_missing_values": "Rule {0}: add at least one value.",
+    "sort_new_folder": "New Folder",
+    "sort_no_rules_hint": "Add a rule to start.",
+    "sort_preview_extra_links": "Extra folders per file: {0}",
+    "sort_preview_label": "Preview",
+    "sort_preview_line": "{0}: {1}",
+    "sort_preview_missing": "No details: {0}",
+    "sort_preview_multi": "Match more than one rule: {0}",
+    "sort_preview_none": "No posts to preview.",
+    "sort_preview_unsorted": "Unsorted: {0}",
+    "sort_rule_add": "Add Rule",
+    "sort_rule_all": "All values",
+    "sort_rule_any": "Any value",
+    "sort_rule_down": "Move Down",
+    "sort_rule_folder": "Folder:",
+    "sort_rule_folder_placeholder": "e.g. Ado",
+    "sort_rule_no_values": "(no values)",
+    "sort_rule_remove": "Remove",
+    "sort_rule_scopes": "Look in:",
+    "sort_rule_summary": "{0}. {1} - {2}",
+    "sort_rule_up": "Move Up",
+    "sort_rule_values": "Values:",
+    "sort_rule_values_placeholder": "e.g. JP, EN (comma-separated)",
+    "sort_rules_label": "Rules",
+    "sort_rules_saved": "Keyword rules: {0} rule(s) configured.",
+    "sort_scope_description": "Description",
+    "sort_scope_filenames": "Filenames",
+    "sort_scope_tags": "Tags",
+    "sort_scope_title": "Title",
+    "sort_status_off": "Sorting is Off - toggle it with \"Sort posts by keyword\" on the page.",
+    "sort_status_on": "Sorting is On - toggle it with \"Sort posts by keyword\" on the page.",
+    "sort_title": "Sort posts by keyword",
+    "sort_wildcard_only_value": "Rule {0}: \"{1}\" is only wildcards; add some text.",
+    "wildcard_only_keyword_ignored": "A keyword made only of * or ? was ignored; add some text.",
     "start_tor": "Start Tor",
     "starting_cancellation_of_active_threads": "Starting cancellation of active threads",
     "starting_download": "Starting download of file {0}/{1}: {2} to {3}",

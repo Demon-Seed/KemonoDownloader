@@ -1,9 +1,9 @@
-"""Tests for the two keyword-matching rules that live in Settings.
+"""Tests for Punctuation Matching Behavior in Settings.
 
-"Keyword Matching Rules" decides which keyword filters drop the whole-word
-rule; "Punctuation Matching Rules" decides whether only enclosing punctuation
-(brackets, CJK brackets, quotes) may delimit a keyword, or any punctuation at
-its edge. Both are stored with the rest of the settings.
+The old lenient-keyword setting was replaced by wildcard syntax, so
+Punctuation Matching Behavior is now the single global matching-rule setting.
+It applies to plain and wildcard values in Skip Posts, Skip Files and
+sorting; whole-tag matches and ``*`` edges are unaffected.
 """
 
 from types import SimpleNamespace
@@ -49,31 +49,18 @@ def _stored_settings(tmp_path):
     }
 
 
-def test_getters_default_to_off_and_default():
+def test_getter_defaults_to_default_and_accepts_each_mode():
     s = SettingsTab.__new__(SettingsTab)
     s.settings = {}
 
-    assert s.get_lenient_keyword_matching() == "off"
     assert s.get_punctuation_matching_rules() == "default"
-
-
-def test_getters_accept_each_mode_and_reject_junk():
-    s = SettingsTab.__new__(SettingsTab)
-
-    for mode in ks.LENIENT_KEYWORD_MODES:
-        s.settings = {"lenient_keyword_matching": mode}
-        assert s.get_lenient_keyword_matching() == mode
     for mode in ks.PUNCTUATION_MATCHING_MODES:
         s.settings = {"punctuation_matching_rules": mode}
         assert s.get_punctuation_matching_rules() == mode
 
-    s.settings = {
-        "lenient_keyword_matching": "sometimes",
-        "punctuation_matching_rules": "sometimes",
-    }
-    assert s.get_lenient_keyword_matching() == "off"
+    s.settings = {"punctuation_matching_rules": "sometimes"}
     assert s.get_punctuation_matching_rules() == "default"
-
+    assert not hasattr(SettingsTab, "get_lenient_keyword_matching")
 
 
 def test_settings_roundtrip_through_qsettings(tmp_path):
@@ -81,7 +68,6 @@ def test_settings_roundtrip_through_qsettings(tmp_path):
     s = SettingsTab.__new__(SettingsTab)
     s.qsettings = QSettings(ini_path, QSettings.Format.IniFormat)
     s.settings = _stored_settings(tmp_path)
-    s.settings["lenient_keyword_matching"] = "both"
     s.settings["punctuation_matching_rules"] = "lenient"
 
     SettingsTab.save_settings(s)
@@ -91,14 +77,34 @@ def test_settings_roundtrip_through_qsettings(tmp_path):
     s2.default_settings = s.settings.copy()
     loaded = SettingsTab.load_settings(s2)
 
-    assert loaded["lenient_keyword_matching"] == "both"
     assert loaded["punctuation_matching_rules"] == "lenient"
+    assert "lenient_keyword_matching" not in loaded
 
 
-def test_invalid_stored_modes_fall_back_on_load(tmp_path):
+def test_legacy_keyword_setting_is_ignored_and_removed(tmp_path):
     ini_path = str(tmp_path / "matching.ini")
     qs = QSettings(ini_path, QSettings.Format.IniFormat)
-    qs.setValue("lenient_keyword_matching", "sometimes")
+    qs.setValue("lenient_keyword_matching", "both")
+    qs.setValue("punctuation_matching_rules", "lenient")
+    qs.sync()
+
+    s = SettingsTab.__new__(SettingsTab)
+    s.qsettings = QSettings(ini_path, QSettings.Format.IniFormat)
+    s.default_settings = _stored_settings(tmp_path)
+
+    loaded = SettingsTab.load_settings(s)
+
+    assert "lenient_keyword_matching" not in loaded
+    assert loaded["punctuation_matching_rules"] == "lenient"
+
+    s.settings = loaded
+    SettingsTab.save_settings(s)
+    assert s.qsettings.value("lenient_keyword_matching") is None
+
+
+def test_invalid_stored_punctuation_mode_falls_back_on_load(tmp_path):
+    ini_path = str(tmp_path / "matching.ini")
+    qs = QSettings(ini_path, QSettings.Format.IniFormat)
     qs.setValue("punctuation_matching_rules", "yes")
     qs.sync()
 
@@ -108,22 +114,13 @@ def test_invalid_stored_modes_fall_back_on_load(tmp_path):
 
     loaded = SettingsTab.load_settings(s)
 
-    assert loaded["lenient_keyword_matching"] == "off"
     assert loaded["punctuation_matching_rules"] == "default"
 
 
-def test_widgets_default_and_have_no_hover_dialog(qtbot, tmp_path):
+def test_widgets_are_punctuation_only(qtbot, tmp_path):
     tab = make_tab(tmp_path)
     qtbot.addWidget(tab)
 
-    assert tab.lenient_keyword_matching_label.text() == ks.translate(
-        "keyword_matching_rules"
-    )
-    assert tab.lenient_keyword_matching_combo.currentData() == "off"
-    assert [
-        tab.lenient_keyword_matching_combo.itemText(i)
-        for i in range(tab.lenient_keyword_matching_combo.count())
-    ] == ["Default", "Relaxed (Posts)", "Relaxed (Files)", "Relaxed (Both)"]
     assert tab.punctuation_matching_rules_label.text() == ks.translate(
         "punctuation_matching_rules"
     )
@@ -138,22 +135,22 @@ def test_widgets_default_and_have_no_hover_dialog(qtbot, tmp_path):
         for i in range(tab.show_only_found_filetypes_combo.count())
     ] == ["Show all", "Show found only", "Show found only (with counts)"]
     assert tab.creator_unique_filenames_label.text() == "Name Dedup:"
+    assert not hasattr(tab, "lenient_keyword_matching_combo")
+    assert not hasattr(tab, "lenient_keyword_matching_help_btn")
+    assert ks.translate("keyword_matching_rules") == "keyword_matching_rules"
     # The help lives in the info-circle button; the combos have no tooltip.
-    assert tab.lenient_keyword_matching_combo.toolTip() == ""
     assert tab.punctuation_matching_rules_combo.toolTip() == ""
     assert tab.show_only_found_filetypes_combo.toolTip() == ""
     for button in (
-        tab.lenient_keyword_matching_help_btn,
         tab.punctuation_matching_help_btn,
         tab.filetype_display_help_btn,
     ):
-        # Icon-only, like the Creator tab's info buttons.
         assert button.text() == ""
         assert not button.icon().isNull()
         assert button.toolTip() != ""
 
 
-def test_help_boxes_explain_each_setting(qtbot, tmp_path, monkeypatch):
+def test_help_box_explains_punctuation_in_both_contexts(qtbot, tmp_path, monkeypatch):
     shown = []
     monkeypatch.setattr(
         ks.QMessageBox,
@@ -163,45 +160,37 @@ def test_help_boxes_explain_each_setting(qtbot, tmp_path, monkeypatch):
     tab = make_tab(tmp_path)
     qtbot.addWidget(tab)
 
-    tab.show_keyword_matching_rules_help()
     tab.show_punctuation_matching_help()
     tab.show_filetype_display_help()
 
-    assert shown[0][0] == ks.translate("keyword_matching_rules_help_title")
-    assert "beanstoast" in shown[0][1]
-    assert shown[1][0] == ks.translate("punctuation_matching_help_title")
-    assert "[JP]" in shown[1][1]
-    assert shown[2][0] == ks.translate("filetype_display_help_title")
-    assert "Show found only (with counts)" in shown[2][1]
+    assert shown[0][0] == ks.translate("punctuation_matching_help_title")
+    assert "[JP]" in shown[0][1]
+    assert "sorting value" in shown[0][1]
+    assert shown[1][0] == ks.translate("filetype_display_help_title")
+    assert "Show found only (with counts)" in shown[1][1]
 
 
-def test_reset_restores_the_defaults(qtbot, tmp_path, monkeypatch):
+def test_reset_restores_the_punctuation_default(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(ks.QMessageBox, "information", lambda *args, **kwargs: None)
     tab = make_tab(tmp_path)
     qtbot.addWidget(tab)
 
-    tab.lenient_keyword_matching_combo.setCurrentIndex(
-        tab.lenient_keyword_matching_combo.findData("both")
-    )
     tab.punctuation_matching_rules_combo.setCurrentIndex(
         tab.punctuation_matching_rules_combo.findData("lenient")
     )
-
     tab.reset_to_defaults()
 
-    assert tab.lenient_keyword_matching_combo.currentData() == "off"
     assert tab.punctuation_matching_rules_combo.currentData() == "default"
 
 
-def test_apply_summary_lists_the_new_rows(qtbot, tmp_path):
+def test_apply_summary_lists_only_the_punctuation_row(qtbot, tmp_path):
     tab = make_tab(tmp_path)
     qtbot.addWidget(tab)
-    tab.update_temp_setting("lenient_keyword_matching", "files")
     tab.update_temp_setting("punctuation_matching_rules", "lenient")
 
     summary = tab._settings_summary(tab.temp_settings)
 
-    assert ks.translate("keyword_matching_rules") in summary
-    assert ks.translate("keyword_matching_relaxed_files") in summary
     assert ks.translate("punctuation_matching_rules") in summary
     assert ks.translate("punctuation_rules_relaxed") in summary
+    assert ks.translate("keyword_matching_rules") not in summary
+

@@ -131,7 +131,9 @@ def test_snapshot_holds_options_and_filters_only(qtbot, tmp_path):
     snapshot = tab._config_snapshot()
 
     # No post ticks, no URL box, no search text: a profile is configuration.
-    assert set(snapshot) == {"options", "filters", "search_scopes"}
+    assert set(snapshot) == {"options", "filters", "search_scopes", "sorting"}
+    assert set(snapshot["sorting"]) == {"enabled", "link_all", "rules"}
+    assert snapshot["sorting"]["rules"] == []
     assert set(snapshot["options"]) == {
         "main",
         "attachments",
@@ -553,5 +555,64 @@ def test_creator_load_hands_the_saved_filters_to_the_fetch(qtbot, tmp_path):
 
     assert captured["post_filters"].skip_keywords == ("keepme",)
     assert tab.skip_keywords_edit.text() == "keepme"
+
+
+def test_switching_creators_applies_the_new_profile_explicitly(qtbot, tmp_path):
+    """No creator-to-creator switch may keep the previous creator's rules."""
+    tab = make_tab(qtbot, tmp_path)
+    tab.filter_items = lambda: None
+
+    # Page default: sorting on, one Cats rule.
+    tab.creator_sort_enabled_check.setChecked(True)
+    tab._sort_rules = [cd.SortRule("Cats", values=("cat",))]
+    assert tab.save_page_config() is True
+
+    # Creator 42 has its own profile: sorting off, a Dogs rule.
+    tab.current_creator_url = CREATOR_URL
+    tab._load_config_for_creator()
+    tab.creator_sort_enabled_check.setChecked(False)
+    tab._sort_rules = [cd.SortRule("Dogs", values=("dog",))]
+    assert tab.save_creator_config() is True
+
+    # Creator 99 has no profile: the page default, not 42's values.
+    tab.current_creator_url = OTHER_CREATOR_URL
+    tab._load_config_for_creator()
+    assert tab.creator_sort_enabled_check.isChecked() is True
+    assert [rule.folder for rule in tab._sort_rules] == ["Cats"]
+
+    # Back to 42: its own values, explicitly.
+    tab.current_creator_url = CREATOR_URL
+    tab._load_config_for_creator()
+    assert tab.creator_sort_enabled_check.isChecked() is False
+    assert [rule.folder for rule in tab._sort_rules] == ["Dogs"]
+
+
+def test_a_profile_without_the_sorting_key_gets_the_page_default(qtbot, tmp_path):
+    """A creator profile saved before sorting existed must not inherit rules."""
+    tab = make_tab(qtbot, tmp_path)
+    tab.filter_items = lambda: None
+    store = tab._config_store()
+    store.set_page_default(
+        {
+            "sorting": {
+                "enabled": True,
+                "link_all": True,
+                "rules": [
+                    {"folder": "Cats", "kind": "tag", "values": ["cat"]}
+                ],
+            }
+        }
+    )
+    # A creator profile written before the sorting key existed.
+    store.set_creator_config("patreon", "42", {"options": {"skip_folder": True}})
+
+    tab.current_creator_url = CREATOR_URL
+    tab._sort_rules = [cd.SortRule("Junk", values=("junk",))]
+    tab._load_config_for_creator()
+
+    assert tab.creator_sort_enabled_check.isChecked() is True
+    assert tab._sort_link_all is True
+    assert [rule.folder for rule in tab._sort_rules] == ["Cats"]
+    assert tab.creator_skip_folder_check.isChecked() is True
 
 

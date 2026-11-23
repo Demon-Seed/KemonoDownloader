@@ -290,62 +290,60 @@ def test_punctuation_edges_in_keywords_delimit_themselves():
     assert cd.keyword_skip_reason("Plain", post, filters) == "[JP]"
 
 
-def test_lenient_keywords_match_substrings():
+def test_wildcard_keywords_match_substrings():
     post = facts(filenames_list=["beanstoast_01.png"])
-    strict = cd.PostFilters(
+    plain = cd.PostFilters(
         skip_keywords=("bean",), skip_scopes=frozenset({"filenames"})
     )
-    lenient = cd.PostFilters(
-        skip_keywords=("bean",),
-        skip_scopes=frozenset({"filenames"}),
-        lenient_keywords=True,
+    wildcard = cd.PostFilters(
+        skip_keywords=("*bean*",), skip_scopes=frozenset({"filenames"})
     )
 
-    assert cd.keyword_skip_reason("Plain", post, strict) == ""
-    assert cd.keyword_skip_reason("Plain", post, lenient) == "bean"
+    assert cd.keyword_skip_reason("Plain", post, plain) == ""
+    assert cd.keyword_skip_reason("Plain", post, wildcard) == "*bean*"
 
 
-def test_lenient_keywords_apply_to_every_post_scope():
+def test_wildcard_keywords_apply_to_every_post_scope():
     post = facts(
         filenames_list=["beanstoast.png"],
         description="beanstoast",
         tag_list=["beanstoast"],
     )
-    title = cd.PostFilters(skip_keywords=("bean",), lenient_keywords=True)
+    title = cd.PostFilters(skip_keywords=("*bean*",))
     description = cd.PostFilters(
-        skip_keywords=("bean",),
+        skip_keywords=("*bean*",),
         skip_scopes=frozenset({"description"}),
-        lenient_keywords=True,
     )
     tags = cd.PostFilters(
-        skip_keywords=("bean",),
+        skip_keywords=("*bean*",),
         skip_scopes=frozenset({"tags"}),
-        lenient_keywords=True,
     )
     filenames = cd.PostFilters(
-        skip_keywords=("bean",),
+        skip_keywords=("*bean*",),
         skip_scopes=frozenset({"filenames"}),
-        lenient_keywords=True,
     )
 
-    assert cd.keyword_skip_reason("beanstoast", facts(), title) == "bean"
-    assert cd.keyword_skip_reason("Plain", post, description) == "bean"
-    assert cd.keyword_skip_reason("Plain", post, tags) == "bean"
-    assert cd.keyword_skip_reason("Plain", post, filenames) == "bean"
+    assert cd.keyword_skip_reason("beanstoast", facts(), title) == "*bean*"
+    assert cd.keyword_skip_reason("Plain", post, description) == "*bean*"
+    assert cd.keyword_skip_reason("Plain", post, tags) == "*bean*"
+    assert cd.keyword_skip_reason("Plain", post, filenames) == "*bean*"
     assert (
         cd.keyword_skip_reason("Plain", post, cd.PostFilters(skip_keywords=("bean",)))
         == ""
     )
 
 
-def test_lenient_keywords_credit_the_first_match_only():
-    filters = cd.PostFilters(skip_keywords=("bean", "toast"), lenient_keywords=True)
+def test_wildcard_keywords_credit_the_first_match_only():
+    filters = cd.PostFilters(skip_keywords=("bean", "*toast*"))
 
-    assert cd.post_skip_reason("beanstoast", facts(), filters) == ("keywords", "bean")
+    assert cd.post_skip_reason("beanstoast", facts(), filters) == (
+        "keywords",
+        "*toast*",
+    )
 
 
 # ---------------------------------------------------------------------------
-# Punctuation matching rules
+# Punctuation matching behavior
 # ---------------------------------------------------------------------------
 
 
@@ -389,3 +387,20 @@ def test_cjk_brackets_are_enclosing_punctuation():
     )
 
     assert cd.keyword_skip_reason("Plain", post, filters) == "【JP】"
+
+
+def test_wildcard_keywords_follow_punctuation_rules():
+    post = facts(filenames_list=["1.5.png", "zip-01.png"])
+
+    def reason(keyword, lenient_punctuation=False):
+        filters = cd.PostFilters(
+            skip_keywords=(keyword,),
+            skip_scopes=frozenset({"filenames"}),
+            lenient_punctuation=lenient_punctuation,
+        )
+        return cd.keyword_skip_reason("Plain", post, filters)
+
+    assert reason(".5*") == ""
+    assert reason(".5*", lenient_punctuation=True) == ".5*"
+    assert reason("*zip-") == ""
+    assert reason("*zip-", lenient_punctuation=True) == "*zip-"

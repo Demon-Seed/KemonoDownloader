@@ -55,13 +55,10 @@ class FakeDetectionThread:
 
 
 class FakeSettingsTab(SimpleNamespace):
-    """Settings tab stub; the filetype and keyword modes are set per test."""
+    """Settings tab stub; the filetype and punctuation modes are set per test."""
 
     def get_show_only_found_filetypes(self):
         return getattr(self, "found_filetypes_mode", "off")
-
-    def get_lenient_keyword_matching(self):
-        return getattr(self, "lenient_keyword_matching", "off")
 
     def get_punctuation_matching_rules(self):
         return getattr(self, "punctuation_matching_rules", "default")
@@ -676,8 +673,7 @@ def _run_pass(tab):
         post_filters=tab._post_filters_from_widgets()[0],
         creator_url=tab.current_creator_url,
         file_skip_keywords=tab._file_skip_keywords_from_widgets(),
-        file_skip_lenient=tab._keyword_matching_modes()[1],
-        lenient_punctuation=tab._keyword_matching_modes()[2],
+        lenient_punctuation=tab._punctuation_matching_lenient(),
     )
     thread.finished = SimpleNamespace(emit=MagicMock())
     thread.run()
@@ -924,34 +920,28 @@ def test_file_keyword_skips_follow_the_list(qtbot, tmp_path, monkeypatch):
     assert "No keyword skips" in tab.creator_skip_files_label.toolTip()
 
 
-def test_keyword_matching_settings_map_to_the_threads(qtbot, tmp_path, monkeypatch):
+def test_punctuation_setting_maps_to_the_threads(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(cd, "FilterThread", FakeFilterThread)
     tab = make_tab(qtbot, tmp_path)
     _two_ticked_posts(tab)
 
-    expected = {
-        "off": (False, False),
-        "posts": (True, False),
-        "files": (False, True),
-        "both": (True, True),
-    }
-    for mode, modes in expected.items():
-        tab._parent.settings_tab.lenient_keyword_matching = mode
-        tab.filter_items()
-
-        assert tab._keyword_matching_modes()[:2] == modes
-        assert tab._post_filters_from_widgets()[0].lenient_keywords is modes[0]
-        assert FakeFilterThread.instances[-1].kwargs["file_skip_lenient"] is modes[1]
+    tab._parent.settings_tab.punctuation_matching_rules = "default"
+    tab.filter_items()
+    assert tab._punctuation_matching_lenient() is False
+    assert tab._post_filters_from_widgets()[0].lenient_punctuation is False
+    assert FakeFilterThread.instances[-1].kwargs["lenient_punctuation"] is False
+    assert "file_skip_lenient" not in FakeFilterThread.instances[-1].kwargs
 
     tab._parent.settings_tab.punctuation_matching_rules = "lenient"
     tab.filter_items()
-
-    assert tab._keyword_matching_modes()[2] is True
+    assert tab._punctuation_matching_lenient() is True
     assert tab._post_filters_from_widgets()[0].lenient_punctuation is True
     assert FakeFilterThread.instances[-1].kwargs["lenient_punctuation"] is True
 
 
-def test_lenient_keyword_matching_changes_the_summary(qtbot, tmp_path):
+def test_wildcard_keywords_replace_lenient_matching_in_the_summary(
+    qtbot, tmp_path
+):
     tab = make_tab(qtbot, tmp_path)
     _two_ticked_posts(tab)
     tab.all_detected_posts = [("beanstoast", ("1", None))]
@@ -970,15 +960,14 @@ def test_lenient_keyword_matching_changes_the_summary(qtbot, tmp_path):
     assert _run_pass(tab) == [("beanstoast", "1", None, True)]
     assert "Post keywords 0" in tab.creator_skip_summary_label.text()
 
-    tab._parent.settings_tab.lenient_keyword_matching = "posts"
-
-    # Lenient: the same keyword now matches the substring and is credited.
+    # Wildcards replace the removed Relaxed keyword setting.
+    tab.skip_keywords_edit.setText("*bean*")
     assert _run_pass(tab) == []
     assert "Post keywords 1" in tab.creator_skip_summary_label.text()
-    assert "bean: 1" in tab.creator_skip_summary_label.toolTip()
+    assert "*bean*: 1" in tab.creator_skip_summary_label.toolTip()
 
 
-def test_file_keyword_summary_ignores_the_extension_and_honours_lenient(
+def test_file_keyword_summary_ignores_the_extension_and_honours_wildcards(
     qtbot, tmp_path
 ):
     tab = make_tab(qtbot, tmp_path)
@@ -996,10 +985,13 @@ def test_file_keyword_summary_ignores_the_extension_and_honours_lenient(
     _run_pass(tab)
     assert "File keywords 0" in tab.creator_skip_files_label.text()
 
-    # Files mode makes the stem a substring match.
+    # A wildcard matches the stem; plain "bean" stays whole-word.
     tab.file_skip_keywords_edit.setText("bean")
-    tab._parent.settings_tab.lenient_keyword_matching = "files"
+    _run_pass(tab)
+    assert "File keywords 0" in tab.creator_skip_files_label.text()
+
+    tab.file_skip_keywords_edit.setText("*bean*")
     _run_pass(tab)
 
     assert "File keywords 1" in tab.creator_skip_files_label.text()
-    assert "bean: 1" in tab.creator_skip_files_label.toolTip()
+    assert "*bean*: 1" in tab.creator_skip_files_label.toolTip()

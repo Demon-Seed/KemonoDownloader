@@ -120,16 +120,7 @@ _NAME_DEDUP_LABEL_KEYS = {
     "both": "option_on_both",
 }
 
-# "Keyword Matching Rules": which keyword filters drop the whole-word rule.
-LENIENT_KEYWORD_MODES = ("off", "posts", "files", "both")
-_KEYWORD_MATCHING_LABEL_KEYS = {
-    "off": "keyword_matching_default",
-    "posts": "keyword_matching_relaxed_posts",
-    "files": "keyword_matching_relaxed_files",
-    "both": "keyword_matching_relaxed_both",
-}
-
-# "Punctuation Matching Rules": "default" treats only enclosing punctuation
+# "Punctuation Matching Behavior": "default" treats only enclosing punctuation
 # (brackets, braces, CJK brackets, quotes) as a keyword's own delimiter;
 # "lenient" treats any punctuation at a keyword edge as one.
 PUNCTUATION_MATCHING_MODES = ("default", "lenient")
@@ -256,8 +247,7 @@ class SettingsTab(QWidget):
             "creator_unique_filenames": "both",
             "creator_folder_strategy": "per_post",  # per_post|single_folder|by_file_type
             "creator_folder_name_template": "{post_id}_{post_title}",
-            # Keyword matching rules for the Creator tab's skip keywords.
-            "lenient_keyword_matching": "off",  # off|posts|files|both
+            # Matching rule for the Creator tab's skip keywords and sorting.
             "punctuation_matching_rules": "default",  # default|lenient
             # Font setting
             "font": "JetBrains Mono",  # "JetBrains Mono", "Poppins"
@@ -398,13 +388,6 @@ class SettingsTab(QWidget):
             ),
             type=str,
         )
-        settings_dict["lenient_keyword_matching"] = self.qsettings.value(
-            "lenient_keyword_matching",
-            self.default_settings.get("lenient_keyword_matching", "off"),
-            type=str,
-        )
-        if settings_dict["lenient_keyword_matching"] not in LENIENT_KEYWORD_MODES:
-            settings_dict["lenient_keyword_matching"] = "off"
         settings_dict["punctuation_matching_rules"] = self.qsettings.value(
             "punctuation_matching_rules",
             self.default_settings.get("punctuation_matching_rules", "default"),
@@ -481,10 +464,9 @@ class SettingsTab(QWidget):
             "creator_folder_name_template",
             self.settings.get("creator_folder_name_template", "{post_id}_{post_title}"),
         )
-        self.qsettings.setValue(
-            "lenient_keyword_matching",
-            self.settings.get("lenient_keyword_matching", "off"),
-        )
+        # The old lenient-keyword setting was removed; clear a stale value
+        # from older installations so it can never be read again.
+        self.qsettings.remove("lenient_keyword_matching")
         self.qsettings.setValue(
             "punctuation_matching_rules",
             self.settings.get("punctuation_matching_rules", "default"),
@@ -840,49 +822,9 @@ class SettingsTab(QWidget):
         self.filetype_display_help_btn.clicked.connect(self.show_filetype_display_help)
         creator_custom_layout.addWidget(self.filetype_display_help_btn, 5, 3)
 
-        # Keyword matching rules: global switches for the Creator tab's two
-        # skip-keyword boxes. They live here rather than in the Filters box
-        # because they change how every keyword is matched, not which posts
-        # are listed.
-        self.lenient_keyword_matching_label = QLabel()
-        creator_custom_layout.addWidget(self.lenient_keyword_matching_label, 6, 0)
-
-        self.lenient_keyword_matching_combo = QComboBox()
-        for label_key, mode in (
-            ("keyword_matching_default", "off"),
-            ("keyword_matching_relaxed_posts", "posts"),
-            ("keyword_matching_relaxed_files", "files"),
-            ("keyword_matching_relaxed_both", "both"),
-        ):
-            self.lenient_keyword_matching_combo.addItem(translate(label_key), mode)
-        self.lenient_keyword_matching_combo.setStyleSheet(
-            "padding: 5px; border-radius: 5px;"
-        )
-        current_lenient = self.temp_settings.get("lenient_keyword_matching", "off")
-        for i in range(self.lenient_keyword_matching_combo.count()):
-            if self.lenient_keyword_matching_combo.itemData(i) == current_lenient:
-                self.lenient_keyword_matching_combo.setCurrentIndex(i)
-                break
-        self.lenient_keyword_matching_combo.currentIndexChanged.connect(
-            lambda idx: self.update_temp_setting(
-                "lenient_keyword_matching",
-                self.lenient_keyword_matching_combo.itemData(idx),
-            )
-        )
-        creator_custom_layout.addWidget(
-            self.lenient_keyword_matching_combo, 6, 1, 1, 2
-        )
-
-        self.lenient_keyword_matching_help_btn = make_info_button()
-        self.lenient_keyword_matching_help_btn.clicked.connect(
-            self.show_keyword_matching_rules_help
-        )
-        creator_custom_layout.addWidget(
-            self.lenient_keyword_matching_help_btn, 6, 3
-        )
-
+        # Punctuation matching behavior: shared by the skip boxes and sorting.
         self.punctuation_matching_rules_label = QLabel()
-        creator_custom_layout.addWidget(self.punctuation_matching_rules_label, 7, 0)
+        creator_custom_layout.addWidget(self.punctuation_matching_rules_label, 6, 0)
 
         self.punctuation_matching_rules_combo = QComboBox()
         for label_key, mode in (
@@ -909,20 +851,20 @@ class SettingsTab(QWidget):
             )
         )
         creator_custom_layout.addWidget(
-            self.punctuation_matching_rules_combo, 7, 1, 1, 2
+            self.punctuation_matching_rules_combo, 6, 1, 1, 2
         )
 
         self.punctuation_matching_help_btn = make_info_button()
         self.punctuation_matching_help_btn.clicked.connect(
             self.show_punctuation_matching_help
         )
-        creator_custom_layout.addWidget(self.punctuation_matching_help_btn, 7, 3)
+        creator_custom_layout.addWidget(self.punctuation_matching_help_btn, 6, 3)
 
         # What the Creator Queue's input row does once a URL is committed.
         # Adding is identical in every mode; only the auto-loading differs.
         self.queue_input_behavior_label = QLabel()
         self.queue_input_behavior_label.setStyleSheet("color: white;")
-        creator_custom_layout.addWidget(self.queue_input_behavior_label, 8, 0)
+        creator_custom_layout.addWidget(self.queue_input_behavior_label, 7, 0)
 
         self.queue_input_behavior_combo = QComboBox()
         for label_key, mode in (
@@ -945,13 +887,13 @@ class SettingsTab(QWidget):
                 self.queue_input_behavior_combo.itemData(idx),
             )
         )
-        creator_custom_layout.addWidget(self.queue_input_behavior_combo, 8, 1, 1, 2)
+        creator_custom_layout.addWidget(self.queue_input_behavior_combo, 7, 1, 1, 2)
 
         self.queue_input_behavior_help_btn = make_info_button()
         self.queue_input_behavior_help_btn.clicked.connect(
             self.show_queue_input_behavior_help
         )
-        creator_custom_layout.addWidget(self.queue_input_behavior_help_btn, 8, 3)
+        creator_custom_layout.addWidget(self.queue_input_behavior_help_btn, 7, 3)
 
         self.creator_custom_group.setLayout(creator_custom_layout)
         layout.addWidget(self.creator_custom_group)
@@ -1326,14 +1268,6 @@ class SettingsTab(QWidget):
             translate("filetype_display_help_text"),
         )
 
-    def show_keyword_matching_rules_help(self):
-        """Explain what relaxed whole-word matching does."""
-        QMessageBox.information(
-            self,
-            translate("keyword_matching_rules_help_title"),
-            translate("keyword_matching_rules_help_text"),
-        )
-
     def show_queue_input_behavior_help(self):
         """Explain what the three Queue Input Field Behavior modes do."""
         QMessageBox.information(
@@ -1343,7 +1277,7 @@ class SettingsTab(QWidget):
         )
 
     def show_punctuation_matching_help(self):
-        """Explain how punctuation at a keyword edge is treated."""
+        """Explain how punctuation at a keyword/rule edge is treated."""
         QMessageBox.information(
             self,
             translate("punctuation_matching_help_title"),
@@ -1780,16 +1714,6 @@ class SettingsTab(QWidget):
                 "show_only_found_filetypes",
             ),
             (
-                translate("keyword_matching_rules"),
-                translate(
-                    _KEYWORD_MATCHING_LABEL_KEYS.get(
-                        values.get("lenient_keyword_matching", "off"),
-                        "keyword_matching_default",
-                    )
-                ),
-                "lenient_keyword_matching",
-            ),
-            (
                 translate("punctuation_matching_rules"),
                 translate(
                     _PUNCTUATION_LABEL_KEYS.get(
@@ -2000,7 +1924,6 @@ class SettingsTab(QWidget):
         for combo, key in (
             (self.creator_folder_strategy_combo, "creator_folder_strategy"),
             (self.creator_unique_filenames_combo, "creator_unique_filenames"),
-            (self.lenient_keyword_matching_combo, "lenient_keyword_matching"),
             (self.punctuation_matching_rules_combo, "punctuation_matching_rules"),
             (self.queue_input_behavior_combo, "queue_input_behavior"),
         ):
@@ -2050,20 +1973,6 @@ class SettingsTab(QWidget):
                 index, translate(label_key)
             )
         self.show_only_found_filetypes_combo.blockSignals(False)
-
-        self.lenient_keyword_matching_label.setText(
-            translate("keyword_matching_rules")
-        )
-        self.lenient_keyword_matching_combo.blockSignals(True)
-        for index in range(self.lenient_keyword_matching_combo.count()):
-            mode = self.lenient_keyword_matching_combo.itemData(index)
-            self.lenient_keyword_matching_combo.setItemText(
-                index,
-                translate(
-                    _KEYWORD_MATCHING_LABEL_KEYS.get(mode, "keyword_matching_default")
-                ),
-            )
-        self.lenient_keyword_matching_combo.blockSignals(False)
 
         self.punctuation_matching_rules_label.setText(
             translate("punctuation_matching_rules")
@@ -2159,9 +2068,6 @@ class SettingsTab(QWidget):
         self.filetype_display_help_btn.setToolTip(
             translate("filetype_display_help_title")
         )
-        self.lenient_keyword_matching_help_btn.setToolTip(
-            translate("keyword_matching_rules_help_title")
-        )
         self.punctuation_matching_help_btn.setToolTip(
             translate("punctuation_matching_help_title")
         )
@@ -2242,15 +2148,6 @@ class SettingsTab(QWidget):
         """
         mode = str(self.settings.get("queue_input_behavior", "default"))
         return mode if mode in QUEUE_INPUT_BEHAVIOR_MODES else "default"
-
-    def get_lenient_keyword_matching(self):
-        """Which keyword filters drop the whole-word rule.
-
-        One of "off", "posts", "files" or "both"; anything unrecognised falls
-        back to "off" so a stale settings file cannot break matching.
-        """
-        mode = str(self.settings.get("lenient_keyword_matching", "off"))
-        return mode if mode in LENIENT_KEYWORD_MODES else "off"
 
     def get_punctuation_matching_rules(self):
         """Return "default" (enclosing punctuation only) or "lenient" (any)."""

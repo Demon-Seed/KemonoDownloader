@@ -383,20 +383,20 @@ def test_file_keywords_with_punctuation_edges_are_matched(qapp):
     assert thread._file_skip_counts == {"[JP]": 1}
 
 
-def test_lenient_file_keywords_match_substrings(qapp):
-    strict = _file_thread(file_skip_keywords=["bean"])
-    lenient = _file_thread(file_skip_keywords=["bean"], file_skip_lenient=True)
+def test_wildcard_file_keywords_match_substrings(qapp):
+    plain = _file_thread(file_skip_keywords=["bean"])
+    wildcard = _file_thread(file_skip_keywords=["*bean*"])
     post = {
         "id": "p1",
         "file": {"path": "/m/beanstoast_01.png", "name": "beanstoast_01.png"},
     }
 
-    strict_files = strict.detect_files(post, [".png"], _domain_config())
-    lenient_files = lenient.detect_files(post, [".png"], _domain_config())
+    plain_files = plain.detect_files(post, [".png"], _domain_config())
+    wildcard_files = wildcard.detect_files(post, [".png"], _domain_config())
 
-    assert [name for name, _url in strict_files] == ["beanstoast_01.png"]
-    assert lenient_files == []
-    assert lenient._file_skip_counts == {"bean": 1}
+    assert [name for name, _url in plain_files] == ["beanstoast_01.png"]
+    assert wildcard_files == []
+    assert wildcard._file_skip_counts == {"*bean*": 1}
 
 
 def test_file_punctuation_rules_default_to_enclosing_only(qapp):
@@ -420,3 +420,16 @@ def test_file_punctuation_rules_can_be_lenient(qapp):
 
     assert files == []
     assert thread._file_skip_counts == {"zip-": 1}
+
+
+def test_wildcard_file_keywords_follow_punctuation_rules(qapp):
+    strict = _file_thread(file_skip_keywords=[".5*"])
+    relaxed = _file_thread(file_skip_keywords=[".5*"], lenient_punctuation=True)
+    post = {"id": "p1", "file": {"path": "/m/x.png", "name": "1.5.png"}}
+
+    strict_files = strict.detect_files(post, [".png"], _domain_config())
+    relaxed_files = relaxed.detect_files(post, [".png"], _domain_config())
+
+    assert [name for name, _url in strict_files] == ["1.5.png"]
+    assert relaxed_files == []
+    assert relaxed._file_skip_counts == {".5*": 1}

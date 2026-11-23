@@ -168,7 +168,6 @@ def test_settings_help_buttons_match_the_creator_tab_info_buttons(tmp_path, qapp
             tab.creator_shared_template_help_btn,
             tab.creator_folder_name_help_btn,
             tab.filetype_display_help_btn,
-            tab.lenient_keyword_matching_help_btn,
             tab.punctuation_matching_help_btn,
             tab.queue_input_behavior_help_btn,
         )

@@ -344,7 +344,6 @@ class FakeFilterThread:
         post_filters=None,
         creator_url=None,
         file_skip_keywords=None,
-        file_skip_lenient=False,
         lenient_punctuation=False,
         hidden_post_ids=None,
     ):
@@ -355,7 +354,6 @@ class FakeFilterThread:
         self.search_scopes = search_scopes
         self.post_search_index = post_search_index
         self.post_filters = post_filters
-        self.file_skip_lenient = file_skip_lenient
         self.lenient_punctuation = lenient_punctuation
         self.finished = Signal()
         self.log = Signal()

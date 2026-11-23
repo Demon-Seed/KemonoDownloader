@@ -54,6 +54,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QTextBrowser,
     QTextEdit,
     QVBoxLayout,
@@ -370,11 +371,47 @@ def parse_filter_count(text):
     return value if value >= 0 else None
 
 
+def _split_pg_array(text):
+    """Split a PostgreSQL array body on commas outside quotes.
+
+    Pawchive returns tags as ``{Ado,Comic}`` or ``{3D,"3D art",BlackCat}``.
+    A quoted entry may contain a comma (``{"Hello, world",Cat}``), so a plain
+    ``split(",")`` would tear one tag into two. Backslash escapes inside
+    quotes are honoured; the surrounding quotes are removed.
+    """
+    values = []
+    current = []
+    in_quotes = False
+    escaped = False
+    for character in text:
+        if escaped:
+            if character not in ('"', "\\"):
+                current.append("\\")
+            current.append(character)
+            escaped = False
+            continue
+        if in_quotes and character == "\\":
+            escaped = True
+            continue
+        if character == '"':
+            in_quotes = not in_quotes
+            continue
+        if character == "," and not in_quotes:
+            values.append("".join(current))
+            current = []
+            continue
+        current.append(character)
+    values.append("".join(current))
+    return values
+
+
 def parse_post_tags(tags):
     """Parse a post's ``tags`` field into a plain list of strings.
 
     Tolerates every shape the APIs are known to return:
-    - A PostgreSQL array string: "{tag1,tag2,tag3}" (archive API style)
+    - A PostgreSQL array string: "{tag1,tag2,tag3}" or
+      '{"3D art","Hello, world"}' (archive API style; quoted commas and
+      escaped quotes are kept inside one tag)
     - A comma-separated string: "tag1, tag2, tag3"
     - A semicolon-separated string: "tag1; tag2; tag3"
     - A list of plain strings, or of dicts with a 'name', 'tag', 'label',
@@ -386,9 +423,15 @@ def parse_post_tags(tags):
         if not tags:
             return result
         if isinstance(tags, str):
-            text = tags
+            text = tags.strip()
             if text.startswith("{") and text.endswith("}"):
-                text = text[1:-1]
+                for candidate in _split_pg_array(text[1:-1]):
+                    cleaned = candidate.strip()
+                    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] == "'":
+                        cleaned = cleaned[1:-1].strip()
+                    if cleaned:
+                        result.append(cleaned)
+                return result
             candidates = text.split(",")
             if len(candidates) <= 1:
                 candidates = text.split(";")
@@ -595,12 +638,7 @@ class PostFilters(NamedTuple):
     # files at all still produces desc_<id>.txt when this is on, so it is not
     # "empty" from the download's point of view.
     download_post_text: bool = False
-    # Relaxed keyword matching: substring instead of whole-word. Mirrors the
-    # "Keyword Matching Rules" setting's Relaxed (Posts)/(Both) options, and
-    # reaches the fetch through this same value so both passes apply identical
-    # rules.
-    lenient_keywords: bool = False
-    # "Punctuation Matching Rules: Relaxed": any punctuation at a keyword edge
+    # "Punctuation Matching Behavior: Relaxed": any punctuation at a keyword edge
     # is its own delimiter. False keeps the default enclosing-punctuation list.
     lenient_punctuation: bool = False
 
@@ -609,17 +647,18 @@ def keyword_skip_reason(post_title, facts, filters):
     """Return the skip keyword that drops this post, or "".
 
     Scopes are the ticked combination of title, filenames, description and
-    tags; the post is dropped when a keyword matches as a whole word in ANY
-    enabled scope. File names are matched without their extension: a file's
-    type is the filetype filter's business, so "png" cannot drop every PNG.
-    ``filters.lenient_keywords`` switches every scope to substring matching.
-    The tag-glued description is only consulted after the space-joined
-    rendering misses, which is how the fetch has always behaved.
+    tags; the post is dropped when a keyword matches in ANY enabled scope.
+    Plain keywords match as whole words; keywords containing ``*`` or ``?``
+    use the shared wildcard matcher (whole-tag for tags). Both honour the
+    Punctuation Matching Behavior setting. File names are matched without their
+    extension: a file's type is the filetype filter's business, so "png"
+    cannot drop every PNG. The tag-glued description is only consulted after
+    the space-joined rendering misses, which is how the fetch has always
+    behaved.
     """
     keywords = filters.skip_keywords or ()
     if not keywords:
         return ""
-    lenient = bool(filters.lenient_keywords)
     punctuation_lenient = bool(filters.lenient_punctuation)
     # An empty set means no scope is ticked, so no post is dropped by
     # keyword; only a missing value falls back to the title.
@@ -627,17 +666,16 @@ def keyword_skip_reason(post_title, facts, filters):
     if scopes is None:
         scopes = frozenset({"title"})
     if "title" in scopes and post_title:
-        matched = _first_matching_keyword(
-            keywords, post_title, lenient, punctuation_lenient
+        matched = _keyword_or_wildcard_match(
+            keywords, post_title, punctuation_lenient
         )
         if matched:
             return matched
     if "filenames" in scopes:
         for name in facts.get("filenames_list") or ():
-            matched = _first_matching_keyword(
+            matched = _keyword_or_wildcard_match(
                 keywords,
                 filename_without_extension(name),
-                lenient,
                 punctuation_lenient,
             )
             if matched:
@@ -646,15 +684,18 @@ def keyword_skip_reason(post_title, facts, filters):
         for text in (facts.get("description"), facts.get("description_glued")):
             if not text:
                 continue
-            matched = _first_matching_keyword(
-                keywords, text, lenient, punctuation_lenient
+            matched = _keyword_or_wildcard_match(
+                keywords, text, punctuation_lenient
             )
             if matched:
                 return matched
     if "tags" in scopes:
         for tag in facts.get("tag_list") or ():
-            matched = _first_matching_keyword(
-                keywords, tag, lenient, punctuation_lenient
+            matched = _keyword_or_wildcard_match(
+                keywords,
+                tag,
+                punctuation_lenient,
+                whole_field=True,
             )
             if matched:
                 return matched
@@ -672,15 +713,14 @@ def keyword_needed_rejoin(keyword, facts, filters):
         scopes = frozenset({"title"})
     if "description" not in scopes:
         return False
-    lenient = bool(filters.lenient_keywords)
     punctuation_lenient = bool(filters.lenient_punctuation)
     glued = facts.get("description_glued")
-    if not glued or not _first_matching_keyword(
-        [keyword], glued, lenient, punctuation_lenient
+    if not glued or not _keyword_or_wildcard_match(
+        [keyword], glued, punctuation_lenient
     ):
         return False
-    return not _first_matching_keyword(
-        [keyword], facts.get("description"), lenient, punctuation_lenient
+    return not _keyword_or_wildcard_match(
+        [keyword], facts.get("description"), punctuation_lenient
     )
 
 
@@ -2180,64 +2220,60 @@ def _is_word_edge(char):
     return char.isascii() and char.isalnum()
 
 
-def _keyword_matches_text(keywords, text, lenient=False, lenient_punctuation=False):
-    """Case-insensitive match of any keyword in *text*.
+def _literal_lead_pattern(char, lenient_punctuation):
+    """Regex fragment for a literal first character of a keyword/rule value."""
+    if lenient_punctuation:
+        return "" if not _is_word_edge(char) else r"(?<![a-z0-9])"
+    return "" if char in ENCLOSING_PUNCTUATION else r"(?<![a-z0-9])"
 
-    Strict (default) matching is whole-word: non-alphanumeric characters
-    (including _, -, ., /, spaces, curly braces, etc.) are valid word
-    boundaries in addition to string start/end. A keyword edge that is a
-    word character must be delimited by the text around it; a keyword edge
-    that is *enclosing* punctuation (brackets, braces, CJK brackets, quotes —
-    see :data:`ENCLOSING_PUNCTUATION`) is its own delimiter, so "[JP]"
-    matches "123[JP] art" and "【JP】" matches "123【JP】 art". Joiners such as
-    ".", "-", "_" or "+" stay inside a token: ".5" does not match "1.5" and
-    "zip-" does not match "zip-01.png". No normalization is performed — the
-    keyword must appear exactly (case-insensitive). This avoids false
-    positives from camelCase splitting (e.g. 'sketch' will NOT match
-    'SketchBook').
+
+def _literal_trail_pattern(char, lenient_punctuation):
+    """Regex fragment for a literal last character of a keyword/rule value."""
+    if lenient_punctuation:
+        return "" if not _is_word_edge(char) else r"(?![a-z0-9])"
+    return "" if char in ENCLOSING_PUNCTUATION else r"(?![a-z0-9])"
+
+
+def _keyword_matches_text(keywords, text, lenient_punctuation=False):
+    """Case-insensitive whole-word match of any keyword in *text*.
+
+    A keyword edge that is a word character must be delimited by the text
+    around it; *enclosing* punctuation (brackets, braces, CJK brackets, quotes
+    — see :data:`ENCLOSING_PUNCTUATION`) is its own delimiter, so ``[JP]``
+    matches ``123[JP] art``. Joiners such as ``.``, ``-``, ``_`` or ``+`` stay
+    inside a token: ``.5`` does not match ``1.5`` and ``zip-`` does not match
+    ``zip-01.png``. No normalization is performed — the keyword must appear
+    exactly (case-insensitive), which avoids camelCase false positives.
 
     *lenient_punctuation* restores the wider rule where any punctuation at a
-    keyword edge is its own delimiter (".5" matches "1.5", "zip-" matches
-    "zip-01.png"). *lenient* drops the boundary rule entirely: a plain
-    substring hit is enough, so "bean" matches "beanstoast".
+    keyword edge is its own delimiter (``.5`` matches ``1.5``, ``zip-``
+    matches ``zip-01.png``).
 
-    Shared by PostDetectionThread (post/title-level skip) and
-    FilePreparationThread (individual-file-level skip).
+    Shared by the post-level and file-level skip matchers.
     """
     if not keywords or not text:
         return False
-    text_lower = text.lower()
-    if not text_lower:
+    text_folded = text.casefold()
+    if not text_folded:
         return False
     for keyword in keywords:
         if not keyword:
             continue
-        keyword_lower = keyword.lower()
-        if not keyword_lower:
+        keyword_folded = keyword.casefold()
+        if not keyword_folded:
             continue
-        if lenient:
-            # Lenient: any occurrence counts, boundaries ignored.
-            if keyword_lower in text_lower:
-                return True
-            continue
-        if lenient_punctuation:
-            lead = "" if not _is_word_edge(keyword_lower[0]) else r"(?<![a-z0-9])"
-            trail = "" if not _is_word_edge(keyword_lower[-1]) else r"(?![a-z0-9])"
-        else:
-            lead = (
-                "" if keyword_lower[0] in ENCLOSING_PUNCTUATION else r"(?<![a-z0-9])"
-            )
-            trail = (
-                "" if keyword_lower[-1] in ENCLOSING_PUNCTUATION else r"(?![a-z0-9])"
-            )
+        lead = _literal_lead_pattern(keyword_folded[0], lenient_punctuation)
+        trail = _literal_trail_pattern(keyword_folded[-1], lenient_punctuation)
         # re.escape() cannot produce an invalid pattern, so this is a plain
         # whole-word search; the old re.error fallback was unreachable.
-        if re.search(lead + re.escape(keyword_lower) + trail, text_lower):
+        if re.search(
+            lead + re.escape(keyword_folded) + trail, text_folded
+        ):
             return True
     return False
 
 
-def _first_matching_keyword(keywords, text, lenient=False, lenient_punctuation=False):
+def _first_matching_keyword(keywords, text, lenient_punctuation=False):
     """Return the first keyword that matches *text*, or "".
 
     Thin wrapper around :func:`_keyword_matches_text`, used purely so the
@@ -2247,10 +2283,373 @@ def _first_matching_keyword(keywords, text, lenient=False, lenient_punctuation=F
     """
     for keyword in keywords or []:
         if keyword and _keyword_matches_text(
-            [keyword], text, lenient, lenient_punctuation
+            [keyword], text, lenient_punctuation
         ):
             return keyword
     return ""
+
+
+def parse_keyword_values(text):
+    """Split a comma-separated keyword list, allowing quoted values.
+
+    ``Cat, Neko`` gives two values; ``"Hello, world", Cat`` gives two values
+    where the first contains a comma. Surrounding quotes are removed and the
+    quotes are not part of the value.
+    """
+    values = []
+    current = []
+    in_quotes = False
+    escaped = False
+    for character in str(text or ""):
+        if escaped:
+            if character not in ('"', "\\"):
+                current.append("\\")
+            current.append(character)
+            escaped = False
+            continue
+        if in_quotes and character == "\\":
+            escaped = True
+            continue
+        if character == '"':
+            in_quotes = not in_quotes
+            continue
+        if character == "," and not in_quotes:
+            value = "".join(current).strip()
+            if value:
+                values.append(value)
+            current = []
+            continue
+        current.append(character)
+    value = "".join(current).strip()
+    if value:
+        values.append(value)
+    return values
+
+
+def _has_wildcards(value):
+    return "*" in str(value or "") or "?" in str(value or "")
+
+
+def wildcard_value_is_unusable(value):
+    """True when a value is empty or consists only of wildcard characters.
+
+    A lone ``*`` matches every tag/word, which is never what a sorting rule or
+    a skip keyword should silently do.
+    """
+    stripped = str(value or "").strip()
+    return not stripped or all(character in "*?" for character in stripped)
+
+
+def _wildcard_matches(
+    pattern, text, whole_field=False, lenient_punctuation=False
+):
+    """Case-insensitive wildcard match for one tag or one piece of text.
+
+    ``*`` matches any text (including none) and ``?`` exactly one character;
+    everything else is literal, including brackets. With *whole_field* the
+    pattern must match the entire string (a tag); otherwise literal edges
+    follow *lenient_punctuation* exactly like plain keyword matching. A ``*``
+    at an edge matches freely; ``?`` keeps its boundary because it consumes
+    exactly one character.
+    """
+    folded = str(pattern or "").strip().casefold()
+    folded_text = str(text or "").casefold()
+    if not folded or not folded_text or wildcard_value_is_unusable(folded):
+        return False
+    body = re.escape(folded).replace(r"\*", ".*").replace(r"\?", ".")
+    if whole_field:
+        return re.fullmatch(body, folded_text, re.DOTALL) is not None
+    if folded[0] == "*":
+        lead = ""
+    elif folded[0] == "?":
+        lead = r"(?<![a-z0-9])"
+    else:
+        lead = _literal_lead_pattern(folded[0], lenient_punctuation)
+    if folded[-1] == "*":
+        trail = ""
+    elif folded[-1] == "?":
+        trail = r"(?![a-z0-9])"
+    else:
+        trail = _literal_trail_pattern(folded[-1], lenient_punctuation)
+    return re.search(lead + body + trail, folded_text, re.DOTALL) is not None
+
+
+def _keyword_or_wildcard_match(
+    keywords,
+    text,
+    lenient_punctuation=False,
+    whole_field=False,
+):
+    """Return the first keyword that matches *text*, or "".
+
+    Plain keywords use the whole-word matcher with the same punctuation
+    setting. Keywords containing ``*`` or ``?`` use the wildcard matcher:
+    whole-tag when *whole_field* is true, word-based otherwise.
+    """
+    for keyword in keywords or []:
+        value = str(keyword).strip()
+        if not value:
+            continue
+        if _has_wildcards(value):
+            if _wildcard_matches(
+                value,
+                text,
+                whole_field=whole_field,
+                lenient_punctuation=lenient_punctuation,
+            ):
+                return keyword
+        elif _keyword_matches_text([value], text, lenient_punctuation):
+            return keyword
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Keyword sorting
+# ---------------------------------------------------------------------------
+
+_RESERVED_WINDOWS_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{number}" for number in range(1, 10)}
+    | {f"lpt{number}" for number in range(1, 10)}
+)
+
+SORT_SCOPE_LABELS = {
+    "title": "sort_scope_title",
+    "filenames": "sort_scope_filenames",
+    "description": "sort_scope_description",
+    "tags": "sort_scope_tags",
+}
+
+
+class SortRule(NamedTuple):
+    """One sorting rule: where a post goes and what sends it there.
+
+    ``folder`` is a single folder name created inside the creator's folder,
+    so a sorted post keeps following every creator-folder rule (strategy,
+    skip-post-folder, templates) without a second code path. ``scopes`` names
+    the fields the values are checked against; no separate "tag vs keyword"
+    mode exists.
+    """
+
+    folder: str
+    values: tuple = ()
+    match_all: bool = False
+    scopes: frozenset = frozenset({"tags"})
+    enabled: bool = True
+
+
+class SortRouting(NamedTuple):
+    """The result of routing one run's posts through the sorting rules."""
+
+    # post id -> every matching folder name, in rule order (primary first).
+    folders: dict
+    # primary folder -> number of posts routed there.
+    counts: dict
+    multi_match: int
+    missing_facts: int
+    unsorted: int
+
+
+def normalize_sort_folder(name):
+    """Return ``(folder, problem_key)`` for a rule's folder name.
+
+    Only a single path segment is accepted: a rule may not escape the
+    creator folder with ``..``, an absolute path or a drive letter, and a
+    name Windows cannot store is reported instead of silently becoming a
+    different folder than the one the user typed.
+    """
+    raw = str(name or "").strip()
+    if not raw or raw in (".", ".."):
+        return "", "sort_config_invalid_folder"
+    if os.path.isabs(raw) or re.match(r"^[A-Za-z]:", raw):
+        return "", "sort_config_invalid_folder"
+    if "/" in raw or "\\" in raw:
+        return "", "sort_config_invalid_folder"
+    cleaned = sanitize_filename(raw)
+    if cleaned == "unnamed" or not cleaned.strip():
+        return "", "sort_config_invalid_folder"
+    if cleaned.split(".")[0].casefold() in _RESERVED_WINDOWS_NAMES:
+        return "", "sort_config_invalid_folder"
+    return cleaned, ""
+
+
+def _scope_texts(post_title, facts, scope):
+    """Return the strings a sorting value is checked against for *scope*."""
+    facts = facts or {}
+    if scope == "title":
+        return [post_title] if post_title else []
+    if scope == "filenames":
+        return [
+            filename_without_extension(name)
+            for name in facts.get("filenames_list") or ()
+        ]
+    if scope == "description":
+        return [
+            text
+            for text in (facts.get("description"), facts.get("description_glued"))
+            if text
+        ]
+    if scope == "tags":
+        return [str(tag) for tag in facts.get("tag_list") or () if str(tag)]
+    return []
+
+
+def sort_rule_matches(post_title, facts, rule, lenient_punctuation=False):
+    """True when *rule* sends this post to its folder.
+
+    Every value is one wildcard pattern. Tags are matched against the whole
+    tag; Title/Filenames/Description are matched word-wise. Literal edges
+    follow the Punctuation Matching Behavior setting, while a ``*`` edge matches
+    freely. A post with no facts can still match on its title; every other
+    scope needs the facts and is skipped when they are missing.
+    """
+    if rule is None or not getattr(rule, "enabled", True):
+        return False
+    values = [
+        str(value).strip()
+        for value in (rule.values or ())
+        if str(value).strip() and not wildcard_value_is_unusable(value)
+    ]
+    if not values:
+        return False
+    scopes = set(rule.scopes or ()) or {"tags"}
+    checks = []
+    for value in values:
+        matched = False
+        for scope in scopes:
+            for text in _scope_texts(post_title, facts, scope):
+                if _wildcard_matches(
+                    value,
+                    text,
+                    whole_field=scope == "tags",
+                    lenient_punctuation=lenient_punctuation,
+                ):
+                    matched = True
+                    break
+            if matched:
+                break
+        checks.append(matched)
+    return all(checks) if rule.match_all else any(checks)
+
+
+def resolve_sort_folders(
+    posts, post_search_index, rules, lenient_punctuation=False
+):
+    """Route *posts* through *rules*, first match wins.
+
+    ``folders`` keeps every matching folder (not just the winner), so the
+    hardlink option can use them later without re-running the matchers.
+    """
+    folders = {}
+    counts = {}
+    multi_match = 0
+    missing_facts = 0
+    unsorted = 0
+    index = post_search_index or {}
+    usable = [rule for rule in (rules or ()) if rule.enabled]
+    for post_title, (post_id, _thumbnail) in posts or ():
+        key = str(post_id)
+        facts = index.get(post_id)
+        if facts is None:
+            facts = index.get(key)
+        has_facts = facts is not None
+        if facts is None:
+            facts = {}
+        matched = []
+        seen_folders = set()
+        for rule in usable:
+            if not has_facts and "title" not in (rule.scopes or ()):
+                continue
+            if not sort_rule_matches(
+                post_title, facts, rule, lenient_punctuation
+            ):
+                continue
+            # A hand-edited profile can name the same folder twice; one link
+            # per distinct folder is the only outcome that makes sense.
+            folder_key = rule.folder.casefold()
+            if folder_key in seen_folders:
+                continue
+            seen_folders.add(folder_key)
+            matched.append(rule.folder)
+        matched = tuple(matched)
+        if not matched:
+            if has_facts:
+                unsorted += 1
+            else:
+                missing_facts += 1
+            continue
+        folders[key] = matched
+        counts[matched[0]] = counts.get(matched[0], 0) + 1
+        if len(matched) > 1:
+            multi_match += 1
+    return SortRouting(folders, counts, multi_match, missing_facts, unsorted)
+
+
+def sort_rule_to_dict(rule):
+    """Serialise a rule for a config profile (plain JSON types only)."""
+    return {
+        "folder": rule.folder,
+        "values": list(rule.values),
+        "match_all": bool(rule.match_all),
+        "scopes": sorted(rule.scopes),
+        "enabled": bool(rule.enabled),
+    }
+
+
+def sort_rule_from_dict(data):
+    """Rebuild a rule from a profile, tolerating old/hand-edited payloads.
+
+    Older profiles stored a ``kind`` of ``tag`` or ``keyword``. A tag rule
+    becomes a Tags-scoped rule; a keyword rule keeps its saved scopes. New
+    rules default to Tags when no scopes are present.
+    """
+    if not isinstance(data, dict):
+        return None
+    folder, _problem = normalize_sort_folder(data.get("folder"))
+    legacy_kind = str(data.get("kind") or "").strip().lower()
+    raw_values = data.get("values")
+    if isinstance(raw_values, str):
+        raw_values = parse_keyword_values(raw_values)
+    values = tuple(
+        str(value).strip()
+        for value in (raw_values or ())
+        if str(value).strip() and not wildcard_value_is_unusable(value)
+    )
+    known_scopes = {"title", "filenames", "description", "tags"}
+    scopes = data.get("scopes")
+    if not isinstance(scopes, (list, tuple, set, frozenset)):
+        scopes = ()
+    scopes = frozenset(
+        str(scope) for scope in scopes if str(scope) in known_scopes
+    )
+    if legacy_kind == "tag":
+        scopes = frozenset({"tags"})
+    elif not scopes:
+        scopes = frozenset(
+            {"title", "tags"} if legacy_kind == "keyword" else {"tags"}
+        )
+    return SortRule(
+        folder=folder,
+        values=values,
+        match_all=bool(data.get("match_all")),
+        scopes=scopes,
+        enabled=bool(data.get("enabled", True)),
+    )
+
+
+def sort_rules_from_config(config):
+    """Return the usable rules in a ``sorting`` profile block."""
+    if not isinstance(config, dict):
+        return []
+    raw = config.get("rules")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    rules = []
+    for entry in raw:
+        rule = sort_rule_from_dict(entry)
+        if rule is not None and rule.folder and rule.values:
+            rules.append(rule)
+    return rules
 
 
 class PostDetectionThread(_StoppableThread, QThread):
@@ -3113,7 +3512,6 @@ class FilterThread(_StoppableThread, QThread):
         post_filters=None,
         creator_url=None,
         file_skip_keywords=None,
-        file_skip_lenient=False,
         lenient_punctuation=False,
         hidden_post_ids=None,
     ):
@@ -3145,11 +3543,7 @@ class FilterThread(_StoppableThread, QThread):
         # File-keyword skips follow the listed posts, using the names stored
         # with each post, so the file row moves with the list too.
         self.file_skip_keywords = list(file_skip_keywords or ())
-        # Substring matching for the file list, from the "Keyword Matching
-        # Rules" setting (Relaxed (Files)/(Both)). Snapshotted with the
-        # keywords.
-        self.file_skip_lenient = bool(file_skip_lenient)
-        # "Punctuation Matching Rules: Relaxed" — snapshotted from Settings.
+        # "Punctuation Matching Behavior: Relaxed" — snapshotted from Settings.
         self.lenient_punctuation = bool(lenient_punctuation)
         self.file_keyword_skipped_count = 0
         self.file_keyword_skip_counts = {}
@@ -3205,10 +3599,9 @@ class FilterThread(_StoppableThread, QThread):
                 continue
             if self.file_skip_keywords:
                 for name in (facts or {}).get("filenames_list") or ():
-                    matched = _first_matching_keyword(
+                    matched = _keyword_or_wildcard_match(
                         self.file_skip_keywords,
                         filename_without_extension(name),
-                        self.file_skip_lenient,
                         self.lenient_punctuation,
                     )
                     if not matched:
@@ -3240,7 +3633,6 @@ class FilePreparationThread(_StoppableThread, QThread):
         file_skip_keywords=None,
         skip_images_if_compressed=False,
         allowed_extensions=None,
-        file_skip_lenient=False,
         lenient_punctuation=False,
     ):
         super().__init__()
@@ -3272,11 +3664,7 @@ class FilePreparationThread(_StoppableThread, QThread):
         self.file_skip_keywords = (
             file_skip_keywords if file_skip_keywords is not None else []
         )
-        # Substring matching for the file list, from the "Keyword Matching
-        # Rules" setting (Relaxed (Files)/(Both)). Snapshot on the GUI thread
-        # like the keywords.
-        self.file_skip_lenient = bool(file_skip_lenient)
-        # "Punctuation Matching Rules: Relaxed" — snapshotted from Settings.
+        # "Punctuation Matching Behavior: Relaxed" — snapshotted from Settings.
         self.lenient_punctuation = bool(lenient_punctuation)
         # Optional download option: when a post also offers a compressed
         # archive, its image files are dropped instead of downloaded.
@@ -3330,14 +3718,13 @@ class FilePreparationThread(_StoppableThread, QThread):
         Only file_skip_keywords are checked here -- these are always
         matched against the filename, regardless of any other setting. The
         extension is left out of the match (a file's type is the filetype
-        filter's business), and ``file_skip_lenient`` switches the match to
-        a plain substring hit. Whole-post skip keywords are handled upstream
-        in PostDetectionThread.
+        filter's business). Plain and wildcard keywords both honour the
+        Punctuation Matching Behavior setting. Whole-post skip keywords are
+        handled upstream in PostDetectionThread.
         """
-        return _first_matching_keyword(
+        return _keyword_or_wildcard_match(
             self.file_skip_keywords,
             filename_without_extension(file_name),
-            self.file_skip_lenient,
             self.lenient_punctuation,
         )
 
@@ -3951,6 +4338,8 @@ class CreatorDownloadThread(_StoppableThread, QThread):
         file_numbers=None,
         post_file_counts=None,
         creator_name=None,
+        post_sort_folders=None,
+        link_sort_matches=False,
     ):
         super().__init__()
         self.service = service
@@ -3992,6 +4381,24 @@ class CreatorDownloadThread(_StoppableThread, QThread):
         # it saves one API request per run, and keeps a rate-limited profile
         # fetch from renaming the folder.
         self._known_creator_name = str(creator_name or "").strip()
+        # post id -> every matching keyword folder for that post, primary first.
+        # The tab resolves this from the post facts it already holds, so no
+        # facts are copied into the download thread; a post missing here is
+        # written to the normal creator folder.
+        self.post_sort_folders = {
+            str(post_id): tuple(
+                folders if not isinstance(folders, str) else (folders,)
+            )
+            for post_id, folders in (post_sort_folders or {}).items()
+            if folders
+        }
+        # Opt-in: after a successful write, hardlink the file into every
+        # other folder the post matched. Failures are warnings, never a failed
+        # download (exFAT, FAT and some network shares reject hardlinks).
+        self.link_sort_matches = bool(link_sort_matches)
+        self.linked_sort_files = 0
+        self.failed_sort_links = 0
+        self._sort_link_lock = threading.Lock()
         self.skip_folder_enabled = skip_folder_enabled
         self.skip_folder_threshold = skip_folder_threshold
         self.force_folder_for_compressed = force_folder_for_compressed
@@ -4324,6 +4731,76 @@ class CreatorDownloadThread(_StoppableThread, QThread):
             candidate = f"{base_name}_{counter}"
             counter += 1
 
+    def _creator_folder_for(self, folder):
+        """Return the creator folder for *folder*, which may already be it."""
+        creator_folder_name = (
+            f"{self.creator_id}_{self.creator_name or self.creator_id}"
+        )
+        norm_folder = os.path.normpath(folder)
+        if os.path.basename(norm_folder) == creator_folder_name:
+            return norm_folder
+        return os.path.join(folder, creator_folder_name)
+
+    def _sort_folders_for_post(self, post_id):
+        """Every keyword folder this post matched, primary first."""
+        return self.post_sort_folders.get(str(post_id), ())
+
+    def _link_destination(self, dest_dir, filename):
+        """A free path for an extra hardlink, never replacing an existing one."""
+        stem, extension = os.path.splitext(filename)
+        with self._reserved_paths_lock:
+            candidate = os.path.join(dest_dir, filename)
+            counter = 1
+            while os.path.exists(candidate) or candidate in self._reserved_paths:
+                candidate = os.path.join(dest_dir, f"{stem}_{counter}{extension}")
+                counter += 1
+            self._reserved_paths.add(candidate)
+            return candidate
+
+    def _link_extra_sort_copies(self, post_id, source_path, filename, folder=None):
+        """Hardlink a finished file into every other folder its post matched.
+
+        The primary copy already exists at *source_path*; this only creates
+        the extra names. A failed link is a warning, never a failed download:
+        some filesystems (exFAT, FAT, network shares) reject hardlinks.
+        """
+        if not self.link_sort_matches:
+            return 0
+        matches = self._sort_folders_for_post(post_id)
+        if len(matches) < 2 or not source_path or not os.path.exists(source_path):
+            return 0
+        creator_folder = self._creator_folder_for(
+            folder if folder is not None else self.download_folder
+        )
+        created = 0
+        for folder_name in matches[1:]:
+            dest_dir = os.path.join(creator_folder, folder_name)
+            existing = os.path.join(dest_dir, filename)
+            try:
+                if os.path.exists(existing):
+                    # Already linked by an earlier run: leave it alone instead
+                    # of adding _1/_2 names on every re-run.
+                    if os.path.samefile(existing, source_path):
+                        continue
+                os.makedirs(dest_dir, exist_ok=True)
+                os.link(source_path, self._link_destination(dest_dir, filename))
+                created += 1
+            except OSError as e:
+                with self._sort_link_lock:
+                    self.failed_sort_links += 1
+                self._safe_emit(
+                    self.log,
+                    translate(
+                        "log_warning",
+                        translate("sort_link_failed", filename, folder_name, str(e)),
+                    ),
+                    "WARNING",
+                )
+        if created:
+            with self._sort_link_lock:
+                self.linked_sort_files += created
+        return created
+
     def generate_filename_and_folder(
         self,
         file_url,
@@ -4406,30 +4883,33 @@ class CreatorDownloadThread(_StoppableThread, QThread):
         # Determine the target folder first: which template names this file
         # depends on whether it lands in a folder of its own or in one shared
         # with other posts.
-        # Creator folder name
+        # The creator folder is what the tab opens; a sorted post may instead
+        # go into a keyword folder created inside it, which then acts as its base.
         creator_folder_name = (
             f"{self.creator_id}_{self.creator_name or self.creator_id}"
         )
-        # Determine creator_folder: if `folder` already ends with the creator folder
-        # (e.g., passed as the creator_folder in the thread), don't append it again.
         norm_folder = os.path.normpath(folder)
         if os.path.basename(norm_folder) == creator_folder_name:
             creator_folder = norm_folder
         else:
             creator_folder = os.path.join(folder, creator_folder_name)
-        # Remember it so the tab can offer to open it (see
-        # _announce_creator_folder).
         self._creator_folder = creator_folder
+        matches = (
+            (getattr(self, "post_sort_folders", None) or {}).get(str(post_id)) or ()
+        )
+        base_folder = (
+            os.path.join(creator_folder, matches[0]) if matches else creator_folder
+        )
 
         # ``post_folder_name`` stays None whenever the file lands in a folder
         # that can also hold files of other posts: single_folder,
         # by_file_type, or a per-post download whose post folder was skipped.
         post_folder_name = None
         if strategy == "single_folder":
-            target_folder = creator_folder
+            target_folder = base_folder
         elif strategy == "by_file_type":
             ext_folder = (file_ext.lstrip(".") or "other").lower()
-            target_folder = os.path.join(creator_folder, ext_folder)
+            target_folder = os.path.join(base_folder, ext_folder)
         else:  # per_post (default)
             # Check if skip-folder toggle is on and this post has few enough files
             post_file_count = _thread_post_file_count(self, post_id)
@@ -4440,12 +4920,12 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                 and not (self.force_folder_for_compressed and is_compressed_file)
             )
             if skip_folder_applies:
-                target_folder = creator_folder
+                target_folder = base_folder
             else:
                 post_folder_name = self.get_post_folder_name(
-                    post_id, post_title_safe, creator_folder
+                    post_id, post_title_safe, base_folder
                 )
-                target_folder = os.path.join(creator_folder, post_folder_name)
+                target_folder = os.path.join(base_folder, post_folder_name)
 
         # Pick the template for the folder this file lands in. A post folder
         # keeps its post's files together on its own; a shared folder has to be
@@ -4490,13 +4970,21 @@ class CreatorDownloadThread(_StoppableThread, QThread):
         except Exception:
             strategy = "per_post"
 
-        # Normalize creator_folder path
+        # A sorted post keeps its description beside its files: the keyword folder
+        # is the base for every strategy, exactly like the creator folder
+        # would be otherwise.
         creator_folder = os.path.normpath(creator_folder)
+        matches = (
+            (getattr(self, "post_sort_folders", None) or {}).get(str(post_id)) or ()
+        )
+        base_folder = (
+            os.path.join(creator_folder, matches[0]) if matches else creator_folder
+        )
 
         if strategy == "by_file_type":
-            return os.path.join(creator_folder, "txt")
+            return os.path.join(base_folder, "txt")
         elif strategy == "single_folder":
-            return creator_folder
+            return base_folder
         else:  # per_post
             # Respect skip-folder toggle for description files too, and mirror
             # the file rule exactly: an archive forces the post folder, so the
@@ -4513,10 +5001,10 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                 and not (self.force_folder_for_compressed and post_has_archive)
             )
             if skip_folder_applies:
-                return creator_folder
+                return base_folder
             return os.path.join(
-                creator_folder,
-                self.get_post_folder_name(post_id, post_title, creator_folder),
+                base_folder,
+                self.get_post_folder_name(post_id, post_title, base_folder),
             )
 
     async def download_post_text_if_needed(self, post_id, post_folder):
@@ -4561,6 +5049,11 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                         pass
                     with open(desc_path, "w", encoding="utf-8") as f:
                         f.write(text)
+                    # Keep every matched keyword folder self-contained: the
+                    # description follows the files into the extra folders.
+                    linker = getattr(self, "_link_extra_sort_copies", None)
+                    if callable(linker):
+                        linker(post_id, desc_path, desc_filename)
                     self._safe_emit(
                         self.log,
                         translate(
@@ -4751,7 +5244,12 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                         with self.completed_files_lock:
                             self.completed_files.add(file_url)
                         # A hash hit means the file (and so the folder) is
-                        # already on disk.
+                        # already on disk. Link it into the other matched
+                        # folders too, so a rule added since the first run (or
+                        # a deleted link) is repaired without downloading.
+                        linker = getattr(self, "_link_extra_sort_copies", None)
+                        if callable(linker):
+                            linker(post_id, existing_path, filename, folder)
                         self._announce_creator_folder()
                         self.check_post_completion(file_url)
                         return
@@ -5009,6 +5507,11 @@ class CreatorDownloadThread(_StoppableThread, QThread):
                 self.hash_db.store(
                     url_hash, full_path, file_hash, file_url, downloaded_size
                 )
+                # The primary copy is on disk; give every other matched folder
+                # a hardlink to it when the option is on.
+                linker = getattr(self, "_link_extra_sort_copies", None)
+                if callable(linker):
+                    linker(post_id, full_path, filename, folder)
                 # The file is on disk now, so this post was last downloaded
                 # today.
                 self._record_post_download(post_id)
@@ -5373,6 +5876,21 @@ class CreatorDownloadThread(_StoppableThread, QThread):
 
         self._log_rate_limit_summary()
 
+        if getattr(self, "linked_sort_files", 0) or getattr(
+            self, "failed_sort_links", 0
+        ):
+            linked = getattr(self, "linked_sort_files", 0)
+            failed = getattr(self, "failed_sort_links", 0)
+            level = "WARNING" if failed else "INFO"
+            self._safe_emit(
+                self.log,
+                translate(
+                    "log_info" if level == "INFO" else "log_warning",
+                    translate("sort_links_summary", linked, failed),
+                ),
+                level,
+            )
+
         # Log summary of failed files
         if self.failed_files:
             self._safe_emit(
@@ -5608,6 +6126,523 @@ class _CreatorQueueComposer(QLineEdit):
         menu.deleteLater()
 
 
+class SortRulesDialog(QDialog):
+    """Editor for the Creator tab's keyword sorting rules.
+
+    Works on a copy of the rules and hands them back only when Apply is
+    pressed, so Cancel changes nothing. The dialog is modeless; the tab
+    listens to ``applied``. The preview uses the facts the current fetch
+    stored: a post with no details can still match a rule that looks at its
+    title; other scopes need the details.
+    """
+
+    applied = pyqtSignal()
+
+    def __init__(
+        self,
+        rules,
+        sorting_enabled,
+        link_all,
+        posts,
+        post_search_index,
+        ticked_ids,
+        lenient_punctuation=False,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._rules = [rule for rule in (rules or ()) if isinstance(rule, SortRule)]
+        self._posts = list(posts or ())
+        self._post_search_index = post_search_index or {}
+        self._ticked_ids = {str(post_id) for post_id in (ticked_ids or ())}
+        self._lenient_punctuation = bool(lenient_punctuation)
+        self._loading = False
+
+        self.setWindowTitle(translate("sort_title"))
+        self.setModal(False)
+        self.resize(940, 700)
+        self.setStyleSheet("background: #1A2B4A; color: white;")
+        self._build_ui(sorting_enabled, link_all)
+        self._refresh_list()
+        if self._rules:
+            self._rule_list.setCurrentRow(0)
+        self._load_editor()
+        self._update_preview()
+
+    def _build_ui(self, sorting_enabled, link_all):
+        layout = QVBoxLayout(self)
+
+        header = QHBoxLayout()
+        self._status_label = QLabel()
+        self._status_label.setWordWrap(True)
+        self._status_label.setStyleSheet("color: #8FA6C8;")
+        self._status_label.setText(
+            translate("sort_status_on" if sorting_enabled else "sort_status_off")
+        )
+        header.addWidget(self._status_label, stretch=1)
+
+        self._help_button = QPushButton(
+            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+        )
+        self._help_button.setFixedSize(26, 26)
+        self._help_button.setStyleSheet(
+            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
+        )
+        self._help_button.setToolTip(translate("sort_help_title"))
+        self._help_button.clicked.connect(self._toggle_help)
+        header.addWidget(self._help_button)
+        layout.addLayout(header)
+
+        self._pages = QStackedWidget()
+        self._editor_page = QWidget()
+        editor_layout = QVBoxLayout(self._editor_page)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._link_all_check = QCheckBox(translate("sort_link_all"))
+        self._link_all_check.setChecked(bool(link_all))
+        self._link_all_check.setStyleSheet("color: white;")
+        self._link_all_check.setToolTip(translate("sort_link_all_tooltip"))
+        self._link_all_check.stateChanged.connect(self._update_preview)
+        editor_layout.addWidget(self._link_all_check)
+
+        middle = QHBoxLayout()
+        left = QVBoxLayout()
+        rules_label = QLabel(translate("sort_rules_label"))
+        rules_label.setStyleSheet("color: white;")
+        left.addWidget(rules_label)
+
+        self._no_rules_label = QLabel(translate("sort_no_rules_hint"))
+        self._no_rules_label.setStyleSheet("color: #8FA6C8;")
+        self._no_rules_label.setWordWrap(True)
+        self._no_rules_label.setVisible(not self._rules)
+        left.addWidget(self._no_rules_label)
+
+        self._rule_list = QListWidget()
+        self._rule_list.setStyleSheet("background: #2A3B5A; border-radius: 5px;")
+        self._rule_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self._rule_list.currentRowChanged.connect(self._on_rule_selected)
+        self._rule_list.itemChanged.connect(self._on_item_changed)
+        left.addWidget(self._rule_list)
+
+        rule_buttons = QHBoxLayout()
+        self._add_btn = QPushButton(translate("sort_rule_add"))
+        self._add_btn.clicked.connect(self._add_rule)
+        self._remove_btn = QPushButton(translate("sort_rule_remove"))
+        self._remove_btn.clicked.connect(self._remove_rule)
+        self._up_btn = QPushButton(translate("sort_rule_up"))
+        self._up_btn.clicked.connect(lambda: self._move_rule(-1))
+        self._down_btn = QPushButton(translate("sort_rule_down"))
+        self._down_btn.clicked.connect(lambda: self._move_rule(1))
+        for button in (self._add_btn, self._remove_btn, self._up_btn, self._down_btn):
+            button.setStyleSheet(_RUN_BUTTON_STYLE)
+            rule_buttons.addWidget(button)
+        rule_buttons.addStretch()
+        left.addLayout(rule_buttons)
+        middle.addLayout(left, stretch=3)
+
+        self._editor_group = QGroupBox()
+        self._editor_group.setStyleSheet("QGroupBox { color: white; }")
+        form = QGridLayout()
+        form.addWidget(QLabel(translate("sort_rule_folder")), 0, 0)
+        self._folder_edit = QLineEdit()
+        self._folder_edit.setPlaceholderText(translate("sort_rule_folder_placeholder"))
+        self._folder_edit.textChanged.connect(self._commit_editor)
+        form.addWidget(self._folder_edit, 0, 1, 1, 3)
+
+        form.addWidget(QLabel(translate("sort_rule_values")), 1, 0)
+        self._values_edit = QLineEdit()
+        self._values_edit.setPlaceholderText(
+            translate("sort_rule_values_placeholder")
+        )
+        self._values_edit.textChanged.connect(self._commit_editor)
+        form.addWidget(self._values_edit, 1, 1, 1, 2)
+        self._match_combo = QComboBox()
+        self._match_combo.addItem(translate("sort_rule_any"), "any")
+        self._match_combo.addItem(translate("sort_rule_all"), "all")
+        self._match_combo.currentIndexChanged.connect(self._commit_editor)
+        form.addWidget(self._match_combo, 1, 3)
+
+        form.addWidget(QLabel(translate("sort_rule_scopes")), 2, 0)
+        scopes_layout = QGridLayout()
+        self._scope_checks = {}
+        for index, (scope, key) in enumerate(
+            (
+                ("title", "sort_scope_title"),
+                ("tags", "sort_scope_tags"),
+                ("filenames", "sort_scope_filenames"),
+                ("description", "sort_scope_description"),
+            )
+        ):
+            box = QCheckBox(translate(key))
+            box.setStyleSheet("color: white;")
+            box.stateChanged.connect(self._commit_editor)
+            scopes_layout.addWidget(box, index // 2, index % 2)
+            self._scope_checks[scope] = box
+        form.addLayout(scopes_layout, 2, 1, 1, 3)
+        self._editor_group.setLayout(form)
+        middle.addWidget(self._editor_group, stretch=4)
+        editor_layout.addLayout(middle, stretch=1)
+
+        preview_group = QGroupBox(translate("sort_preview_label"))
+        preview_layout = QVBoxLayout()
+        self._preview = QTextEdit()
+        self._preview.setReadOnly(True)
+        self._preview.setStyleSheet("background: #2A3B5A; border-radius: 5px;")
+        self._preview.setFixedHeight(130)
+        preview_layout.addWidget(self._preview)
+        preview_group.setLayout(preview_layout)
+        editor_layout.addWidget(preview_group)
+
+        buttons_row = QHBoxLayout()
+        buttons_row.addStretch()
+        self._apply_btn = QPushButton(translate("sort_apply"))
+        self._apply_btn.clicked.connect(self._apply)
+        cancel_btn = QPushButton(translate("cancel"))
+        cancel_btn.clicked.connect(self.reject)
+        for button in (self._apply_btn, cancel_btn):
+            button.setStyleSheet(_RUN_BUTTON_STYLE)
+            buttons_row.addWidget(button)
+        editor_layout.addLayout(buttons_row)
+
+        self._pages.addWidget(self._editor_page)
+
+        self._help_page = QWidget()
+        help_layout = QVBoxLayout(self._help_page)
+        help_layout.setContentsMargins(0, 0, 0, 0)
+        self._help_browser = QTextBrowser()
+        self._help_browser.setOpenExternalLinks(False)
+        self._help_browser.setStyleSheet(
+            "background: #2A3B5A; border-radius: 5px; color: white;"
+        )
+        self._help_browser.setHtml(translate("sort_help_text"))
+        help_layout.addWidget(self._help_browser)
+        help_row = QHBoxLayout()
+        help_row.addStretch()
+        self._help_back_btn = QPushButton(translate("sort_help_back"))
+        self._help_back_btn.setStyleSheet(_RUN_BUTTON_STYLE)
+        self._help_back_btn.clicked.connect(self._toggle_help)
+        help_row.addWidget(self._help_back_btn)
+        help_layout.addLayout(help_row)
+        self._pages.addWidget(self._help_page)
+
+        layout.addWidget(self._pages)
+
+    def rules(self):
+        """The edited rules, normalised when Apply was pressed."""
+        return list(self._rules)
+
+    def link_all(self):
+        return self._link_all_check.isChecked()
+
+    def set_sorting_enabled(self, enabled):
+        """Keep the read-only status line in step with the page checkbox."""
+        self._status_label.setText(
+            translate("sort_status_on" if enabled else "sort_status_off")
+        )
+
+    def set_lenient_punctuation(self, lenient):
+        """Refresh the preview when Settings changes the punctuation rule."""
+        self._lenient_punctuation = bool(lenient)
+        self._update_preview()
+
+    # ------------------------------------------------------------------
+    # Rule list and editor
+    # ------------------------------------------------------------------
+
+    def _selected_index(self):
+        return self._rule_list.currentRow()
+
+    def _format_values(self, values):
+        """Display values with quotes around entries containing a comma."""
+        rendered = []
+        for value in values:
+            text = str(value)
+            if "," in text or '"' in text:
+                rendered.append('"' + text.replace('"', '\\"') + '"')
+            else:
+                rendered.append(text)
+        return ", ".join(rendered)
+
+    def _rule_summary(self, index, rule):
+        values = self._format_values(rule.values) or translate(
+            "sort_rule_no_values"
+        )
+        summary = translate("sort_rule_summary", index + 1, rule.folder, values)
+        scope_labels = [
+            translate(SORT_SCOPE_LABELS[scope])
+            for scope in sorted(rule.scopes)
+            if scope in SORT_SCOPE_LABELS
+        ] or [translate("sort_scope_tags")]
+        summary += f" [{', '.join(scope_labels)}]"
+        if rule.match_all:
+            summary += f" ({translate('sort_rule_all')})"
+        return summary
+
+    def _refresh_item(self, index):
+        if not (0 <= index < len(self._rules)):
+            return
+        if index >= self._rule_list.count():
+            return
+        self._loading = True
+        try:
+            item = self._rule_list.item(index)
+            item.setText(self._rule_summary(index, self._rules[index]))
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if self._rules[index].enabled
+                else Qt.CheckState.Unchecked
+            )
+        finally:
+            self._loading = False
+
+    def _refresh_list(self, select=None):
+        if select is None:
+            select = self._rule_list.currentRow()
+        self._loading = True
+        try:
+            self._rule_list.clear()
+            for index, rule in enumerate(self._rules):
+                item = QListWidgetItem(self._rule_summary(index, rule))
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(
+                    Qt.CheckState.Checked
+                    if rule.enabled
+                    else Qt.CheckState.Unchecked
+                )
+                self._rule_list.addItem(item)
+        finally:
+            self._loading = False
+        if self._rules:
+            row = min(max(select, 0), len(self._rules) - 1)
+            self._rule_list.setCurrentRow(row)
+        self._no_rules_label.setVisible(not self._rules)
+        self._update_preview()
+
+    def _on_rule_selected(self, row):
+        if self._loading:
+            return
+        self._load_editor()
+
+    def _on_item_changed(self, item):
+        if self._loading:
+            return
+        index = self._rule_list.row(item)
+        if 0 <= index < len(self._rules):
+            self._rules[index] = self._rules[index]._replace(
+                enabled=item.checkState() == Qt.CheckState.Checked
+            )
+            self._update_preview()
+
+    def _set_editor_enabled(self, enabled):
+        self._editor_group.setEnabled(enabled)
+
+    def _load_editor(self):
+        row = self._selected_index()
+        has_rule = 0 <= row < len(self._rules)
+        self._loading = True
+        try:
+            if has_rule:
+                rule = self._rules[row]
+                self._folder_edit.setText(rule.folder)
+                self._values_edit.setText(self._format_values(rule.values))
+                self._match_combo.setCurrentIndex(
+                    self._match_combo.findData("all" if rule.match_all else "any")
+                )
+                for scope, box in self._scope_checks.items():
+                    box.setChecked(scope in rule.scopes)
+            else:
+                self._folder_edit.clear()
+                self._values_edit.clear()
+                self._match_combo.setCurrentIndex(0)
+                for box in self._scope_checks.values():
+                    box.setChecked(False)
+        finally:
+            self._loading = False
+        self._set_editor_enabled(has_rule)
+        self._no_rules_label.setVisible(not self._rules)
+
+    def _commit_editor(self, *_args):
+        if self._loading:
+            return
+        row = self._selected_index()
+        if not (0 <= row < len(self._rules)):
+            return
+        values = tuple(parse_keyword_values(self._values_edit.text()))
+        scopes = frozenset(
+            scope for scope, box in self._scope_checks.items() if box.isChecked()
+        ) or frozenset({"tags"})
+        self._rules[row] = SortRule(
+            folder=self._folder_edit.text().strip(),
+            values=values,
+            match_all=self._match_combo.currentData() == "all",
+            scopes=scopes,
+            enabled=self._rules[row].enabled,
+        )
+        self._refresh_item(row)
+        self._update_preview()
+
+    def _add_rule(self):
+        existing = {
+            normalize_sort_folder(rule.folder)[0].casefold()
+            for rule in self._rules
+        }
+        base = translate("sort_new_folder")
+        name = base
+        number = 2
+        while normalize_sort_folder(name)[0].casefold() in existing:
+            name = f"{base} {number}"
+            number += 1
+        self._rules.append(SortRule(folder=name))
+        self._refresh_list(select=len(self._rules) - 1)
+        self._load_editor()
+        self._folder_edit.setFocus()
+        self._folder_edit.selectAll()
+
+    def _remove_rule(self):
+        row = self._selected_index()
+        if not (0 <= row < len(self._rules)):
+            return
+        del self._rules[row]
+        self._refresh_list(select=min(row, len(self._rules) - 1))
+        self._load_editor()
+
+    def _move_rule(self, delta):
+        row = self._selected_index()
+        target = row + delta
+        if not (0 <= row < len(self._rules) and 0 <= target < len(self._rules)):
+            return
+        self._rules[row], self._rules[target] = (
+            self._rules[target],
+            self._rules[row],
+        )
+        self._refresh_list(select=target)
+        self._load_editor()
+
+    # ------------------------------------------------------------------
+    # Preview and validation
+    # ------------------------------------------------------------------
+
+    def _preview_posts(self):
+        """Ticked posts when there are any, otherwise every loaded post."""
+        ticked = [
+            (title, (post_id, thumbnail))
+            for title, (post_id, thumbnail) in self._posts
+            if str(post_id) in self._ticked_ids
+        ]
+        return ticked or self._posts
+
+    def _update_preview(self, *_args):
+        if not hasattr(self, "_preview"):
+            return
+        usable = []
+        for rule in self._rules:
+            folder, problem = normalize_sort_folder(rule.folder)
+            values = tuple(
+                value
+                for value in rule.values
+                if not wildcard_value_is_unusable(value)
+            )
+            if problem or not rule.enabled or not values:
+                continue
+            usable.append(rule._replace(folder=folder, values=values))
+        posts = self._preview_posts()
+        if not posts:
+            self._preview.setPlainText(translate("sort_preview_none"))
+            return
+        routing = resolve_sort_folders(
+            posts,
+            self._post_search_index,
+            usable,
+            self._lenient_punctuation,
+        )
+        lines = [
+            translate("sort_preview_line", folder, count)
+            for folder, count in sorted(routing.counts.items())
+        ]
+        lines.append(translate("sort_preview_unsorted", routing.unsorted))
+        if routing.missing_facts:
+            lines.append(translate("sort_preview_missing", routing.missing_facts))
+        if routing.multi_match:
+            lines.append(translate("sort_preview_multi", routing.multi_match))
+        extra_links = sum(
+            len(matches) - 1 for matches in routing.folders.values()
+        )
+        if self._link_all_check.isChecked() and extra_links:
+            lines.append(translate("sort_preview_extra_links", extra_links))
+        self._preview.setPlainText("\n".join(lines))
+
+    def _validation_problems(self):
+        problems = []
+        seen = set()
+        for index, rule in enumerate(self._rules):
+            if not rule.enabled and not rule.folder and not rule.values:
+                continue
+            folder, problem = normalize_sort_folder(rule.folder)
+            if problem:
+                problems.append(translate("sort_invalid_folder", index + 1))
+                continue
+            usable_values = [
+                value
+                for value in rule.values
+                if not wildcard_value_is_unusable(value)
+            ]
+            if not usable_values:
+                problems.append(translate("sort_missing_values", index + 1))
+            for value in rule.values:
+                if wildcard_value_is_unusable(value):
+                    problems.append(
+                        translate("sort_wildcard_only_value", index + 1, value)
+                    )
+            key = folder.casefold()
+            if key in seen:
+                problems.append(
+                    translate("sort_duplicate_folder", index + 1, folder)
+                )
+            seen.add(key)
+        return problems
+
+    def _validate_and_normalise(self):
+        """Reject unusable rules; otherwise store their sanitised names."""
+        problems = self._validation_problems()
+        if problems:
+            QMessageBox.warning(
+                self,
+                translate("sort_invalid_title"),
+                translate("sort_invalid_text", "\n".join(problems)),
+            )
+            return False
+        cleaned = []
+        for rule in self._rules:
+            if not rule.folder and not rule.values:
+                # A row added and then left blank is not worth keeping.
+                continue
+            folder, _problem = normalize_sort_folder(rule.folder)
+            cleaned.append(rule._replace(folder=folder))
+        self._rules = cleaned
+        return True
+
+    def _apply(self):
+        if not self._validate_and_normalise():
+            return
+        self.applied.emit()
+        self.accept()
+
+    def _toggle_help(self):
+        if self._pages.currentWidget() is self._help_page:
+            self._pages.setCurrentWidget(self._editor_page)
+            self._help_button.setIcon(
+                qta.icon("fa5s.info-circle", color="#A0C0FF")
+            )
+            self._help_button.setToolTip(translate("sort_help_title"))
+        else:
+            self._pages.setCurrentWidget(self._help_page)
+            self._help_button.setIcon(
+                qta.icon("fa5s.arrow-left", color="#A0C0FF")
+            )
+            self._help_button.setToolTip(translate("sort_help_back"))
+
+
 class _CreatorQueueRow(QWidget):
     """A queue row whose empty area means "load this creator".
 
@@ -5714,6 +6749,16 @@ class CreatorDownloaderTab(QWidget):
         # stored profile is applied, so "back to default" works even with
         # nothing saved. Empty until then.
         self._builtin_config: dict = {}
+        # Tag-folder sorting: rules and the opt-in hardlink flag. Rules are
+        # SortRule tuples, so a config profile can carry them as plain dicts.
+        self._sort_rules = []
+        self._sort_link_all = False
+        # The modeless rules editor, reused while it is open.
+        self._sort_rules_dialog = None
+        # The run's routing snapshot, reused by Retry Failed Downloads so a
+        # rule edit between runs cannot move the files that failed.
+        self._last_run_post_sort_folders = {}
+        self._last_run_link_sort_matches = False
         self.post_widget_cache = (
             {}
         )  # Maps post_title -> (item, widget) for O(1) lookups
@@ -5827,10 +6872,10 @@ class CreatorDownloaderTab(QWidget):
             self._parent.settings_tab.settings_applied.connect(
                 self._refresh_show_only_found_filetypes
             )
-            # Keyword matching lives in Settings now; a change must re-run the
+            # Matching rules live in Settings now; a change must re-run the
             # list pass so the rows and counters match the new rules.
             self._parent.settings_tab.settings_applied.connect(
-                self._on_keyword_settings_applied
+                self._on_matching_settings_applied
             )
         self._refresh_verbose_logging()
         self._refresh_show_only_found_filetypes()
@@ -5857,8 +6902,11 @@ class CreatorDownloaderTab(QWidget):
         self._found_filetypes_mode = mode
         self._render_creator_ext_checks()
 
-    def _on_keyword_settings_applied(self):
-        """Re-filter the loaded list after keyword-matching settings change."""
+    def _on_matching_settings_applied(self):
+        """Re-filter after the punctuation rule changes and refresh previews."""
+        dialog = getattr(self, "_sort_rules_dialog", None)
+        if dialog is not None:
+            dialog.set_lenient_punctuation(self._punctuation_matching_lenient())
         fetch = getattr(self, "post_detection_thread", None)
         if fetch is not None and fetch.isRunning():
             # The fetch owns the list and runs its own pass at the end.
@@ -6063,6 +7111,22 @@ class CreatorDownloaderTab(QWidget):
         skip_images_layout.addWidget(self.creator_skip_images_info_btn)
         skip_images_layout.addStretch()
         creator_options_layout.addLayout(skip_images_layout)
+
+        # Keyword folders: destination rules for keyword matches. The rules
+        # live in the config profile; this row is the on/off plus the editor.
+        sort_layout = QHBoxLayout()
+        sort_layout.setContentsMargins(0, 0, 0, 0)
+        self.creator_sort_enabled_check = QCheckBox()
+        self.creator_sort_enabled_check.setChecked(False)
+        self.creator_sort_enabled_check.setStyleSheet("color: white;")
+        sort_layout.addWidget(self.creator_sort_enabled_check)
+
+        self.creator_sort_rules_btn = QPushButton()
+        self.creator_sort_rules_btn.setStyleSheet(_RUN_BUTTON_STYLE)
+        self.creator_sort_rules_btn.clicked.connect(self._open_sort_rules_dialog)
+        sort_layout.addWidget(self.creator_sort_rules_btn)
+        sort_layout.addStretch()
+        creator_options_layout.addLayout(sort_layout)
 
         self.creator_ext_group = QGroupBox()
         self.creator_ext_group.setStyleSheet("QGroupBox { color: white; }")
@@ -6766,6 +7830,14 @@ class CreatorDownloaderTab(QWidget):
         self.creator_skip_images_info_btn.setToolTip(
             translate("skip_images_info_title")
         )
+        self.creator_sort_enabled_check.setText(translate("sort_by_keyword"))
+        self.creator_sort_enabled_check.setToolTip(
+            translate("sort_by_keyword_tooltip")
+        )
+        self.creator_sort_rules_btn.setText(translate("sort_keyword_rules"))
+        self.creator_sort_rules_btn.setToolTip(
+            translate("sort_keyword_rules_tooltip")
+        )
         self.file_count_help_btn.setToolTip(translate("file_count_help_title"))
         self.file_count_label.setText(translate("file_count_filter"))
         self.file_count_from_edit.setPlaceholderText(
@@ -6958,6 +8030,11 @@ class CreatorDownloaderTab(QWidget):
                 for scope, box in self.search_scope_checkboxes.items()
                 if box.isChecked()
             ),
+            "sorting": {
+                "enabled": self.creator_sort_enabled_check.isChecked(),
+                "link_all": bool(self._sort_link_all),
+                "rules": [sort_rule_to_dict(rule) for rule in self._sort_rules],
+            },
         }
 
     @staticmethod
@@ -6980,14 +8057,15 @@ class CreatorDownloaderTab(QWidget):
         for scope, checkbox in checkboxes.items():
             self._set_config_checkbox(checkbox, scope in wanted)
 
-    def _apply_config(self, config):
+    def _apply_config(self, config, refresh=True):
         """Apply a profile to the page's widgets.
 
         Signals are blocked on every widget written, so restoring six filter
         fields cannot fire six filter passes; one pass runs at the end when a
         post list is already loaded. A key the profile does not contain is
         left alone, so a profile written by an older version only restores
-        what it actually describes.
+        what it actually describes. ``refresh=False`` lets a caller layer
+        several profiles and render once (see ``_load_config_for_creator``).
         """
         if not config:
             return
@@ -7059,10 +8137,20 @@ class CreatorDownloaderTab(QWidget):
                 self.search_scope_checkboxes, config["search_scopes"]
             )
 
+        sorting = config.get("sorting")
+        if isinstance(sorting, dict):
+            if "enabled" in sorting:
+                self._set_config_checkbox(
+                    self.creator_sort_enabled_check, sorting["enabled"]
+                )
+            self._sort_link_all = bool(sorting.get("link_all", False))
+            if "rules" in sorting:
+                self._sort_rules = sort_rules_from_config(sorting)
+
         # A restored filetype tick has to stay visible even when only the
         # types this creator has are shown.
         self._render_creator_ext_checks()
-        if self.all_detected_posts:
+        if refresh and self.all_detected_posts:
             self.filter_items()
 
     def _load_page_config(self):
@@ -7084,37 +8172,46 @@ class CreatorDownloaderTab(QWidget):
 
         Called when a creator is loaded, when its view is cleared, and before
         the fetch reads the Filters box, so the restored filters are the ones
-        the fetch actually uses. A creator profile replaces the default rather
-        than being layered on it; with no creator profile — or with no creator
-        loaded at all — the saved default is what the page returns to, and
-        with neither the built-in page state is.
+        the fetch actually uses.
+
+        The page state is layered rather than replaced: the built-in state is
+        applied first, then the saved page default, then the creator's own
+        profile. Every key is therefore written by at least the built-in
+        layer, so nothing from the **previous** creator can survive - a
+        profile saved before a key existed gets the default for that key
+        instead of inheriting the last creator's value. Only the final layer
+        triggers the filter pass.
         """
         store = self._config_store()
         service, creator_id = self._current_creator_identity()
-        config = None
-        from_creator = False
+        page_default = None
+        creator_config = None
+        self._close_sort_rules_dialog()
         if store is not None:
             if self.current_creator_url:
                 try:
-                    config = store.get_creator_config(service, creator_id)
+                    creator_config = store.get_creator_config(service, creator_id)
                 except Exception as e:
                     self.append_log_to_console(
                         translate("log_warning", translate("config_load_failed", e)),
                         "WARNING",
                     )
-                if config is not None:
-                    from_creator = True
-            if not from_creator:
-                try:
-                    config = store.get_page_default()
-                except Exception:
-                    config = None
-        if from_creator:
+            try:
+                page_default = store.get_page_default()
+            except Exception:
+                page_default = None
+        if creator_config is not None:
             self.append_log_to_console(
                 translate("log_info", translate("creator_config_loaded", creator_id)),
                 "INFO",
             )
-        self._apply_config(config or self._builtin_config)
+        self._apply_config(self._builtin_config, refresh=False)
+        if page_default:
+            self._apply_config(page_default, refresh=False)
+        if creator_config:
+            self._apply_config(creator_config, refresh=False)
+        if self.all_detected_posts:
+            self.filter_items()
         self._refresh_config_buttons()
 
     def _refresh_config_buttons(self):
@@ -7133,9 +8230,160 @@ class CreatorDownloaderTab(QWidget):
         creator_btn.setEnabled(bool(self.current_creator_url) and not busy)
 
     def _config_warnings(self):
-        """Return the translation keys of filter entries a save cannot store."""
+        """Return the translation keys of entries a save cannot store."""
         _filters, warnings = self._post_filters_from_widgets()
+        # A wildcard-only skip keyword is ignored with a run-time warning;
+        # it does not make the rest of the profile unsavable. Sorting rules
+        # still reject it (sort_config_wildcard_only below).
+        warnings = [
+            key for key in warnings if key != "wildcard_only_keyword_ignored"
+        ]
+        return warnings + self._sorting_warnings()
+
+    def _sorting_warnings(self):
+        """Translation keys for sorting rules a save cannot keep."""
+        warnings = []
+        seen = set()
+        for rule in self._sort_rules:
+            if not rule.enabled and not rule.folder and not rule.values:
+                continue
+            folder, problem = normalize_sort_folder(rule.folder)
+            if problem:
+                warnings.append("sort_config_invalid_folder")
+                continue
+            usable_values = [
+                value
+                for value in rule.values
+                if not wildcard_value_is_unusable(value)
+            ]
+            if not usable_values:
+                warnings.append("sort_config_missing_values")
+            elif len(usable_values) != len(rule.values):
+                warnings.append("sort_config_wildcard_only")
+            key = folder.casefold()
+            if key in seen:
+                warnings.append("sort_config_duplicate_folder")
+            seen.add(key)
         return warnings
+
+    def _usable_sort_rules(self):
+        """The enabled rules with a clean folder and usable values."""
+        rules = []
+        for rule in self._sort_rules:
+            folder, problem = normalize_sort_folder(rule.folder)
+            values = tuple(
+                value
+                for value in rule.values
+                if not wildcard_value_is_unusable(value)
+            )
+            if problem or not rule.enabled or not values:
+                continue
+            rules.append(rule._replace(folder=folder, values=values))
+        return rules
+
+    def _resolve_run_sort_folders(self, available_post_ids=None):
+        """Route the posts that actually have files for this run.
+
+        ``available_post_ids`` comes from the prepared file list, so a post
+        whose files were all removed by "Skip Files" is not counted in the
+        summary or given an empty folder. Returns ``(folders, link_all)``.
+        """
+        if not self.creator_sort_enabled_check.isChecked():
+            return {}, False
+        rules = self._usable_sort_rules()
+        if not rules:
+            self.append_log_to_console(
+                translate("log_info", translate("sort_log_no_rules")), "INFO"
+            )
+            return {}, False
+        ticked = {str(post_id) for post_id in self.posts_to_download}
+        if available_post_ids is not None:
+            ticked &= {str(post_id) for post_id in available_post_ids}
+        posts = [
+            (title, (post_id, thumbnail))
+            for title, (post_id, thumbnail) in self.all_detected_posts
+            if str(post_id) in ticked
+        ]
+        routing = resolve_sort_folders(
+            posts,
+            self.post_search_index,
+            rules,
+            self._punctuation_matching_lenient(),
+        )
+        if routing.counts:
+            counts = ", ".join(
+                translate("sort_log_counts", folder, count)
+                for folder, count in sorted(routing.counts.items())
+            )
+            self.append_log_to_console(
+                translate(
+                    "log_info",
+                    translate(
+                        "sort_log_summary",
+                        counts,
+                        routing.unsorted,
+                        routing.missing_facts,
+                    ),
+                ),
+                "INFO",
+            )
+        else:
+            self.append_log_to_console(
+                translate("log_info", translate("sort_log_none")), "INFO"
+            )
+        if self._sort_link_all and routing.multi_match:
+            self.append_log_to_console(
+                translate(
+                    "log_debug", translate("sort_log_multi", routing.multi_match)
+                ),
+                "DEBUG",
+            )
+        return routing.folders, bool(self._sort_link_all)
+
+    def _open_sort_rules_dialog(self):
+        """Show the keyword-rules editor, reusing it when already open."""
+        dialog = getattr(self, "_sort_rules_dialog", None)
+        if dialog is not None and dialog.isVisible():
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        dialog = SortRulesDialog(
+            rules=list(self._sort_rules),
+            sorting_enabled=self.creator_sort_enabled_check.isChecked(),
+            link_all=self._sort_link_all,
+            posts=list(self.all_detected_posts),
+            post_search_index=self.post_search_index,
+            ticked_ids=set(self.posts_to_download),
+            lenient_punctuation=self._punctuation_matching_lenient(),
+            parent=self,
+        )
+        dialog.applied.connect(lambda: self._apply_sort_rules_from_dialog(dialog))
+        dialog.finished.connect(lambda _result: self._forget_sort_rules_dialog(dialog))
+        self.creator_sort_enabled_check.toggled.connect(
+            dialog.set_sorting_enabled
+        )
+        self._sort_rules_dialog = dialog
+        dialog.show()
+
+    def _apply_sort_rules_from_dialog(self, dialog):
+        """Take the rules from an accepted modeless editor."""
+        self._sort_rules = dialog.rules()
+        self._sort_link_all = dialog.link_all()
+        self.append_log_to_console(
+            translate("log_info", translate("sort_rules_saved", len(self._sort_rules))),
+            "INFO",
+        )
+
+    def _forget_sort_rules_dialog(self, dialog):
+        if getattr(self, "_sort_rules_dialog", None) is dialog:
+            self._sort_rules_dialog = None
+        dialog.deleteLater()
+
+    def _close_sort_rules_dialog(self):
+        """Close the editor when the page it describes is changing."""
+        dialog = getattr(self, "_sort_rules_dialog", None)
+        if dialog is not None and dialog.isVisible():
+            dialog.close()
 
     def _warn_config_warnings(self, warnings):
         """Name the entries that stopped a save; nothing is stored."""
@@ -7317,7 +8565,7 @@ class CreatorDownloaderTab(QWidget):
             self.filter_items()
 
     def _show_info(self, title_key, text_key):
-        """Show a translated one-paragraph help dialog."""
+        """Show a translated help dialog (the text may be rich HTML)."""
         QMessageBox.information(self, translate(title_key), translate(text_key))
 
     def show_downloader_box_info(self):
@@ -8404,6 +9652,8 @@ class CreatorDownloaderTab(QWidget):
 
     def set_fetching_ui_state(self, is_fetching):
         """Enable/disable UI elements during fetching."""
+        if is_fetching:
+            self._close_sort_rules_dialog()
         # Main action buttons
         self.creator_download_btn.setEnabled(not is_fetching)
         self.creator_cancel_btn.setEnabled(is_fetching)
@@ -8457,6 +9707,10 @@ class CreatorDownloaderTab(QWidget):
         text_option = getattr(self, "creator_download_text_check", None)
         if text_option is not None:
             text_option.setEnabled(not is_fetching)
+        # Sorting picks destinations at download time; a fetch rewrites the
+        # list its preview describes, so it is locked with the rest.
+        self.creator_sort_enabled_check.setEnabled(not is_fetching)
+        self.creator_sort_rules_btn.setEnabled(not is_fetching)
 
         # Pagination controls
         self.prev_page_btn.setEnabled(not is_fetching and self.current_page > 1)
@@ -8479,6 +9733,8 @@ class CreatorDownloaderTab(QWidget):
         Only the Cancel button, the log controls and the (greyed) retry button
         remain clickable while downloading.
         """
+        if is_downloading:
+            self._close_sort_rules_dialog()
         enabled = not is_downloading
 
         # Action buttons
@@ -8506,6 +9762,8 @@ class CreatorDownloaderTab(QWidget):
         self.creator_force_compressed_folder_check.setEnabled(enabled)
         self.creator_skip_images_check.setEnabled(enabled)
         self.creator_skip_images_info_btn.setEnabled(enabled)
+        self.creator_sort_enabled_check.setEnabled(enabled)
+        self.creator_sort_rules_btn.setEnabled(enabled)
 
         # Post selection
         self.creator_search_input.setEnabled(enabled)
@@ -8953,9 +10211,7 @@ class CreatorDownloaderTab(QWidget):
             return
 
         file_skip_keywords = self._file_skip_keywords_from_widgets()
-        _lenient_posts, lenient_files, lenient_punctuation = (
-            self._keyword_matching_modes()
-        )
+        lenient_punctuation = self._punctuation_matching_lenient()
 
         self.file_preparation_thread = FilePreparationThread(
             post_ids,
@@ -8967,7 +10223,6 @@ class CreatorDownloaderTab(QWidget):
             self._create_thread_settings(),
             max_concurrent=3,
             file_skip_keywords=file_skip_keywords,
-            file_skip_lenient=lenient_files,
             lenient_punctuation=lenient_punctuation,
             skip_images_if_compressed=(self.creator_skip_images_check.isChecked()),
             # Read on the GUI thread; the workers never touch the boxes.
@@ -9079,6 +10334,8 @@ class CreatorDownloaderTab(QWidget):
         creator_url=None,
         file_numbers=None,
         post_file_counts=None,
+        post_sort_folders=None,
+        link_sort_matches=None,
     ):
         """Create and start a CreatorDownloadThread for the current creator.
 
@@ -9092,6 +10349,23 @@ class CreatorDownloaderTab(QWidget):
         self._refresh_open_folder_button()
         self.files_to_posts_map = dict(files_to_posts_map)
         selected_posts = list(dict.fromkeys(files_to_posts_map.values()))
+
+        # Sorting is decided once per run. `None` means "decide now"; a retry
+        # passes the previous run's snapshot so editing a rule afterwards
+        # cannot move the files that failed.
+        if post_sort_folders is None:
+            available_post_ids = {
+                str(post_id) for post_id in files_to_posts_map.values()
+            }
+            post_sort_folders, link_sort_matches = self._resolve_run_sort_folders(
+                available_post_ids
+            )
+        self._last_run_post_sort_folders = {
+            str(post_id): tuple(folders)
+            for post_id, folders in (post_sort_folders or {}).items()
+            if folders
+        }
+        self._last_run_link_sort_matches = bool(link_sort_matches)
 
         # {file_number} and {post_file_count} are decided once, here, from the
         # full file list. A retry passes the previous run's maps so the failed
@@ -9163,6 +10437,8 @@ class CreatorDownloaderTab(QWidget):
             file_numbers=file_numbers,
             post_file_counts=post_file_counts,
             creator_name=self._creator_names.get(url),
+            post_sort_folders=dict(self._last_run_post_sort_folders),
+            link_sort_matches=self._last_run_link_sort_matches,
         )
         thread.file_progress.connect(self.update_creator_file_progress)
         thread.file_completed.connect(self.update_file_completion)
@@ -10015,9 +11291,7 @@ class CreatorDownloaderTab(QWidget):
         self.background_task_progress.setRange(0, 0)
         post_filters, warnings = self._post_filters_from_widgets()
         self._log_filter_warnings(warnings)
-        _lenient_posts, lenient_files, lenient_punctuation = (
-            self._keyword_matching_modes()
-        )
+        lenient_punctuation = self._punctuation_matching_lenient()
         self.filter_thread = FilterThread(
             self.all_detected_posts,
             self.checked_urls,
@@ -10027,7 +11301,6 @@ class CreatorDownloaderTab(QWidget):
             post_filters=post_filters,
             creator_url=self.current_creator_url,
             file_skip_keywords=self._file_skip_keywords_from_widgets(),
-            file_skip_lenient=lenient_files,
             lenient_punctuation=lenient_punctuation,
             hidden_post_ids=(
                 self._post_history_cache.keys() if self._is_hiding_downloaded() else ()
@@ -10763,27 +12036,22 @@ class CreatorDownloaderTab(QWidget):
         raw = self.file_skip_keywords_edit.text().strip()
         if not raw:
             return []
-        return [kw.strip() for kw in raw.split(",") if kw.strip()]
+        return [
+            keyword
+            for keyword in parse_keyword_values(raw)
+            if not wildcard_value_is_unusable(keyword)
+        ]
 
-    def _keyword_matching_modes(self):
-        """Return ``(posts_lenient, files_lenient, lenient_punctuation)``.
+    def _punctuation_matching_lenient(self):
+        """Return whether Punctuation Matching Behavior is set to Relaxed.
 
-        Both switches live in Settings now. A missing getter (tests, no
-        parent) falls back to the defaults, so the tab behaves exactly as it
-        did before the settings existed.
+        A missing getter (tests, no parent) falls back to the default, so the
+        tab behaves exactly as it did before the setting existed.
         """
         settings_tab = getattr(self._parent, "settings_tab", None)
-        mode_getter = getattr(settings_tab, "get_lenient_keyword_matching", None)
-        mode = mode_getter() if callable(mode_getter) else "off"
-        if mode not in ("off", "posts", "files", "both"):
-            mode = "off"
         rules_getter = getattr(settings_tab, "get_punctuation_matching_rules", None)
         rules = rules_getter() if callable(rules_getter) else "default"
-        return (
-            mode in ("posts", "both"),
-            mode in ("files", "both"),
-            rules == "lenient",
-        )
+        return rules == "lenient"
 
     def _post_filters_from_widgets(self):
         """Return ``(PostFilters, warnings)`` for the current Filters box.
@@ -10793,16 +12061,20 @@ class CreatorDownloaderTab(QWidget):
         them; a live pass stays quiet, because a bound that is still being
         typed should not nag on every keystroke.
         """
-        raw_keywords = self.skip_keywords_edit.text().strip()
-        if raw_keywords:
-            skip_keywords = [kw.strip() for kw in raw_keywords.split(",") if kw.strip()]
-        else:
-            skip_keywords = []
-        lenient_posts, _lenient_files, lenient_punctuation = (
-            self._keyword_matching_modes()
-        )
+        raw_keywords = parse_keyword_values(self.skip_keywords_edit.text())
+        skip_keywords = [
+            keyword
+            for keyword in raw_keywords
+            if not wildcard_value_is_unusable(keyword)
+        ]
+        lenient_punctuation = self._punctuation_matching_lenient()
 
         warnings = []
+        if any(wildcard_value_is_unusable(k) for k in raw_keywords) or any(
+            wildcard_value_is_unusable(k)
+            for k in parse_keyword_values(self.file_skip_keywords_edit.text())
+        ):
+            warnings.append("wildcard_only_keyword_ignored")
         date_after = parse_filter_date(self.date_from_edit.text())
         if self.date_from_edit.text().strip() and date_after is None:
             warnings.append("invalid_date_from_ignored")
@@ -10832,7 +12104,6 @@ class CreatorDownloaderTab(QWidget):
                 for scope, checkbox in self.skip_scope_checkboxes.items()
                 if checkbox.isChecked()
             ),
-            lenient_keywords=lenient_posts,
             lenient_punctuation=lenient_punctuation,
             date_after=date_after,
             date_before=date_before,
@@ -11264,6 +12535,14 @@ class CreatorDownloaderTab(QWidget):
             # Reuse the numbers the first run decided for these files.
             file_numbers=dict(getattr(self, "_last_run_file_numbers", {})),
             post_file_counts=dict(getattr(self, "_last_run_post_file_counts", {})),
+            # Keep the destinations the first run resolved: a rule edited in
+            # between must not scatter a retry into a different folder.
+            post_sort_folders=dict(
+                getattr(self, "_last_run_post_sort_folders", {})
+            ),
+            link_sort_matches=bool(
+                getattr(self, "_last_run_link_sort_matches", False)
+            ),
         )
 
     def add_creators_from_file(self):
