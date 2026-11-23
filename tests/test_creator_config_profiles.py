@@ -153,6 +153,7 @@ def test_snapshot_holds_options_and_filters_only(qtbot, tmp_path):
         "file_count_to",
         "keep_compressed",
         "filter_no_selected_filetypes",
+        "hide_downloaded",
     }
 
 
@@ -181,6 +182,7 @@ def test_default_profile_restores_every_widget(qtbot, tmp_path):
     tick(tab.filter_no_selected_filetypes_check)
     tick(tab.search_scope_checkboxes["title"], False)
     tick(tab.search_scope_checkboxes["filenames"])
+    tick(tab.creator_hide_downloaded_check)
 
     assert tab.save_page_config() is True
 
@@ -207,6 +209,7 @@ def test_default_profile_restores_every_widget(qtbot, tmp_path):
     assert fresh.file_count_to_edit.text() == "9"
     assert fresh.file_count_keep_compressed_check.isChecked() is True
     assert fresh.filter_no_selected_filetypes_check.isChecked() is True
+    assert fresh.creator_hide_downloaded_check.isChecked() is True
     assert fresh.search_scope_checkboxes["title"].isChecked() is False
     assert fresh.search_scope_checkboxes["filenames"].isChecked() is True
 

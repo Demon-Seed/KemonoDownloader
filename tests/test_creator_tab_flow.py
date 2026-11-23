@@ -346,6 +346,7 @@ class FakeFilterThread:
         file_skip_keywords=None,
         file_skip_lenient=False,
         lenient_punctuation=False,
+        hidden_post_ids=None,
     ):
         self.all_detected_posts = all_detected_posts
         self.creator_url = creator_url

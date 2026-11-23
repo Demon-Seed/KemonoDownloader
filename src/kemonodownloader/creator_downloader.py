@@ -3115,6 +3115,7 @@ class FilterThread(_StoppableThread, QThread):
         file_skip_keywords=None,
         file_skip_lenient=False,
         lenient_punctuation=False,
+        hidden_post_ids=None,
     ):
         super().__init__()
         self.all_detected_posts = all_detected_posts
@@ -3152,6 +3153,12 @@ class FilterThread(_StoppableThread, QThread):
         self.lenient_punctuation = bool(lenient_punctuation)
         self.file_keyword_skipped_count = 0
         self.file_keyword_skip_counts = {}
+        # Post ids a list filter hides outright ("Hide Downloaded"). They are
+        # dropped before any other rule runs, so they cannot inflate the
+        # keyword/date/filetype skip counts: they are not skipped, just not
+        # shown. Counted so the caller can say how many were hidden.
+        self.hidden_post_ids = {str(post_id) for post_id in (hidden_post_ids or ())}
+        self.download_hidden_count = 0
         self.is_running = True
 
     def _count_skip(self, reason, keyword):
@@ -3176,6 +3183,11 @@ class FilterThread(_StoppableThread, QThread):
         for post_title, (post_id, thumbnail_url) in self.all_detected_posts:
             if not self.is_running:
                 break
+            if str(post_id) in self.hidden_post_ids:
+                # Hidden, not skipped: no counter here, so the skip summaries
+                # keep describing only what the filters actually rejected.
+                self.download_hidden_count += 1
+                continue
             facts = self.post_search_index.get(post_id)
             if facts is None:
                 self.facts_missing_count += 1
@@ -6471,17 +6483,55 @@ class CreatorDownloaderTab(QWidget):
         post_list_layout.addWidget(self.creator_search_input)
 
         checkbox_layout = QHBoxLayout()
+        # Both masters are tri-state so a partly ticked list shows Qt's dash
+        # instead of pretending nothing is selected. Their clicks are routed
+        # through the panel: Qt's own Unchecked -> Partial -> Checked cycle
+        # would make "tick everything" take two clicks after one row was
+        # unticked, which is exactly the case a user hits most.
         self.creator_check_all = QCheckBox()
+        self.creator_check_all.setTristate(True)
         self.creator_check_all.setChecked(False)
         self.creator_check_all.setStyleSheet("color: white;")
-        self.creator_check_all.stateChanged.connect(self.toggle_check_all)
+        self.creator_check_all.clicked.connect(self._on_check_page_clicked)
         checkbox_layout.addWidget(self.creator_check_all)
 
         self.creator_check_all_all = QCheckBox()
+        self.creator_check_all_all.setTristate(True)
         self.creator_check_all_all.setChecked(False)
         self.creator_check_all_all.setStyleSheet("color: white;")
-        self.creator_check_all_all.stateChanged.connect(self.toggle_check_all_all)
+        self.creator_check_all_all.clicked.connect(self._on_check_all_clicked)
         checkbox_layout.addWidget(self.creator_check_all_all)
+
+        # One clear control for both scopes: the page (what is listed) and
+        # every post from the creator. A menu keeps it to a single widget.
+        self.creator_deselect_btn = QPushButton()
+        self.creator_deselect_btn.setStyleSheet(
+            scoped(
+                "QPushButton",
+                "background: #4A5B7A; border-radius: 5px; padding: 2px 8px;",
+            )
+        )
+        self.creator_deselect_menu = QMenu(self.creator_deselect_btn)
+        self.creator_deselect_menu.setStyleSheet(MENU_STYLE)
+        self.creator_deselect_page_action = self.creator_deselect_menu.addAction(
+            translate("deselect_page")
+        )
+        self.creator_deselect_page_action.triggered.connect(self.deselect_page)
+        self.creator_deselect_all_action = self.creator_deselect_menu.addAction(
+            translate("deselect_all")
+        )
+        self.creator_deselect_all_action.triggered.connect(self.deselect_all_posts)
+        self.creator_deselect_btn.setMenu(self.creator_deselect_menu)
+        checkbox_layout.addWidget(self.creator_deselect_btn)
+
+        # Downloaded posts leave the list while this is on.
+        self.creator_hide_downloaded_check = QCheckBox()
+        self.creator_hide_downloaded_check.setChecked(False)
+        self.creator_hide_downloaded_check.setStyleSheet("color: white;")
+        self.creator_hide_downloaded_check.stateChanged.connect(
+            self.on_hide_downloaded_changed
+        )
+        checkbox_layout.addWidget(self.creator_hide_downloaded_check)
 
         # Info button for the post list itself: outside the list widget but
         # still inside the group, right-aligned so it lines up with the help
@@ -6687,7 +6737,17 @@ class CreatorDownloaderTab(QWidget):
         self.creator_attachments_check.setText(translate("attachments"))
         self.creator_content_check.setText(translate("content_images"))
         self.creator_check_all.setText(translate("check_all"))
+        self.creator_check_all.setToolTip(translate("check_page_tooltip"))
         self.creator_check_all_all.setText(translate("check_all_all"))
+        self.creator_check_all_all.setToolTip(translate("check_all_tooltip"))
+        self.creator_deselect_btn.setText(translate("deselect"))
+        self.creator_deselect_btn.setToolTip(translate("deselect_tooltip"))
+        self.creator_deselect_page_action.setText(translate("deselect_page"))
+        self.creator_deselect_all_action.setText(translate("deselect_all"))
+        self.creator_hide_downloaded_check.setText(translate("hide_downloaded"))
+        self.creator_hide_downloaded_check.setToolTip(
+            translate("hide_downloaded_tooltip")
+        )
         self.creator_skip_folder_info_btn.setToolTip(
             translate("skip_folder_info_title")
         )
@@ -6891,6 +6951,7 @@ class CreatorDownloaderTab(QWidget):
                 "filter_no_selected_filetypes": (
                     self.filter_no_selected_filetypes_check.isChecked()
                 ),
+                "hide_downloaded": self.creator_hide_downloaded_check.isChecked(),
             },
             "search_scopes": sorted(
                 scope
@@ -6985,6 +7046,13 @@ class CreatorDownloaderTab(QWidget):
             self._set_config_checkbox(
                 self.filter_no_selected_filetypes_check,
                 filters["filter_no_selected_filetypes"],
+            )
+        if "hide_downloaded" in filters:
+            # Blocked signals, so the restored list is rendered once by the
+            # filter pass at the end of this method rather than twice.
+            self._set_config_checkbox(
+                self.creator_hide_downloaded_check,
+                filters["hide_downloaded"],
             )
         if "search_scopes" in config:
             self._set_config_scopes(
@@ -7239,6 +7307,14 @@ class CreatorDownloaderTab(QWidget):
                 Qt.TextFormat.RichText if date_text else Qt.TextFormat.PlainText
             )
             widget.label.setText(self._row_label_text(key, date_text))
+
+        # A post that just finished downloading is history now. While the list
+        # is hiding downloads, re-run the pass so it leaves the rows; either
+        # way the master boxes need re-syncing. posts_to_download is left
+        # alone on purpose - it records what that run downloaded.
+        self.update_check_all_state()
+        if self._is_hiding_downloaded():
+            self.filter_items()
 
     def _show_info(self, title_key, text_key):
         """Show a translated one-paragraph help dialog."""
@@ -8107,9 +8183,14 @@ class CreatorDownloaderTab(QWidget):
             )
 
         # Update checked_urls for new posts. Linked posts that the current
-        # load is meant to select stay checked as they arrive.
+        # load is meant to select stay checked as they arrive — unless the
+        # download history already has them and "Hide Downloaded" is on.
         for post_title, (post_id, thumbnail_url) in batch_posts:
-            self.checked_urls[post_id] = str(post_id) in self._requested_post_ids
+            self.checked_urls[post_id] = str(
+                post_id
+            ) in self._requested_post_ids and not self._is_hide_downloaded(
+                post_id
+            )
 
         # Trigger incremental filtering to add new posts to UI
         self.filter_items_incremental(batch_posts)
@@ -8261,7 +8342,10 @@ class CreatorDownloaderTab(QWidget):
         for post_title, (post_id, thumbnail_url) in batch_posts:
             # Batches now carry every fetched post, so the filters have to
             # be applied here too; otherwise a filtered post would show up
-            # until the next full pass.
+            # until the next full pass. Downloaded posts the list is hiding
+            # never join it in the first place.
+            if self._is_hide_downloaded(post_id):
+                continue
             facts = self.post_search_index.get(post_id)
             reason, _keyword = post_skip_reason(post_title, facts, post_filters)
             if reason is not None:
@@ -8338,6 +8422,8 @@ class CreatorDownloaderTab(QWidget):
         self.creator_search_input.setEnabled(not is_fetching)
         self.creator_check_all.setEnabled(not is_fetching)
         self.creator_check_all_all.setEnabled(not is_fetching)
+        self.creator_deselect_btn.setEnabled(not is_fetching)
+        self.creator_hide_downloaded_check.setEnabled(not is_fetching)
         self.creator_post_list.setEnabled(not is_fetching)
 
         # Inline skip-keywords filter
@@ -8425,6 +8511,8 @@ class CreatorDownloaderTab(QWidget):
         self.creator_search_input.setEnabled(enabled)
         self.creator_check_all.setEnabled(enabled)
         self.creator_check_all_all.setEnabled(enabled)
+        self.creator_deselect_btn.setEnabled(enabled)
+        self.creator_hide_downloaded_check.setEnabled(enabled)
         self.creator_post_list.setEnabled(enabled)
         self.creator_box_info_btn.setEnabled(enabled)
 
@@ -8498,11 +8586,22 @@ class CreatorDownloaderTab(QWidget):
             required = self._required_filetypes()
             if required is not None and not required:
                 text = translate("supported_filetypes_not_present")
+            elif self._all_posts_are_downloaded():
+                text = translate("all_posts_hidden_downloaded")
             else:
                 text = translate("no_posts_match_filters")
             if label.text() != text:
                 label.setText(text)
         label.setVisible(empty)
+
+    def _all_posts_are_downloaded(self):
+        """True when the download history covers every detected post."""
+        if not self._is_hiding_downloaded() or not self.all_detected_posts:
+            return False
+        return all(
+            str(post_id) in self._post_history_cache
+            for _title, (post_id, _thumb) in self.all_detected_posts
+        )
 
     def display_current_page(self, preserve_scroll=False, scroll_value=None):
         """Display the current page of posts.
@@ -8742,13 +8841,32 @@ class CreatorDownloaderTab(QWidget):
             for _title, (post_id, _thumb) in self.all_detected_posts
             if str(post_id) in requested_post_ids
         ]
+        blocked = [
+            post_id
+            for post_id in matching
+            if self._is_hide_downloaded(post_id)
+        ]
         for post_id in matching:
+            if self._is_hide_downloaded(post_id):
+                continue
             self.checked_urls[post_id] = True
+        if blocked:
+            self.append_log_to_console(
+                translate(
+                    "log_info", translate("hide_downloaded_excluded", len(blocked))
+                ),
+                "INFO",
+            )
         self._sync_filtered_posts_checked()
         visible_ids = {
             post_id for _title, post_id, _thumb, _checked in self.filtered_posts
         }
-        hidden = [post_id for post_id in matching if post_id not in visible_ids]
+        hidden = [
+            post_id
+            for post_id in matching
+            if post_id not in visible_ids
+            and not self._is_hide_downloaded(post_id)
+        ]
         if hidden:
             self.append_log_to_console(
                 translate(
@@ -9547,6 +9665,119 @@ class CreatorDownloaderTab(QWidget):
             window.activateWindow()
             window.update_logs_content()
 
+    # ------------------------------------------------------------------
+    # Selection controls ("Check Page" / "Check All" / "Deselect")
+    # ------------------------------------------------------------------
+
+    def _is_hiding_downloaded(self):
+        """True while "Hide Downloaded" is leaving history posts out."""
+        checkbox = getattr(self, "creator_hide_downloaded_check", None)
+        return bool(checkbox is not None and checkbox.isChecked())
+
+    def _is_hide_downloaded(self, post_id):
+        """True when *post_id* is downloaded and the list hides those."""
+        return (
+            post_id is not None
+            and self._is_hiding_downloaded()
+            and str(post_id) in self._post_history_cache
+        )
+
+    def on_hide_downloaded_changed(self, _state=None):
+        """Re-run the filter pass so hidden posts leave or rejoin the list.
+
+        Hiding is a list filter, like the keyword and date filters: the tick
+        is left alone, so switching it back off brings the posts back as they
+        were. While hidden they are not listed, so ``update_checked_posts``
+        cannot put them in the download set either.
+        """
+        if not self.all_detected_posts:
+            return
+        self.filter_items()
+
+    def _visible_post_ids(self):
+        """Ids of the rows currently listed, hidden rows excluded."""
+        post_ids = []
+        for index in range(self.creator_post_list.count()):
+            item = self.creator_post_list.item(index)
+            if item is None or item.isHidden():
+                continue
+            widget = self.creator_post_list.itemWidget(item)
+            post_id = getattr(widget, "post_id", None) if widget is not None else None
+            if post_id:
+                post_ids.append(post_id)
+        return post_ids
+
+    def _visible_selectable_checked(self):
+        """Whether every listed post that may be ticked already is."""
+        states = [
+            self.checked_urls.get(post_id, False)
+            for post_id in self._visible_post_ids()
+            if not self._is_hide_downloaded(post_id)
+        ]
+        return bool(states) and all(states)
+
+    def _detected_selectable_checked(self):
+        """Whether every detected post that may be ticked already is."""
+        states = [
+            self.checked_urls.get(post_id, False)
+            for _title, (post_id, _thumb) in self.all_detected_posts
+            if not self._is_hide_downloaded(post_id)
+        ]
+        return bool(states) and all(states)
+
+    def _on_check_page_clicked(self, _checked=False):
+        """Decide what a click on "Check Page" means instead of cycling.
+
+        Qt has already walked its tri-state cycle by the time ``clicked``
+        fires, so the target is recomputed from the ticks: a click selects
+        everything unless everything selectable is already ticked, in which
+        case it clears. Clearing a partly ticked list belongs to the Deselect
+        menu, which keeps both actions one click away.
+        """
+        target = (
+            Qt.CheckState.Unchecked
+            if self._visible_selectable_checked()
+            else Qt.CheckState.Checked
+        )
+        self.creator_check_all.blockSignals(True)
+        self.creator_check_all.setCheckState(target)
+        self.creator_check_all.blockSignals(False)
+        if not self.toggle_check_all(target.value):
+            # Nothing started (busy, or nothing to toggle): put the box back
+            # to what the ticks actually say instead of leaving it optimistic.
+            self.update_check_all_state()
+
+    def _on_check_all_clicked(self, _checked=False):
+        """Same intent rule as "Check Page", over every detected post."""
+        target = (
+            Qt.CheckState.Unchecked
+            if self._detected_selectable_checked()
+            else Qt.CheckState.Checked
+        )
+        self.creator_check_all_all.blockSignals(True)
+        self.creator_check_all_all.setCheckState(target)
+        self.creator_check_all_all.blockSignals(False)
+        if not self.toggle_check_all_all(target.value):
+            self.update_check_all_state()
+
+    def deselect_page(self, _checked=False):
+        """Clear the ticks of every listed row."""
+        if not any(
+            self.checked_urls.get(post_id, False)
+            for post_id in self._visible_post_ids()
+        ):
+            return
+        self.toggle_check_all(Qt.CheckState.Unchecked.value)
+
+    def deselect_all_posts(self, _checked=False):
+        """Clear every tick, including posts on other pages."""
+        if not any(
+            self.checked_urls.get(post_id, False)
+            for _title, (post_id, _thumb) in self.all_detected_posts
+        ):
+            return
+        self.toggle_check_all_all(Qt.CheckState.Unchecked.value)
+
     def toggle_check_all(self, state):
         if (
             self.checkbox_toggle_thread is not None
@@ -9558,7 +9789,7 @@ class CreatorDownloaderTab(QWidget):
                 ),
                 "WARNING",
             )
-            return
+            return False
 
         # Get the currently visible posts. The rows themselves carry the post
         # id (two posts can share a title and date, and the title-keyed caches
@@ -9571,18 +9802,22 @@ class CreatorDownloaderTab(QWidget):
                 continue
             widget = self.creator_post_list.itemWidget(item)
             post_id = getattr(widget, "post_id", None) if widget is not None else None
-            if not post_id:
+            if not post_id or self._is_hide_downloaded(post_id):
                 continue
             post_title = getattr(widget, "post_key", None) or item.text()
             _pid, thumbnail_url = self.post_url_map.get(post_title, (None, None))
             visible_posts.append((post_title, (post_id, thumbnail_url)))
 
         if not visible_posts:
-            self.append_log_to_console(
-                translate("log_warning", translate("no_visible_posts_to_toggle")),
-                "WARNING",
+            key = (
+                "no_selectable_posts_to_toggle"
+                if self._all_posts_are_downloaded()
+                else "no_visible_posts_to_toggle"
             )
-            return
+            self.append_log_to_console(
+                translate("log_warning", translate(key)), "WARNING"
+            )
+            return False
 
         self.background_task_label.setText(translate("updating_checkboxes"))
         self.background_task_progress.setRange(0, 0)
@@ -9596,6 +9831,7 @@ class CreatorDownloaderTab(QWidget):
         )
         self.active_threads.append(self.checkbox_toggle_thread)
         self.checkbox_toggle_thread.start()
+        return True
 
     def cleanup_checkbox_toggle_thread(self):
         """Clean up the checkbox toggle thread after it finishes."""
@@ -9616,19 +9852,35 @@ class CreatorDownloaderTab(QWidget):
                 ),
                 "WARNING",
             )
-            return
+            return False
 
-        # Use all detected posts instead of just visible ones
+        # Use all detected posts instead of just visible ones. While the list
+        # is hiding downloads, those posts are left out so the thread's result
+        # and its log count describe exactly what is on screen.
         if not self.all_detected_posts:
             self.append_log_to_console(
                 translate("log_warning", translate("no_posts_to_toggle")), "WARNING"
             )
-            return
+            return False
+
+        posts = self.all_detected_posts
+        if int(state) == Qt.CheckState.Checked.value:
+            posts = [
+                (post_title, (post_id, thumbnail_url))
+                for post_title, (post_id, thumbnail_url) in self.all_detected_posts
+                if not self._is_hide_downloaded(post_id)
+            ]
+        if not posts:
+            self.append_log_to_console(
+                translate("log_warning", translate("no_selectable_posts_to_toggle")),
+                "WARNING",
+            )
+            return False
 
         self.background_task_label.setText(translate("updating_checkboxes"))
         self.background_task_progress.setRange(0, 0)
         self.checkbox_toggle_thread = CheckboxToggleThread(
-            self.all_detected_posts, self.checked_urls, state
+            posts, self.checked_urls, state
         )
         self.checkbox_toggle_thread.finished.connect(self.on_toggle_check_all_finished)
         self.checkbox_toggle_thread.log.connect(self.append_log_to_console)
@@ -9637,10 +9889,18 @@ class CreatorDownloaderTab(QWidget):
         )
         self.active_threads.append(self.checkbox_toggle_thread)
         self.checkbox_toggle_thread.start()
+        return True
 
     def on_toggle_check_all_finished(self, checked_urls, posts_to_download):
         self.checked_urls = checked_urls
-        self.posts_to_download = posts_to_download
+        # The thread copied checked_urls when it started, so a post the list
+        # now hides (downloaded during the pass, or before the filter ran)
+        # must not reach the download set.
+        self.posts_to_download = [
+            post_id
+            for post_id in posts_to_download
+            if not self._is_hide_downloaded(post_id)
+        ]
         self.filter_items()
         self.background_task_progress.setRange(0, 100)
         self.background_task_progress.setValue(0)
@@ -9681,7 +9941,9 @@ class CreatorDownloaderTab(QWidget):
             post_id for _title, post_id, _thumb, _checked in self.filtered_posts
         }
         ticked_ids = [
-            post_id for post_id, is_checked in self.checked_urls.items() if is_checked
+            post_id
+            for post_id, is_checked in self.checked_urls.items()
+            if is_checked and not self._is_hide_downloaded(post_id)
         ]
         for post_id in ticked_ids:
             if post_id in visible_ids and post_id not in seen_ids:
@@ -9767,6 +10029,9 @@ class CreatorDownloaderTab(QWidget):
             file_skip_keywords=self._file_skip_keywords_from_widgets(),
             file_skip_lenient=lenient_files,
             lenient_punctuation=lenient_punctuation,
+            hidden_post_ids=(
+                self._post_history_cache.keys() if self._is_hiding_downloaded() else ()
+            ),
         )
         self.filter_thread.finished.connect(self.on_filter_finished)
         self.filter_thread.finished.connect(self.cleanup_filter_thread)
@@ -9847,6 +10112,19 @@ class CreatorDownloaderTab(QWidget):
             or getattr(self, "_last_detection_thread", None)
         )
         self._log_facts_missing()
+
+        # Say once per change how many posts the download filter is hiding,
+        # so a shorter list always has a visible reason in the log.
+        hidden_count = getattr(thread, "download_hidden_count", 0)
+        if hidden_count != getattr(self, "_hidden_downloaded_count", None):
+            self._hidden_downloaded_count = hidden_count
+            if hidden_count:
+                self.append_log_to_console(
+                    translate(
+                        "log_info", translate("hide_downloaded_hidden", hidden_count)
+                    ),
+                    "INFO",
+                )
 
         # Emit skip-keywords summary INFO lines LAST — after all detection,
         # population, and filtering logs are done — so they appear at the
@@ -10093,29 +10371,54 @@ class CreatorDownloaderTab(QWidget):
             return cached[1]  # Return widget
         return None
 
+    @staticmethod
+    def _set_master_state(check_box, checked_count, total_count):
+        """Show none / part / all on a master box without firing its click."""
+        if total_count and checked_count == total_count:
+            state = Qt.CheckState.Checked
+        elif checked_count:
+            state = Qt.CheckState.PartiallyChecked
+        else:
+            state = Qt.CheckState.Unchecked
+        check_box.blockSignals(True)
+        check_box.setCheckState(state)
+        check_box.blockSignals(False)
+
     def update_check_all_state(self):
-        # Update page checkbox - only iterate visible items from cache
-        visible_checked = []
-        for post_title, (item, widget) in self.post_widget_cache.items():
-            if not item.isHidden():
-                visible_checked.append(widget.check_box.isChecked())
+        """Re-sync both master boxes with the ticks they govern.
 
-        all_visible_checked = all(visible_checked) and len(visible_checked) > 0
-        self.creator_check_all.blockSignals(True)
-        self.creator_check_all.setChecked(all_visible_checked)
-        self.creator_check_all.blockSignals(False)
-
-        # Update all checkbox - check all detected posts
-        all_posts_checked = (
-            all(
-                self.checked_urls.get(post_id, False)
-                for post_title, (post_id, thumbnail_url) in self.all_detected_posts
+        They are tri-state, so a partly ticked list shows Qt's dash instead
+        of pretending nothing is selected. Posts that "Hide Downloaded" is
+        keeping off the list are left out of the "All" count, so "everything
+        ticked" means everything that can actually be ticked.
+        """
+        visible_states = [
+            self.checked_urls.get(getattr(widget, "post_id", None), False)
+            for _title, (item, widget) in self.post_widget_cache.items()
+            if not item.isHidden()
+            and not self._is_hide_downloaded(
+                getattr(widget, "post_id", None)
             )
-            and len(self.all_detected_posts) > 0
+        ]
+        checked_visible = sum(1 for checked in visible_states if checked)
+        self._set_master_state(
+            self.creator_check_all, checked_visible, len(visible_states)
         )
-        self.creator_check_all_all.blockSignals(True)
-        self.creator_check_all_all.setChecked(all_posts_checked)
-        self.creator_check_all_all.blockSignals(False)
+        all_visible_checked = bool(visible_states) and checked_visible == len(
+            visible_states
+        )
+
+        selectable_posts = [
+            post_id
+            for _title, (post_id, _thumb) in self.all_detected_posts
+            if not self._is_hide_downloaded(post_id)
+        ]
+        checked_posts = sum(
+            1 for post_id in selectable_posts if self.checked_urls.get(post_id, False)
+        )
+        self._set_master_state(
+            self.creator_check_all_all, checked_posts, len(selectable_posts)
+        )
 
         self.append_log_to_console(
             translate(
