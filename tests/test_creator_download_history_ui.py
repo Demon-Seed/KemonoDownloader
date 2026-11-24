@@ -499,6 +499,7 @@ def test_box_info_dialog_shows_only_the_row_format(qtbot, tmp_path, monkeypatch)
     assert captured["text"] == translate("downloader_box_info_text")
     assert captured["text"].count("\n") == 1, "two lines"
     assert "Key: Post Title | (Publish Date) | [Last Downloaded Date]" in captured["text"]
+    assert "Right-click" in captured["text"]
     assert "and Double Click to view a post." in captured["text"]
 
 
@@ -554,6 +555,38 @@ def test_help_window_returns_to_the_same_size_after_a_manual_resize(qtbot):
     show_help(host, "Short Help", "line one\nline two")
 
     assert window.size() == original
+    window.close()
+
+
+def test_help_window_fits_the_related_bar_and_its_text(qtbot):
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.show()
+
+    window = show_help(
+        host,
+        "Short",
+        "Hi",
+        related=("keyword-syntax", "punctuation-matching"),
+    )
+    qtbot.wait(10)
+    margins = window.layout().contentsMargins()
+    assert window.width() >= (
+        window._related_bar.sizeHint().width() + margins.left() + margins.right()
+    )
+    assert window._related_bar.width() >= window._related_bar.sizeHint().width()
+
+    window = show_help(
+        host,
+        translate("skip_posts_keywords_help_title"),
+        translate("skip_posts_keywords_help_text"),
+        related=("keyword-syntax", "punctuation-matching"),
+    )
+    qtbot.wait(10)
+    assert window._browser.verticalScrollBar().isVisible() is False
+    assert window._browser.viewport().height() >= int(
+        window._browser.document().size().height()
+    )
     window.close()
 
 

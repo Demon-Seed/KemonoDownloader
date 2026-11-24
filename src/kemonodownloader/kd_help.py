@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from PyQt6.QtCore import QPoint
+from PyQt6.QtCore import QPoint, QSize
 from PyQt6.QtGui import QTextDocument
 from PyQt6.QtWidgets import (
     QApplication,
@@ -35,6 +35,9 @@ MIN_CONTENT_WIDTH = 340
 MAX_CONTENT_WIDTH = 720
 MAX_HEIGHT = 620
 SCREEN_MARGIN = 80
+# Space kept beside the content for the browser's vertical scrollbar, so the
+# text is measured at least as narrow as it will actually be rendered.
+SCROLLBAR_ALLOWANCE = 24
 
 _RICH_TEXT = re.compile(r"</?[A-Za-z][^>]*>")
 _HELP_BUTTON_STYLE = scoped(
@@ -147,6 +150,7 @@ class HelpWindow(QDialog):
         label = QLabel(translate("related_help"))
         label.setStyleSheet("color: #8FA6C8;")
         self._related_layout.addWidget(label)
+        label.show()
         for topic_id in topic_ids:
             title_key, _text_key = _REFERENCE_TOPICS[topic_id]
             button = QPushButton(translate(title_key).removesuffix(" Help"))
@@ -155,6 +159,10 @@ class HelpWindow(QDialog):
                 lambda _checked=False, target=topic_id: self._follow_topic(target)
             )
             self._related_layout.addWidget(button)
+            # Widgets added to a layout start hidden, and hidden widgets do
+            # not contribute a size hint until the event loop runs. Show them
+            # now so this pass can size the window to the bar it just built.
+            button.show()
         self._related_layout.addStretch()
         self._related_bar.setVisible(True)
         self._related_bar.adjustSize()
@@ -170,35 +178,26 @@ class HelpWindow(QDialog):
             document.setPlainText(text)
         document.setTextWidth(-1)
         ideal = int(document.idealWidth() or document.size().width() or 0)
-        content_width = min(max(MIN_CONTENT_WIDTH, ideal), MAX_CONTENT_WIDTH)
-        document.setTextWidth(content_width)
-        content_height = int(document.size().height())
 
         margins = self.layout().contentsMargins()
         button_height = max(
             self._back_button.sizeHint().height(),
             self._close_button.sizeHint().height(),
         )
-        related_height = 0
-        if not self._related_bar.isHidden():
-            related_height = (
-                self._related_bar.sizeHint().height() + self.layout().spacing()
-            )
-        width = content_width + margins.left() + margins.right() + 24
-        height = (
-            content_height
-            + margins.top()
-            + margins.bottom()
-            + button_height
-            + related_height
-            + self.layout().spacing() * 2
-            + 12
-        )
-        width = max(MIN_WIDTH, width)
-        height = max(MIN_HEIGHT, height)
+        related_visible = not self._related_bar.isHidden()
+        related_hint = self._related_bar.sizeHint() if related_visible else QSize(0, 0)
+        related_height = related_hint.height() if related_visible else 0
+
+        # The Related bar can be wider than the text, so it takes part in the
+        # width decision; sizing from the text alone squeezed its buttons.
+        content_width = max(MIN_CONTENT_WIDTH, ideal, related_hint.width())
+        content_width = min(content_width, MAX_CONTENT_WIDTH)
+        width = content_width + margins.left() + margins.right() + SCROLLBAR_ALLOWANCE
 
         screen = self.screen() or QApplication.primaryScreen()
-        max_width = MAX_CONTENT_WIDTH + 48
+        max_width = (
+            MAX_CONTENT_WIDTH + margins.left() + margins.right() + SCROLLBAR_ALLOWANCE
+        )
         max_height = MAX_HEIGHT
         if screen is not None:
             available = screen.availableGeometry()
@@ -209,6 +208,25 @@ class HelpWindow(QDialog):
                 max_height, max(MIN_HEIGHT, available.height() - SCREEN_MARGIN)
             )
         width = min(width, max_width)
+
+        # Measure at the width the browser really gets after every cap, and
+        # add the document margin the browser itself draws around the text.
+        viewport_width = max(1, width - margins.left() - margins.right())
+        document.setTextWidth(viewport_width)
+        content_height = int(document.size().height())
+        content_height += int(self._browser.document().documentMargin() * 2)
+
+        # Only the widgets that are actually visible add a gap between them.
+        gaps = 2 if related_visible else 1
+        height = (
+            content_height
+            + margins.top()
+            + margins.bottom()
+            + button_height
+            + related_height
+            + self.layout().spacing() * gaps
+        )
+        height = max(MIN_HEIGHT, height)
         height = min(height, max_height)
 
         was_visible = self.isVisible()

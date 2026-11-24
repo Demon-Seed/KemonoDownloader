@@ -351,6 +351,20 @@ def test_rule_dict_round_trip_has_no_kind():
     assert cd.sort_rules_from_config({"rules": [data]}) == [rule]
 
 
+def test_sort_rules_from_config_keeps_the_unsorted_rule_without_values():
+    unsorted = cd.SortRule("Unsorted")
+    config = {
+        "unsorted_folder": "Unsorted",
+        "rules": [cd.sort_rule_to_dict(unsorted)],
+    }
+    assert cd.sort_rules_from_config(config) == [unsorted]
+
+    # A values-less rule that is not the unsorted folder is still unusable.
+    assert (
+        cd.sort_rules_from_config({"rules": [{"folder": "Empty", "values": []}]}) == []
+    )
+
+
 def test_legacy_kind_migrates_to_scopes():
     tag = cd.sort_rule_from_dict(
         {
@@ -603,6 +617,53 @@ def test_download_unsorted_filters_and_routes_unmatched_posts(qtbot, tmp_path):
     assert folders == {"1": ("Cats",), "2": ("Unsorted",)}
 
 
+def test_resolve_run_sort_folders_routes_everything_when_only_unsorted_exists(
+    qtbot, tmp_path
+):
+    tab = make_tab(qtbot, tmp_path)
+    tab._sort_rules = [cd.SortRule("Unsorted")]
+    tab._sort_unsorted_folder = "Unsorted"
+    tab._sort_download_unsorted = True
+    tab.creator_sort_enabled_check.setChecked(True)
+    tab.all_detected_posts = [("One", ("1", "thumb")), ("Two", ("2", "thumb"))]
+    tab.post_search_index = {
+        "1": {"tag_list": ["cat"]},
+        "2": {"tag_list": ["dog"]},
+    }
+    tab.posts_to_download = ["1", "2"]
+
+    folders, link_all = tab._resolve_run_sort_folders()
+
+    assert folders == {"1": ("Unsorted",), "2": ("Unsorted",)}
+    assert link_all is False
+
+
+def test_sorting_warnings_allow_an_unsorted_rule_without_values(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+    tab._sort_rules = [cd.SortRule("Unsorted")]
+    tab._sort_unsorted_folder = "Unsorted"
+    assert tab._sorting_warnings() == []
+
+    # Values the user does type still have to be usable.
+    tab._sort_rules = [cd.SortRule("Unsorted", ("*",))]
+    assert tab._sorting_warnings() == ["sort_config_wildcard_only"]
+
+
+def test_config_restores_an_unsorted_rule_without_values(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+    tab._apply_config(
+        {
+            "sorting": {
+                "unsorted_folder": "Unsorted",
+                "rules": [cd.sort_rule_to_dict(cd.SortRule("Unsorted"))],
+            }
+        }
+    )
+
+    assert tab._sort_unsorted_folder == "Unsorted"
+    assert [rule.folder for rule in tab._sort_rules] == ["Unsorted"]
+
+
 def test_sorting_disabled_resolves_nothing(qtbot, tmp_path):
     tab = make_tab(qtbot, tmp_path)
     tab._sort_rules = [cd.SortRule("Cats", ("cat",))]
@@ -848,6 +909,57 @@ def test_dialog_unsorted_button_sets_clears_and_prevents_replacement(qtbot):
     dialog._unsorted_button.click()
     assert dialog.unsorted_folder() == "Dogs"
     assert dialog._unsorted_button.text() == "Clear Unsorted"
+
+
+def test_dialog_unsorted_button_creates_and_clears_the_unsorted_rule(qtbot):
+    dialog = make_dialog(qtbot, rules=[])
+
+    assert dialog._unsorted_button.isEnabled() is True
+    dialog._unsorted_button.click()
+
+    assert [rule.folder for rule in dialog.rules()] == ["Unsorted"]
+    assert dialog.rules()[0].values == ()
+    assert dialog.unsorted_folder() == "Unsorted"
+    assert dialog._rule_list.currentRow() == 0
+    summary = dialog._rule_list.item(0).text()
+    assert translate("sort_rule_no_values") in summary
+    assert translate("sort_unsorted_marker") in summary
+    assert dialog._validate_and_normalise() is True
+
+    dialog._unsorted_button.click()
+    assert dialog.unsorted_folder() == ""
+    assert dialog._unsorted_button.text() == "Set Unsorted"
+
+
+def test_dialog_unsorted_button_reuses_an_existing_unsorted_rule(qtbot):
+    dialog = make_dialog(
+        qtbot,
+        rules=[cd.SortRule("Unsorted"), cd.SortRule("Cats", ("cat",))],
+    )
+    dialog._rule_list.setCurrentRow(-1)
+    assert dialog._rule_list.currentRow() == -1
+
+    dialog._toggle_unsorted()
+
+    assert [rule.folder for rule in dialog.rules()] == ["Unsorted", "Cats"]
+    assert dialog.unsorted_folder() == "Unsorted"
+    assert dialog._rule_list.currentRow() == 0
+
+
+def test_dialog_unsorted_rule_needs_no_values(qtbot):
+    dialog = make_dialog(
+        qtbot,
+        rules=[cd.SortRule("Cats", ("cat",)), cd.SortRule("Unsorted")],
+        unsorted_folder="Unsorted",
+    )
+
+    assert dialog.unsorted_folder() == "Unsorted"
+    assert dialog._validation_problems() == []
+    assert dialog._validate_and_normalise() is True
+    assert dialog.rules()[1].values == ()
+    preview = dialog._preview.toPlainText()
+    assert translate("sort_preview_line", "Cats", 1) in preview
+    assert translate("sort_preview_line", "Unsorted", 1) in preview
 
 
 def test_dialog_adds_and_edits_a_rule(qtbot):
@@ -1108,6 +1220,7 @@ def test_sorting_translation_keys_exist_and_old_ones_are_gone():
         "sort_set_unsorted_tooltip",
         "sort_clear_unsorted_tooltip",
         "sort_unsorted_marker",
+        "sort_unsorted_folder",
         "sort_rule_settings",
         "sort_run_settings",
         "sort_no_sorted_posts",

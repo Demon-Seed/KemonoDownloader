@@ -589,3 +589,126 @@ def test_post_preview_dialog_passes_the_shared_cache_to_its_loader(qtbot, monkey
 
     assert FakeLoader.instances[0].cache is cache
     dialog.close()
+
+
+def test_post_page_url_joins_creator_and_post():
+    assert cd.post_page_url(CREATOR_URL + "/", "42") == f"{CREATOR_URL}/post/42"
+    assert cd.post_page_url(CREATOR_URL, "") == ""
+    assert cd.post_page_url("", "42") == ""
+
+
+def test_post_preview_shows_tags(qtbot, monkeypatch):
+    dialog = _make_dialog(qtbot, monkeypatch, post=_post(tags="{Ado, Comic, 3D art}"))
+
+    assert dialog._tags_label.isHidden() is False
+    assert dialog._tags_label.text() == cd.translate(
+        "post_preview_tags", "Ado · Comic · 3D art"
+    )
+    dialog.close()
+
+
+def test_post_preview_hides_tags_when_the_post_has_none(qtbot, monkeypatch):
+    dialog = _make_dialog(qtbot, monkeypatch)
+
+    assert dialog._tags_label.isHidden() is True
+    dialog.close()
+
+
+def test_post_preview_open_button_opens_the_post_in_the_browser(
+    qtbot, monkeypatch
+):
+    opened = []
+    monkeypatch.setattr(
+        cd.QDesktopServices, "openUrl", lambda url: opened.append(url.toString())
+    )
+    dialog = _make_dialog(qtbot, monkeypatch)
+
+    assert dialog._open_browser_btn.text() == cd.translate("open_post_in_browser")
+    dialog._open_browser_btn.click()
+
+    assert opened == [f"{CREATOR_URL}/post/42"]
+    dialog.close()
+
+
+def _make_post_row(qtbot, tmp_path):
+    tab = cd.CreatorDownloaderTab(make_tab_parent(tmp_path))
+    qtbot.addWidget(tab)
+    tab.current_creator_url = CREATOR_URL
+    tab.post_url_map = {"One (2024-01-01)": ("42", "thumb.png")}
+    tab.add_list_item("One (2024-01-01)", "thumb.png", False)
+    return tab, tab.creator_post_list.item(0)
+
+
+def test_post_list_context_menu_opens_the_post_in_the_browser(
+    qtbot, tmp_path, monkeypatch
+):
+    from PyQt6.QtWidgets import QMenu
+
+    tab, item = _make_post_row(qtbot, tmp_path)
+    captured = []
+    monkeypatch.setattr(QMenu, "exec", lambda self, *a, **k: captured.append(self))
+    monkeypatch.setattr(tab.creator_post_list, "itemAt", lambda pos: item)
+    opened = []
+    monkeypatch.setattr(
+        cd.QDesktopServices, "openUrl", lambda url: opened.append(url.toString())
+    )
+
+    tab._show_post_context_menu(tab.creator_post_list.rect().center())
+
+    menu = captured[0]
+    assert [action.text() for action in menu.actions()] == [
+        cd.translate("open_post_in_browser")
+    ]
+    assert menu.styleSheet() == cd.MENU_STYLE
+    assert item.isSelected() is True
+
+    menu.actions()[0].trigger()
+    assert opened == [f"{CREATOR_URL}/post/42"]
+
+
+def test_post_row_context_menu_opens_the_post_in_the_browser(
+    qtbot, tmp_path, monkeypatch
+):
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtWidgets import QMenu
+
+    tab, item = _make_post_row(qtbot, tmp_path)
+    captured = []
+    monkeypatch.setattr(QMenu, "exec", lambda self, *a, **k: captured.append(self))
+    opened = []
+    monkeypatch.setattr(
+        cd.QDesktopServices, "openUrl", lambda url: opened.append(url.toString())
+    )
+
+    class FakeEvent:
+        def __init__(self):
+            self.accepted = False
+
+        def accept(self):
+            self.accepted = True
+
+        def globalPos(self):
+            return QPoint(10, 10)
+
+    widget = tab.creator_post_list.itemWidget(item)
+    event = FakeEvent()
+    widget.contextMenuEvent(event)
+
+    assert event.accepted is True
+    assert len(captured) == 1
+    captured[0].actions()[0].trigger()
+    assert opened == [f"{CREATOR_URL}/post/42"]
+
+
+def test_post_context_menu_needs_a_creator_url(qtbot, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QMenu
+
+    tab, item = _make_post_row(qtbot, tmp_path)
+    tab.current_creator_url = None
+    captured = []
+    monkeypatch.setattr(QMenu, "exec", lambda self, *a, **k: captured.append(self))
+    monkeypatch.setattr(tab.creator_post_list, "itemAt", lambda pos: item)
+
+    tab._show_post_context_menu(tab.creator_post_list.rect().center())
+
+    assert captured == []

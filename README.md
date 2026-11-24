@@ -7,52 +7,29 @@
 <br>
 
 * ### This is a Personal Fork Using 100% AI, I use it myself so it should be functional, but be aware anyway. Feel free to report bugs, though I am lazy.<br> 
-* Primary source: **Pawchive.pw** (<https://pawchive.pw>). URL parsing, previews, and headers default to it.<br>
-# Additions:<br>
-* Last-downloaded tracking: each post shows its publish date and the date its files were last downloaded, with the creator's most recent date next to the post count.<br>
-* File and Post filtering, they can be used in many combinations, number skipped and by what displayed in run summary. The ammount of filters has grown beyond being worth listing here.<br>
-* 'Search by' row for the post search bar (Title, Filenames, Description, Tags).<br>
-* Adjustable folder names via templates w/ the same placeholder style as Filenames.<br> 
-* Customizable skip post folder option for low-image-count posts.<br>
-  * Posts with a number of files less than or equal to the selected value will have their files saved directly in the creator folder instead of creating a separate subfolder for that post.<br>
-    * Option to download posts with and archive file to a subfolder regardless of 'Skip Post Folder' value.<br>
-* Queue input row: type or paste one creator or post URL under the queue and press Enter or Space to add it; the eye button also adds and opens it.<br>
-  * Creator links and post links get separate rows. A post row groups that creator's linked posts; opening it loads only those posts.<br>
-    * A post row shows its first link with a +N count; hover shows all links, and right-click opens the Linked posts menu.<br>
-    * The button next to a post row's eye loads the full creator with the linked posts selected.<br>
-  * Right-click the queue to import a .txt file of links (one per line) or copy a queued link.<br>
-* 'Data Directory' setting: keeps the app's own working files (databases and saved config profiles) out of the Save Directory.<br>
-* Filename templates: Split into two, 'In Post Folder' and 'In Creator Folder', using placeholders such as `{file_number}`, `{post_id}`, `{post_date}`, `{file_index}`, `{creator_name}` and `{service}`.<br>
-* 'Dedup when filename is taken' (Off/On): saves a second file as `name_1`, `name_2` instead of overwriting it.<br>
-* 'Open Folder' button beside the run controls: opens the creator folder of the run in flight, greyed out until that folder exists.<br>
-* Pawchive previews use the site's 800 px thumbnail; double-click a post to see all of its images in a scrollable list with the post description above them.<br>
+* Primary source: **Pawchive.pw**<br>
 
-# Changes:<br>
-* Creator Downloader is now the first tab and defaults on launch.<br>
-* Removed the intro splash screen and the automatic update check; Settings and the footer now link to the main repo instead.<br>
-* Removed Fast Mode; batch downloading is handled by the multi-creator queue.<br>
-* Toggle boxes swapped from checked to unchecked by default.<br>
-* Changed retry timer from flat 1sec to an exponential (1,2,4,8 etc. capping at 30sec) to avoid hammering the API for no reason.<br>
-* Double-click a post in the list to preview all of its images, with the post description on top; click an image for a larger view.<br>
-* Removed 'Rename & Sort by File order'; the number in front of each file now comes from the filename template itself.<br>
-* Filename and folder-name templates are plain text boxes now, with no preset dropdown.<br>
-* Filters now re-apply to the loaded post list as you change them, with no refetch needed.<br>
-* Download progress moved into its own 'Run Summary' group, with separate 'Skipped Posts' and 'Skipped Files' counter rows.<br>
-* Downloads are written as `.part` and renamed when finished, so a cancelled or failed download leaves nothing behind.<br>
-* Posts save straight into the Save Directory; the 'Folder Name' setting and the 'Open Directory' button are gone.<br>
-* 'Apply Changes' is generated from your settings instead of a hand-filled list, so newer settings appear in the prompt on their own.<br>
-* Cancelling a fetch keeps the posts already loaded instead of clearing the list.<br>
+# Fork Changes:<br>
+* Too many to keep track of. It's basically unrecognizable from main at this point.<br>
+* The fork mainly focuses on extensive levels of filter customizability. Whether that be for the Post Viewer or the downloaded result.<br>
+* You can even auto filter into customizable named folders based on keywords!<br>
+* I wrote this Readme by hand so it looks like shit. Excuse that.<br>
 
 # TODO:<br>
-* 'Image' 'Video' bulk filetype presets.
-* Some kind of alternate 'Post to Download' viewer with compact thumbnail + filename rows.
-* 
+
+## Features<br>
+* 'Image' 'Video' bulk filetype presets.<br>
+
+## Big Features<br>
+* A 'Recommended Keywords' feature that searches in a specific chosen scope (Tile, Tags etc.) and finds 'common tags' as in phrases or such that show up more than a set amount. of times?<br>
+  * Change Keyword Rules into Keyword Folder Sorting and move the toggle back into the menu.<br>
+  * Add a new button below it named 'Recommended Keywords'<br>
+* Remove status bar on bottom and turn settings tab into a button on top right.<br>
+* Some kind of alternate 'Post to Download' viewer with compact thumbnail + filename rows.<br>
+
+# Needs Fixing
+* Downloader must ignore unarchived posts.
 
 # Support OG DEV:<br>
 **Developed by VoxDroid** | **Fork by Deepseek Flash lol**<br>
 [GitHub](https://github.com/VoxDroid) | [Ko-fi](https://ko-fi.com/izeno)
-
-# AI Written Rundown:<br>
-**Just incase I missed something above, the program is damn near unrecognizable from main.**
-
-*AI replaces this & writes whatever they want here.*

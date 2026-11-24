@@ -918,6 +918,15 @@ def split_creator_url(url):
     return "unknown_service", "unknown_creator"
 
 
+def post_page_url(creator_url, post_id):
+    """Return the public page URL of one post, or "" without both parts."""
+    creator_url = str(creator_url or "").rstrip("/")
+    post_id = str(post_id or "").strip()
+    if not creator_url or not post_id:
+        return ""
+    return f"{creator_url}/post/{post_id}"
+
+
 def creator_profile_url(domain_config, service, creator_id):
     """Return the API URL that carries a creator's display name."""
     return f"{domain_config['api_base']}/{service}/user/{creator_id}/profile"
@@ -1857,6 +1866,12 @@ class PostPreviewDialog(QDialog):
         self._meta_label.setTextFormat(Qt.TextFormat.PlainText)
         self._meta_label.setStyleSheet("QLabel { color: #8A9BB5; }")
         header.addWidget(self._meta_label)
+        self._tags_label = QLabel("")
+        self._tags_label.setTextFormat(Qt.TextFormat.PlainText)
+        self._tags_label.setWordWrap(True)
+        self._tags_label.setStyleSheet("QLabel { color: #A0C0FF; }")
+        self._tags_label.hide()
+        header.addWidget(self._tags_label)
         self._status_label = QLabel("")
         self._status_label.setTextFormat(Qt.TextFormat.PlainText)
         self._status_label.setStyleSheet("QLabel { color: #8A9BB5; }")
@@ -1918,11 +1933,29 @@ class PostPreviewDialog(QDialog):
         layout.addWidget(self._splitter, stretch=1)
 
         close_row = QHBoxLayout()
+        self._open_browser_btn = QPushButton(
+            qta.icon("fa5s.external-link-alt", color="white"),
+            translate("open_post_in_browser"),
+        )
+        self._open_browser_btn.setStyleSheet(_RUN_BUTTON_STYLE)
+        self._open_browser_btn.setEnabled(bool(self._post_url()))
+        self._open_browser_btn.clicked.connect(self._open_in_browser)
+        close_row.addWidget(self._open_browser_btn)
         close_row.addStretch(1)
         self._close_btn = QPushButton(translate("close"))
         self._close_btn.clicked.connect(self.accept)
         close_row.addWidget(self._close_btn)
         layout.addLayout(close_row)
+
+    def _post_url(self):
+        """Return this post's public page URL, or "" when it cannot exist."""
+        return post_page_url(self._creator_url, self._post_id)
+
+    def _open_in_browser(self):
+        """Open this post's public page in the default browser."""
+        url = self._post_url()
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
 
 
     def _start_fetch(self):
@@ -2008,6 +2041,14 @@ class PostPreviewDialog(QDialog):
                 translate("post_preview_images_count", len(self._entries))
             )
         self._meta_label.setText(" · ".join(meta_parts))
+
+        tags = parse_post_tags(post.get("tags"))
+        if tags:
+            self._tags_label.setText(translate("post_preview_tags", " · ".join(tags)))
+            self._tags_label.show()
+        else:
+            self._tags_label.clear()
+            self._tags_label.hide()
 
         description = post_description_html(post)
         if description:
@@ -2693,16 +2734,24 @@ def sort_rule_from_dict(data):
 
 
 def sort_rules_from_config(config):
-    """Return the usable rules in a ``sorting`` profile block."""
+    """Return the usable rules in a ``sorting`` profile block.
+
+    A rule that marks the unsorted folder is kept even when it has no values:
+    that folder is the fallback for unmatched posts, so it needs no matcher.
+    """
     if not isinstance(config, dict):
         return []
     raw = config.get("rules")
     if not isinstance(raw, (list, tuple)):
         return []
+    unsorted_folder, _problem = normalize_sort_folder(config.get("unsorted_folder", ""))
+    unsorted_key = unsorted_folder.casefold()
     rules = []
     for entry in raw:
         rule = sort_rule_from_dict(entry)
-        if rule is not None and rule.folder and rule.values:
+        if rule is None or not rule.folder:
+            continue
+        if rule.values or (unsorted_key and rule.folder.casefold() == unsorted_key):
             rules.append(rule)
     return rules
 
@@ -6461,7 +6510,12 @@ class SortRulesDialog(QDialog):
         return self._unsorted_folder
 
     def _toggle_unsorted(self):
-        """Clear the current unsorted folder, or set it from the selected rule."""
+        """Clear the unsorted folder, mark the selected rule, or create one.
+
+        With no rule selected, Set Unsorted creates (or reuses) a rule named
+        "Unsorted" so the fallback has a folder to live in. That rule needs no
+        values: unmatched posts are routed to it by the folder name alone.
+        """
         if self._unsorted_folder:
             self._unsorted_folder = ""
             self._refresh_list(select=self._selected_index())
@@ -6470,13 +6524,32 @@ class SortRulesDialog(QDialog):
             return
 
         row = self._selected_index()
-        if not (0 <= row < len(self._rules)):
-            return
-        folder, _problem = normalize_sort_folder(self._rules[row].folder)
-        if not folder:
-            return
+        if 0 <= row < len(self._rules):
+            folder, problem = normalize_sort_folder(self._rules[row].folder)
+            if not folder or problem:
+                return
+            target = row
+        else:
+            # Nothing selected: the fallback still needs a folder, so use
+            # (or create) an "Unsorted" rule. Such a rule needs no values.
+            folder, problem = normalize_sort_folder(translate("sort_unsorted_folder"))
+            if not folder or problem:
+                return
+            target = next(
+                (
+                    index
+                    for index, rule in enumerate(self._rules)
+                    if normalize_sort_folder(rule.folder)[0].casefold()
+                    == folder.casefold()
+                ),
+                None,
+            )
+            if target is None:
+                self._rules.append(SortRule(folder=folder))
+                target = len(self._rules) - 1
+
         self._unsorted_folder = folder
-        self._refresh_list(select=row)
+        self._refresh_list(select=target)
         self._load_editor()
         self._update_preview()
 
@@ -6488,10 +6561,12 @@ class SortRulesDialog(QDialog):
             return
 
         row = self._selected_index()
-        rule = self._rules[row] if 0 <= row < len(self._rules) else None
+        has_rule = 0 <= row < len(self._rules)
+        rule = self._rules[row] if has_rule else None
         folder, _problem = normalize_sort_folder(rule.folder) if rule else ("", "")
         self._unsorted_button.setText(translate("sort_set_unsorted"))
-        self._unsorted_button.setEnabled(bool(folder))
+        # No selection is the one case that creates the Unsorted rule.
+        self._unsorted_button.setEnabled(bool(folder) or not has_rule)
         self._unsorted_button.setToolTip(translate("sort_set_unsorted_tooltip"))
 
     def set_sorting_enabled(self, enabled):
@@ -6788,7 +6863,11 @@ class SortRulesDialog(QDialog):
                 for value in rule.values
                 if not wildcard_value_is_unusable(value)
             ]
-            if not usable_values:
+            is_unsorted = bool(
+                self._unsorted_folder
+                and folder.casefold() == self._unsorted_folder.casefold()
+            )
+            if not usable_values and not is_unsorted:
                 problems.append(translate("sort_missing_values", index + 1))
             for value in rule.values:
                 if wildcard_value_is_unusable(value):
@@ -7837,6 +7916,12 @@ class CreatorDownloaderTab(QWidget):
         # widget handler catches clicks landing on the row's own children,
         # this one catches anything that reaches the view.
         self.creator_post_list.itemDoubleClicked.connect(self.preview_post)
+        self.creator_post_list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.creator_post_list.customContextMenuRequested.connect(
+            self._show_post_context_menu
+        )
         post_list_layout.addWidget(self.creator_post_list)
 
         # Counters row: the post count on the left, with the creator-level
@@ -8465,6 +8550,7 @@ class CreatorDownloaderTab(QWidget):
         """Translation keys for sorting rules a save cannot keep."""
         warnings = []
         seen = set()
+        unsorted_key = (self._sort_unsorted_folder or "").casefold()
         for rule in self._sort_rules:
             if not rule.enabled and not rule.folder and not rule.values:
                 continue
@@ -8477,7 +8563,8 @@ class CreatorDownloaderTab(QWidget):
                 for value in rule.values
                 if not wildcard_value_is_unusable(value)
             ]
-            if not usable_values:
+            is_unsorted = bool(unsorted_key and folder.casefold() == unsorted_key)
+            if not usable_values and not is_unsorted:
                 warnings.append("sort_config_missing_values")
             elif len(usable_values) != len(rule.values):
                 warnings.append("sort_config_wildcard_only")
@@ -8542,7 +8629,10 @@ class CreatorDownloaderTab(QWidget):
         if not self.creator_sort_enabled_check.isChecked():
             return {}, False
         rules = self._usable_sort_rules()
-        if not rules:
+        unsorted_folder = (
+            self._sort_unsorted_folder if self._sort_download_unsorted else ""
+        )
+        if not rules and not unsorted_folder:
             self.append_log_to_console(
                 translate("log_info", translate("sort_log_no_rules")), "INFO"
             )
@@ -8561,7 +8651,7 @@ class CreatorDownloaderTab(QWidget):
             rules,
             self._punctuation_matching_lenient(),
             self._tag_matching_lenient(),
-            self._sort_unsorted_folder if self._sort_download_unsorted else "",
+            unsorted_folder,
         )
         if routing.counts:
             counts = ", ".join(
@@ -11835,6 +11925,11 @@ class CreatorDownloaderTab(QWidget):
         widget.mouseDoubleClickEvent = (
             lambda event, row=item: self._on_row_double_click(row, event)
         )
+        # The row widget covers the item, so its own right-click must reach
+        # the post menu instead of the list view behind it.
+        widget.contextMenuEvent = lambda event, row=item: self._on_row_context_menu(
+            row, event
+        )
         widget.setStyleSheet("background-color: #2A3B5A; border-radius: 5px;")
 
         # Cache the widget for O(1) lookups
@@ -11992,6 +12087,44 @@ class CreatorDownloaderTab(QWidget):
         """
         event.accept()
         self.preview_post(item)
+
+    def _on_row_context_menu(self, item, event):
+        """Handle a right-click that landed on a post row's child widget."""
+        event.accept()
+        self._show_post_menu(item, event.globalPos())
+
+    def _show_post_context_menu(self, position):
+        """Right-click menu for a post row: open the post on the site."""
+        item = self.creator_post_list.itemAt(position)
+        if item is None:
+            return
+        self._show_post_menu(
+            item, self.creator_post_list.viewport().mapToGlobal(position)
+        )
+
+    def _show_post_menu(self, item, global_pos):
+        """Show the actions a post row offers."""
+        post_id = item.data(Qt.UserRole + 1)
+        url = post_page_url(getattr(self, "current_creator_url", None), post_id)
+        if not url:
+            return
+        if not item.isSelected():
+            self.creator_post_list.setCurrentItem(item)
+        menu = QMenu(self.creator_post_list)
+        menu.setStyleSheet(MENU_STYLE)
+        open_action = menu.addAction(translate("open_post_in_browser"))
+        open_action.triggered.connect(
+            lambda _checked=False, pid=post_id: self._open_post_in_browser(pid)
+        )
+        menu.exec(global_pos)
+        menu.deleteLater()
+
+    def _open_post_in_browser(self, post_id, creator_url=None):
+        """Open a post's public page in the default browser."""
+        creator_url = creator_url or getattr(self, "current_creator_url", None)
+        url = post_page_url(creator_url, post_id)
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
 
     def preview_post(self, item):
         """Open the full post preview for a list row (double-click action).
