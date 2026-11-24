@@ -707,7 +707,7 @@ class TestCreatorDownloaderTab:
         monkeypatch.setattr(
             creator_tab,
             "prepare_files_for_download",
-            lambda urls: prepared.append(urls),
+            lambda urls, post_ids=None: prepared.append(urls),
         )
 
         creator_tab.start_creator_download()
@@ -734,7 +734,7 @@ class TestCreatorDownloaderTab:
         monkeypatch.setattr(
             creator_tab,
             "prepare_files_for_download",
-            lambda urls: prepared.append(urls),
+            lambda urls, post_ids=None: prepared.append(urls),
         )
 
         creator_tab.start_creator_download()

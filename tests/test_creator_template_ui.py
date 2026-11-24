@@ -1,5 +1,3 @@
-from PyQt6.QtWidgets import QMessageBox
-
 from kemonodownloader.creator_downloader import CreatorDownloadThread
 from kemonodownloader.kd_language import translate
 from kemonodownloader.kd_settings import SettingsTab
@@ -32,7 +30,9 @@ def test_template_boxes_hold_the_defaults(qapp, monkeypatch):
         # Help buttons exist and open without raising.
         assert hasattr(st, "creator_template_help_btn")
         assert hasattr(st, "creator_shared_template_help_btn")
-        monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+        monkeypatch.setattr(
+            "kemonodownloader.kd_settings.show_help", lambda *args, **kwargs: None
+        )
         st.show_template_help()
 
         # The dedup guard is a four-way dropdown, Both by default.
@@ -101,7 +101,8 @@ def test_template_help_lists_every_placeholder():
 def test_shared_template_help_adds_the_pooled_files_warning(qapp, monkeypatch):
     shown = []
     monkeypatch.setattr(
-        QMessageBox, "information", lambda *args, **kwargs: shown.append(args)
+        "kemonodownloader.kd_settings.show_help",
+        lambda _host, title, text, topic_id=None, related=(): shown.append((title, text)),
     )
     st = SettingsTab(None)
     try:
@@ -110,7 +111,7 @@ def test_shared_template_help_adds_the_pooled_files_warning(qapp, monkeypatch):
     finally:
         st.deleteLater()
 
-    post_folder, shared = shown[-2][2], shown[-1][2]
+    post_folder, shared = shown[-2][1], shown[-1][1]
     body = translate("filename_template_help_body")
     warning = translate("filename_template_shared_warning")
     fallback = translate("filename_template_fallback")
@@ -184,7 +185,11 @@ def test_the_dedup_row_follows_the_folder_name_template(qapp):
         dedup_row = grid.getItemPosition(
             grid.indexOf(st.creator_unique_filenames_combo)
         )[0]
+        help_row, help_col = grid.getItemPosition(
+            grid.indexOf(st.creator_unique_filenames_help_btn)
+        )[:2]
 
         assert dedup_row == folder_row + 1
+        assert (help_row, help_col) == (dedup_row, 3)
     finally:
         st.deleteLater()

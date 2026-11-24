@@ -283,6 +283,20 @@ def test_resolve_routes_title_only_post_without_facts():
     assert routing.missing_facts == 0
 
 
+def test_resolve_routes_unsorted_posts_to_the_configured_folder():
+    posts = [("One", ("1", "t")), ("Two", ("2", "t"))]
+    facts = {"1": {"tag_list": ["cat"]}, "2": {"tag_list": ["dog"]}}
+    rules = [cd.SortRule("Cats", ("cat",))]
+
+    routing = cd.resolve_sort_folders(
+        posts, facts, rules, unsorted_folder="Unsorted"
+    )
+
+    assert routing.folders == {"1": ("Cats",), "2": ("Unsorted",)}
+    assert routing.counts == {"Cats": 1, "Unsorted": 1}
+    assert routing.unsorted == 1
+
+
 def test_resolve_skips_disabled_rules():
     posts = [("One", ("1", "t"))]
     facts = {"1": {"tag_list": ["cat"]}}
@@ -568,6 +582,27 @@ def test_resolve_run_sort_folders_covers_only_ticked_posts_with_files(
     assert link_all is False
 
 
+def test_download_unsorted_filters_and_routes_unmatched_posts(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+    tab._sort_rules = [cd.SortRule("Cats", ("cat",))]
+    tab.creator_sort_enabled_check.setChecked(True)
+    tab.all_detected_posts = [("One", ("1", "thumb")), ("Two", ("2", "thumb"))]
+    tab.post_search_index = {
+        "1": {"tag_list": ["cat"]},
+        "2": {"tag_list": ["dog"]},
+    }
+    tab.posts_to_download = ["1", "2"]
+
+    tab._sort_download_unsorted = False
+    assert tab._post_ids_to_download() == ["1"]
+
+    tab._sort_download_unsorted = True
+    tab._sort_unsorted_folder = "Unsorted"
+    folders, _link_all = tab._resolve_run_sort_folders()
+
+    assert folders == {"1": ("Cats",), "2": ("Unsorted",)}
+
+
 def test_sorting_disabled_resolves_nothing(qtbot, tmp_path):
     tab = make_tab(qtbot, tmp_path)
     tab._sort_rules = [cd.SortRule("Cats", ("cat",))]
@@ -697,11 +732,20 @@ def test_a_download_closes_the_rules_editor(qtbot, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def make_dialog(qtbot, rules=None, link_all=False, sorting_enabled=True):
+def make_dialog(
+    qtbot,
+    rules=None,
+    link_all=False,
+    sorting_enabled=True,
+    download_unsorted=True,
+    unsorted_folder="",
+):
     dialog = cd.SortRulesDialog(
         rules=rules if rules is not None else [cd.SortRule("Cats", ("cat",))],
         sorting_enabled=sorting_enabled,
         link_all=link_all,
+        download_unsorted=download_unsorted,
+        unsorted_folder=unsorted_folder,
         posts=[("One", ("1", "thumb")), ("Two", ("2", "thumb"))],
         post_search_index={
             "1": {"tag_list": ["cat"]},
@@ -749,6 +793,61 @@ def test_dialog_add_creates_a_valid_unique_folder(qtbot):
         "New Folder 2",
     ]
     assert "(no folder)" not in dialog._rule_list.item(0).text()
+
+
+def test_dialog_preview_uses_lenient_tag_matching(qtbot):
+    dialog = make_dialog(
+        qtbot,
+        rules=[cd.SortRule("F", ("ブルーアーカイブ",))],
+    )
+    dialog._posts = [("One", ("1", "thumb"))]
+    dialog._ticked_ids = {"1"}
+    dialog._post_search_index = {
+        "1": {"tag_list": ["アイン(ブルーアーカイブ)"]}
+    }
+
+    dialog._update_preview()
+    assert translate("sort_preview_unsorted", 1) in dialog._preview.toPlainText()
+
+    dialog.set_lenient_tags(True)
+    assert translate("sort_preview_line", "F", 1) in dialog._preview.toPlainText()
+
+
+def test_dialog_download_unsorted_controls(qtbot):
+    dialog = make_dialog(qtbot, download_unsorted=False)
+
+    assert dialog.download_unsorted() is False
+    assert dialog._unsorted_button.text() == "Set Unsorted"
+
+    dialog._download_unsorted_check.setChecked(True)
+    assert dialog.download_unsorted() is True
+
+
+def test_dialog_unsorted_button_sets_clears_and_prevents_replacement(qtbot):
+    dialog = make_dialog(
+        qtbot,
+        rules=[
+            cd.SortRule("Cats", ("cat",)),
+            cd.SortRule("Dogs", ("dog",)),
+        ],
+    )
+
+    assert dialog._unsorted_button.text() == "Set Unsorted"
+    dialog._unsorted_button.click()
+    assert dialog.unsorted_folder() == "Cats"
+    assert dialog._unsorted_button.text() == "Clear Unsorted"
+
+    dialog._rule_list.setCurrentRow(1)
+    assert dialog._unsorted_button.text() == "Clear Unsorted"
+    assert dialog._unsorted_button.isEnabled() is True
+
+    dialog._unsorted_button.click()
+    assert dialog.unsorted_folder() == ""
+    assert dialog._unsorted_button.text() == "Set Unsorted"
+
+    dialog._unsorted_button.click()
+    assert dialog.unsorted_folder() == "Dogs"
+    assert dialog._unsorted_button.text() == "Clear Unsorted"
 
 
 def test_dialog_adds_and_edits_a_rule(qtbot):
@@ -856,6 +955,26 @@ def test_skip_wildcards_and_plain_terms_differ():
     assert cd._keyword_or_wildcard_match(["c?t"], "cat")
 
 
+def test_tag_matching_behavior_switches_whole_tag_and_substring():
+    facts = {"tag_list": ["アイン(ブルーアーカイブ)"]}
+    rule = cd.SortRule("F", ("ブルーアーカイブ",))
+
+    assert not cd.sort_rule_matches("P", facts, rule)
+    assert cd.sort_rule_matches("P", facts, rule, lenient_tags=True)
+
+    filters = cd.PostFilters(
+        skip_keywords=("ブルーアーカイブ",),
+        skip_scopes=frozenset({"tags"}),
+    )
+    assert cd.keyword_skip_reason("P", facts, filters) == ""
+    assert (
+        cd.keyword_skip_reason(
+            "P", facts, filters._replace(lenient_tags=True)
+        )
+        == "ブルーアーカイブ"
+    )
+
+
 def test_skip_wildcards_match_whole_tags():
     facts = {"tag_list": ["BlackCat"], "description": "not a match"}
     filters = cd.PostFilters(
@@ -918,6 +1037,11 @@ def test_dialog_labels_and_placeholders(qtbot):
     dialog = make_dialog(qtbot)
 
     assert dialog.windowTitle() == "Sort posts by keyword"
+    assert dialog._rules_group.title() == "Rules"
+    assert dialog._unsorted_button.parent() is dialog._rules_group
+    assert dialog._editor_group.title() == "Rule Settings"
+    assert dialog._run_settings_group.title() == "Run Settings"
+    assert dialog._preview.height() == 65
     assert dialog._match_combo.itemText(0) == "Any value"
     assert dialog._match_combo.itemText(1) == "All values"
     assert (
@@ -931,16 +1055,30 @@ def test_keyword_help_text_has_a_dedicated_syntax_block():
     sort_help = translate("sort_help_text")
     assert "Keyword syntax" in sort_help
     assert "<table" in sort_help
+    assert "Any value</b> (OR)" in sort_help
+    assert "All values</b> (AND)" in sort_help
+    assert "a post with tag cat OR title dog matches" in sort_help
+    assert "アイン(ブルーアーカイブ)" in sort_help
     assert "Keyword Matching Rules" not in sort_help
     assert "The Punctuation Matching Behavior setting applies" in sort_help
     assert "content images are not checked" in sort_help
     assert "Cat, Neko" not in sort_help
     assert "skip order" not in sort_help.lower()
 
+    syntax_help = translate("keyword_syntax_help_text")
+    assert "Keyword syntax" in syntax_help
+    assert "<table" in syntax_help
+    assert "Punctuation Matching Behavior setting" in syntax_help
+    assert "<a " not in syntax_help
+
     for key in ("skip_posts_keywords_help_text", "skip_files_keywords_help_text"):
         text = translate(key)
-        assert "Keyword syntax" in text
-        assert "<table" in text
+        # Contextual help points at the shared syntax topic instead of
+        # repeating the whole table in every box.
+        assert "Keyword syntax in Related" in text
+        assert "Punctuation Matching Behavior setting" in text
+        assert "<table" not in text
+        assert "<a " not in text
         assert "Keyword Matching Rules" not in text
         assert "In sorting rules, Tags must match the whole tag" not in text
         assert "plain values still follow" not in text
@@ -963,6 +1101,16 @@ def test_sorting_translation_keys_exist_and_old_ones_are_gone():
         "sort_new_folder",
         "sort_link_all",
         "sort_link_all_tooltip",
+        "sort_download_unsorted",
+        "sort_download_unsorted_tooltip",
+        "sort_set_unsorted",
+        "sort_clear_unsorted",
+        "sort_set_unsorted_tooltip",
+        "sort_clear_unsorted_tooltip",
+        "sort_unsorted_marker",
+        "sort_rule_settings",
+        "sort_run_settings",
+        "sort_no_sorted_posts",
         "sort_rules_label",
         "sort_rule_add",
         "sort_rule_remove",
@@ -981,6 +1129,7 @@ def test_sorting_translation_keys_exist_and_old_ones_are_gone():
         "sort_preview_none",
         "sort_preview_line",
         "sort_preview_unsorted",
+        "sort_preview_unsorted_skipped",
         "sort_preview_missing",
         "sort_preview_multi",
         "sort_preview_extra_links",

@@ -3,9 +3,11 @@
 from types import SimpleNamespace
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QWidget
 
 from kemonodownloader import creator_downloader as cd
 from kemonodownloader.download_history import DownloadHistoryDB, iso_to_local_date
+from kemonodownloader.kd_help import show_help
 from kemonodownloader.kd_language import language_manager, translate
 
 STAMP = "2026-01-02T03:04:05+00:00"
@@ -484,11 +486,11 @@ def test_box_info_dialog_shows_only_the_row_format(qtbot, tmp_path, monkeypatch)
     tab, _ = make_tab(qtbot, tmp_path)
     captured = {}
 
-    def fake_information(parent, title, text, *args, **kwargs):
+    def fake_help(host, title, text, topic_id=None, related=()):
         captured["title"] = title
         captured["text"] = text
 
-    monkeypatch.setattr(cd.QMessageBox, "information", fake_information)
+    monkeypatch.setattr(cd, "show_help", fake_help)
     tab.creator_box_info_btn.click()
 
     assert captured["title"] == translate("downloader_box_info_title")
@@ -498,6 +500,94 @@ def test_box_info_dialog_shows_only_the_row_format(qtbot, tmp_path, monkeypatch)
     assert captured["text"].count("\n") == 1, "two lines"
     assert "Key: Post Title | (Publish Date) | [Last Downloaded Date]" in captured["text"]
     assert "and Double Click to view a post." in captured["text"]
+
+
+def test_help_window_hot_swaps_sizes_and_navigates_links(qtbot):
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.show()
+
+    window = show_help(host, "Short Help", "line one\nline two")
+    assert window.isModal() is False
+    assert window.isVisible()
+    assert window.isSizeGripEnabled() is False
+    assert window.height() < 300, "a short topic should stay compact"
+    short_height = window.height()
+
+    window = show_help(
+        host,
+        translate("skip_posts_keywords_help_title"),
+        translate("skip_posts_keywords_help_text"),
+        related=("keyword-syntax", "punctuation-matching"),
+    )
+    assert window is host._help_window
+    assert window.windowTitle() == translate("skip_posts_keywords_help_title")
+    assert window.height() >= short_height
+    assert "Skip whole posts" in window._browser.toPlainText()
+    assert window._related_bar.isVisible()
+
+    window._follow_topic("keyword-syntax")
+    assert window.windowTitle() == translate("keyword_syntax_help_title")
+    assert "Keyword syntax" in window._browser.toPlainText()
+    assert window._back_button.isVisible()
+
+    window._go_back()
+    assert window.windowTitle() == translate("skip_posts_keywords_help_title")
+    assert window._back_button.isVisible() is False
+    window.close()
+
+
+def test_help_window_returns_to_the_same_size_after_a_manual_resize(qtbot):
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.show()
+
+    window = show_help(host, "Short Help", "line one\nline two")
+    original = window.size()
+    window.resize(900, 700)
+    show_help(
+        host,
+        translate("skip_posts_keywords_help_title"),
+        translate("skip_posts_keywords_help_text"),
+        related=("keyword-syntax", "punctuation-matching"),
+    )
+    show_help(host, "Short Help", "line one\nline two")
+
+    assert window.size() == original
+    window.close()
+
+
+def test_every_creator_info_button_opens_the_shared_help_topic(
+    qtbot, tmp_path, monkeypatch
+):
+    tab, _ = make_tab(qtbot, tmp_path)
+    shown = []
+    monkeypatch.setattr(
+        cd,
+        "show_help",
+        lambda host, title, text, topic_id=None, related=(): shown.append((host, title, text)),
+    )
+
+    buttons = (
+        (tab.skip_keywords_help_btn, "skip_posts_keywords_help_title"),
+        (tab.file_skip_keywords_help_btn, "skip_files_keywords_help_title"),
+        (tab.date_filter_help_btn, "date_filter_help_title"),
+        (tab.file_count_help_btn, "file_count_help_title"),
+        (
+            tab.filter_no_selected_filetypes_help_btn,
+            "filter_no_selected_filetypes_help_title",
+        ),
+        (tab.creator_skip_folder_info_btn, "skip_folder_info_title"),
+        (tab.creator_skip_images_info_btn, "skip_images_info_title"),
+        (tab.creator_box_info_btn, "downloader_box_info_title"),
+    )
+    for button, title_key in buttons:
+        button.click()
+        assert shown[-1][0] is tab._help_host()
+        assert shown[-1][1] == translate(title_key)
+        assert shown[-1][2]
+
+    assert len(shown) == len(buttons)
 
 
 def test_new_translation_keys_exist_in_every_language():
@@ -511,6 +601,17 @@ def test_new_translation_keys_exist_in_every_language():
                 "not_available",
                 "downloader_box_info_title",
                 "downloader_box_info_text",
+                "keyword_syntax_help_title",
+                "keyword_syntax_help_text",
+                "unique_filenames_help_title",
+                "unique_filenames_help_text",
+                "related_help",
+                "tag_matching_behavior",
+                "tag_matching_default",
+                "tag_matching_lenient",
+                "tag_matching_help_title",
+                "tag_matching_help_text",
+                "back",
             ):
                 value = translate(key)
                 assert value and value != key, f"{key} missing for {language}"

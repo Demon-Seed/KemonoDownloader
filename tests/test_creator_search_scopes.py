@@ -35,6 +35,7 @@ INDEX = {
         "filenames": "alien-01.png bonus.zip",
         "description": "a sketch dump of aliens",
         "tags": "aliencomic sci-fi",
+        "tag_list": ["AlienComic", "Sci-Fi"],
     }
 }
 
@@ -67,6 +68,24 @@ def test_description_scope_matches_indexed_description():
 def test_tags_scope_matches_indexed_tags():
     assert cd.post_matches_search("Post", "1", "sci-fi", {"tags"}, INDEX)
     assert not cd.post_matches_search("Post", "1", "sci-fi", {"title"}, INDEX)
+
+    # Tags are whole values: the site's compound tag must not be found by
+    # searching for the shorter tag contained inside it.
+    compound = {
+        "1": {
+            "tags": "妊婦 ボテ腹 アイン(ブルーアーカイブ)",
+            "tag_list": ["妊婦", "ボテ腹", "アイン(ブルーアーカイブ)"],
+        }
+    }
+    assert not cd.post_matches_search(
+        "Post", "1", "ブルーアーカイブ", {"tags"}, compound
+    )
+    assert cd.post_matches_search(
+        "Post", "1", "アイン(ブルーアーカイブ)", {"tags"}, compound
+    )
+    assert cd.post_matches_search(
+        "Post", "1", "ブルーアーカイブ", {"tags"}, compound, lenient_tags=True
+    )
 
 
 def test_scopes_combine_with_or():

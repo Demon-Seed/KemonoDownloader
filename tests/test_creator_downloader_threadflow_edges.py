@@ -68,7 +68,7 @@ def test_start_creator_download_prepares_only_current_creator(tmp_path):
     refetched = []
     prepared = []
     tab.check_creator_from_queue = lambda url: refetched.append(url)
-    tab.prepare_files_for_download = lambda urls: prepared.append(urls)
+    tab.prepare_files_for_download = lambda urls, post_ids=None: prepared.append(urls)
 
     tab.start_creator_download()
 

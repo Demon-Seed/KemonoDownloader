@@ -23,9 +23,11 @@ _FILENAME_HELP_BODY = (
 )
 _FILENAME_HELP_FALLBACK = "<b>Fallback: {post_id}_{orig_name}.</b>"
 
-# One wording for the keyword inputs: sorting rules, Skip Posts and Skip
-# Files share the comma/quote/wildcard language. Punctuation at literal
-# edges is governed by the separate Punctuation Matching Behavior setting.
+# One wording for the keyword inputs: sorting rules and both skip boxes use
+# the same comma/quote/wildcard language. The full table lives in the
+# Keyword syntax help topic; Sort's inline help appends it directly.
+# Punctuation at literal edges is governed by the separate Punctuation
+# Matching Behavior setting.
 _KEYWORD_SYNTAX_HTML = (
     "<h3>Keyword syntax</h3>"
     "<ul>"
@@ -71,6 +73,7 @@ STRINGS = {
     "app_title": "Kemono Downloader",
     "apply_changes": "Apply Changes",
     "attachments": "Attachments",
+    "back": "Back",
     "base_api_url": "Base API URL: {0}",
     "browse": "Browse",
     "bulk_add_complete": "Bulk Add Complete",
@@ -356,6 +359,11 @@ STRINGS = {
     "punctuation_matching_rules": "Punctuation Matching Behavior:",
     "punctuation_rules_default": "Default",
     "punctuation_rules_relaxed": "Relaxed",
+    "tag_matching_behavior": "Tag Matching Behavior:",
+    "tag_matching_default": "Default",
+    "tag_matching_lenient": "Lenient",
+    "tag_matching_help_title": "Tag Matching Behavior Help",
+    "tag_matching_help_text": "Default compares tags as whole values. For example, ブルーアーカイブ does not match アイン(ブルーアーカイブ) in Posts to Download, Skip Posts, Skip Files or Keyword Rules.\n\nLenient restores substring matching: ブルーアーカイブ matches any tag containing it. This applies to all tag searching and rules.",
     "queue_input_behavior_help_text": "Controls what happens after a link is added to the Queue.\n\nDefault: only the link is added.\n\nLoad First: the first link is opened. Once something is open, adding more only queues them.\n\nLoad Every: every link is opened straight away, replacing the current view.\n\nA post link added while that creator's linked posts are already open updates the view immediately. The eye button always adds and opens the link.",
     "queue_input_behavior_help_title": "Queue Input Field Behavior Help",
     "queue_input_default": "Default",
@@ -408,9 +416,17 @@ STRINGS = {
     "simultaneous_downloads": "Simultaneous Downloads:",
     "single_creator_folder": "All files in creator folder",
     "size_mismatch_error": "Downloaded size ({0} bytes) does not match expected size ({1} bytes) for {2}",
+    "related_help": "Related:",
     "run_summary": "Run Summary",
+    "keyword_syntax_help_text": (
+        "<p>These rules apply to Skip Posts, Skip Files and sorting values.</p>"
+        + _KEYWORD_SYNTAX_HTML
+        + "<p>Punctuation at a value's edge follows the "
+        "Punctuation Matching Behavior setting.</p>"
+    ),
+    "keyword_syntax_help_title": "Keyword Syntax Help",
     "skip_files_keywords": "Skip Files Containing",
-    "skip_files_keywords_help_text": "<p>Skip individual files whose name matches any of these keywords. Only the matched file is skipped; the rest of the post is still downloaded. The file extension is ignored when matching.</p><p>Plain keywords are case-insensitive and whole-word. Use <code>*...*</code> to match part of a file name. Punctuation Matching Behavior controls punctuation at their edges.</p><p>Leave the box blank to disable.</p>" + _KEYWORD_SYNTAX_HTML,
+    "skip_files_keywords_help_text": "<p>Skip individual files whose name matches any of these keywords. Only the matched file is skipped; the rest of the post is still downloaded. The file extension is ignored when matching.</p><p>Plain keywords are case-insensitive and whole-word. Use <code>*...*</code> to match part of a file name. Separate values with commas; quote a value that contains a comma; use <code>*</code> and <code>?</code> as wildcards. The full table is under Keyword syntax in Related.</p><p>Punctuation at their edges follows the Punctuation Matching Behavior setting.</p><p>Leave the box blank to disable.</p>",
     "skip_files_keywords_help_title": "Skip Files Help",
     "skip_files_keywords_placeholder": "e.g. JP, EN (comma-separated)",
     "skip_folder_for_few_images": "Skip Post Folder",
@@ -422,7 +438,7 @@ STRINGS = {
     "skip_keyword_matched_after_rejoin": "[SKIP-KEYWORD] '{0}' matched the description after re-joining inline tags",
     "skip_keywords_scope": "Filter By",
     "skip_posts_keywords": "Skip Posts Containing",
-    "skip_posts_keywords_help_text": "<p>Skip whole posts whose title, file names, description or tags match any of these keywords.</p><p>Use the <b>Filter By</b> boxes to choose which fields are checked. A post is skipped when a keyword matches in any enabled field:</p><ul><li><b>Title</b> - the post title</li><li><b>Filenames</b> - the main file and attachment names (extension ignored)</li><li><b>Description</b> - the post body text</li><li><b>Tags</b> - the post tags</li></ul><p>Plain keywords are case-insensitive and whole-word, so <code>black</code> matches \"Black\" but not \"BlackCat\". Use <code>*black*</code> to match part of a word. Punctuation Matching Behavior controls punctuation at their edges.</p><p>Leave the box blank to disable.</p>" + _KEYWORD_SYNTAX_HTML,
+    "skip_posts_keywords_help_text": "<p>Skip whole posts whose title, file names, description or tags match any of these keywords.</p><p>Use the <b>Filter By</b> boxes to choose which fields are checked. A post is skipped when a keyword matches in any enabled field:</p><ul><li><b>Title</b> - the post title</li><li><b>Filenames</b> - the main file and attachment names (extension ignored)</li><li><b>Description</b> - the post body text</li><li><b>Tags</b> - the post tags</li></ul><p>Plain keywords are case-insensitive and whole-word, so <code>black</code> matches \"Black\" but not \"BlackCat\". Use <code>*black*</code> to match part of a word. Separate values with commas; quote a value that contains a comma; use <code>*</code> and <code>?</code> as wildcards. The full table is under Keyword syntax in Related.</p><p>Punctuation at their edges follows the Punctuation Matching Behavior setting.</p><p>Leave the box blank to disable.</p>",
     "skip_posts_keywords_help_title": "Skip Posts Help",
     "skip_posts_keywords_placeholder": "e.g. JP, EN (comma-separated)",
     "skip_scope_description_toggle": "Description",
@@ -435,6 +451,15 @@ STRINGS = {
     "skip_tooltip_post_keywords": "Posts skipped by keyword:",
     "skipped_individual_file": "Skipped individual file (keyword match): {0}",
     "sort_apply": "Apply",
+    "sort_download_unsorted": "Download Unsorted",
+    "sort_download_unsorted_tooltip": "Include posts that match no sorting rule.",
+    "sort_set_unsorted": "Set Unsorted",
+    "sort_clear_unsorted": "Clear Unsorted",
+    "sort_set_unsorted_tooltip": "Use the selected rule's folder for unmatched posts.",
+    "sort_clear_unsorted_tooltip": "Clear the current unsorted folder.",
+    "sort_unsorted_marker": "Unsorted",
+    "sort_rule_settings": "Rule Settings",
+    "sort_run_settings": "Run Settings",
     "sort_by_keyword": "Sort posts by keyword",
     "sort_by_keyword_tooltip": "Put posts that match a rule into <creator folder>/<rule folder>",
     "sort_config_duplicate_folder": "Two sorting rules use the same folder name.",
@@ -443,14 +468,14 @@ STRINGS = {
     "sort_config_wildcard_only": "A sorting rule contains a value made only of * or ?.",
     "sort_duplicate_folder": "Rule {0}: the folder \"{1}\" is already used by another rule.",
     "sort_help_back": "Back",
-    "sort_help_text": "<h2>Sort posts by keyword</h2><p>Posts that match a rule go into <code>&lt;creator folder&gt;/&lt;rule folder&gt;</code>. Everything else about the download stays the same.</p><h3>Rules</h3><p>Rules are checked in order and the first match wins. A post that matches no rule goes to the creator folder.</p><h3>Values and Match</h3><p>Each value is an alternative. <b>Any value</b> needs one match; <b>All values</b> needs every value to match.</p><h3>Look in</h3><ul><li><b>Tags</b> - the whole tag must match.</li><li><b>Title</b>, <b>Filenames</b>, <b>Description</b> - the pattern must match a word.</li></ul><p><b>Filenames</b> covers main files and attachments only; content images are not checked.</p>" + _KEYWORD_SYNTAX_HTML + "<h3>Hardlinks</h3><p>With <b>Also hardlink into every other matching folder</b>, every matching folder gets a hardlink. Hardlinks share the same bytes and cost no extra space, but some cloud-sync clients upload each name separately.</p><h3>Preview</h3><p>The preview uses the details from the current fetch. A post with no details can still match on its title; other scopes need the details.</p><p>The Punctuation Matching Behavior setting applies to literal edges in sorting values too; a <code>*</code> edge is unrestricted.</p><p>Apply changes on this page; use Save Config or Save Creator Config to keep the rules.</p>",
+    "sort_help_text": "<h2>Sort posts by keyword</h2><p>Posts that match a rule go into <code>&lt;creator folder&gt;/&lt;rule folder&gt;</code>. Everything else about the download stays the same.</p><h3>Rules</h3><p>Rules are checked in order and the first match wins. A post that matches no rule goes to the creator folder.</p><h3>Values and Match</h3><p><b>Any value</b> (OR): the rule matches when at least one value matches in any selected <b>Look in</b> field.</p><p><b>All values</b> (AND): the rule matches only when every value matches somewhere in the selected fields. Different values can match different fields; they do not all have to appear in the same field.</p><p>Example: values <code>cat, dog</code> with <b>Tags</b> and <b>Title</b> selected:</p><ul><li><b>Any value</b> - a post with tag cat OR title dog matches.</li><li><b>All values</b> - a post needs both cat and dog somewhere in those fields.</li></ul><h3>Look in</h3><ul><li><b>Tags</b> - the whole tag must match by default; with Tag Matching Behavior: Lenient, a value can match any part of a tag. A tag such as <code>アイン(ブルーアーカイブ)</code> is not the same as <code>ブルーアーカイブ</code>; use <code>*ブルーアーカイブ*</code> in a rule value to match part of a tag.</li><li><b>Title</b>, <b>Filenames</b>, <b>Description</b> - the pattern must match a word.</li></ul><p><b>Filenames</b> covers main files and attachments only; content images are not checked.</p>" + _KEYWORD_SYNTAX_HTML + "<h3>Hardlinks</h3><p>With <b>Hardlink across matching folders</b>, every matching folder gets a hardlink. Hardlinks share the same bytes and cost no extra space, but some cloud-sync clients upload each name separately.</p><h3>Unsorted posts</h3><p>Posts that match no rule go to the creator folder. Turn off <b>Download Unsorted</b> to leave them out of the run, or select a rule and use <b>Set Unsorted</b> to put them in that rule's folder. The button changes to <b>Clear Unsorted</b>; clear it before choosing another rule.</p><h3>Preview</h3><p>The preview uses the details from the current fetch. A post with no details can still match on its title; other scopes need the details.</p><p>The Punctuation Matching Behavior setting applies to literal edges in sorting values too; a <code>*</code> edge is unrestricted.</p><p>Apply changes on this page; use Save Config or Save Creator Config to keep the rules.</p>",
     "sort_help_title": "Sort posts by keyword - Help",
     "sort_invalid_folder": "Rule {0}: the folder name is empty or unusable.",
     "sort_invalid_text": "Fix these before applying:\n{0}",
     "sort_invalid_title": "Sort rules",
     "sort_keyword_rules": "Keyword Rules",
     "sort_keyword_rules_tooltip": "Edit the keyword sorting rules",
-    "sort_link_all": "Also hardlink into every other matching folder",
+    "sort_link_all": "Hardlink across matching folders",
     "sort_link_all_tooltip": "Hardlinks share the same bytes on disk, so they cost no extra space. Some cloud-sync clients upload each name as a separate file.",
     "sort_link_failed": "Could not hardlink {0} into \"{1}\": {2}",
     "sort_links_summary": "Auto-sort: created {0} extra hardlink(s), {1} failed.",
@@ -462,6 +487,7 @@ STRINGS = {
     "sort_missing_values": "Rule {0}: add at least one value.",
     "sort_new_folder": "New Folder",
     "sort_no_rules_hint": "Add a rule to start.",
+    "sort_no_sorted_posts": "No selected posts matched a sorting rule; enable Download Unsorted or add a rule.",
     "sort_preview_extra_links": "Extra folders per file: {0}",
     "sort_preview_label": "Preview",
     "sort_preview_line": "{0}: {1}",
@@ -469,6 +495,7 @@ STRINGS = {
     "sort_preview_multi": "Match more than one rule: {0}",
     "sort_preview_none": "No posts to preview.",
     "sort_preview_unsorted": "Unsorted: {0}",
+    "sort_preview_unsorted_skipped": "Unsorted (not downloaded): {0}",
     "sort_rule_add": "Add Rule",
     "sort_rule_all": "All values",
     "sort_rule_any": "Any value",
@@ -557,7 +584,18 @@ STRINGS = {
     "unexpected_error_title": "Unexpected Error",
     "unexpected_response_structure": "Unexpected response structure: {0}",
     "unique_filenames": "Name Dedup:",
-    "unique_filenames_tooltip": "Which names get a _1, _2, ... suffix rather than replacing what is already there. 'On (File)' guards file names, 'On (Folder)' guards post folder names (two posts with the same title then keep separate folders), 'On (Both)' guards both. Re-downloading the same file still repairs it in place. Nothing changes while the templates keep names apart ({post_id}/{file_number} in the filename templates, {post_id} in the folder one).",
+    "unique_filenames_help_text": (
+        "Which names get a _1, _2, ... suffix rather than replacing what is "
+        "already there.\n\n"
+        "On (File) - protects file names.\n"
+        "On (Folder) - protects post folder names, so two posts with the same "
+        "title keep separate folders.\n"
+        "On (Both) - protects both.\n\n"
+        "Re-downloading the same file still repairs it in place. Nothing "
+        "changes while the templates keep names apart ({post_id}/{file_number} "
+        "in the filename templates, {post_id} in the folder one)."
+    ),
+    "unique_filenames_help_title": "Name Dedup Help",
     "update_settings": "Updates",
     "updated_checked_posts_count": "Updated checked posts count: {0}, checked_urls: {1}, all_detected: {2}, selected IDs: {3}",
     "updating_checkboxes": "Updating checkboxes...",

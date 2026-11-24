@@ -128,11 +128,21 @@ def test_store_ignores_other_versions_and_corrupt_payloads(tmp_path):
 
 def test_snapshot_holds_options_and_filters_only(qtbot, tmp_path):
     tab = make_tab(qtbot, tmp_path)
+    tab._sort_download_unsorted = False
+    tab._sort_unsorted_folder = "Misc"
     snapshot = tab._config_snapshot()
 
     # No post ticks, no URL box, no search text: a profile is configuration.
     assert set(snapshot) == {"options", "filters", "search_scopes", "sorting"}
-    assert set(snapshot["sorting"]) == {"enabled", "link_all", "rules"}
+    assert set(snapshot["sorting"]) == {
+        "enabled",
+        "link_all",
+        "download_unsorted",
+        "unsorted_folder",
+        "rules",
+    }
+    assert snapshot["sorting"]["download_unsorted"] is False
+    assert snapshot["sorting"]["unsorted_folder"] == "Misc"
     assert snapshot["sorting"]["rules"] == []
     assert set(snapshot["options"]) == {
         "main",

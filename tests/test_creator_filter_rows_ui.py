@@ -242,11 +242,11 @@ def test_file_count_help_dialog_explains_the_filter(qtbot, tmp_path, monkeypatch
     tab = make_tab(qtbot, tmp_path)
     captured = {}
 
-    def fake_information(parent, title, text, *args, **kwargs):
+    def fake_help(host, title, text, topic_id=None, related=()):
         captured["title"] = title
         captured["text"] = text
 
-    monkeypatch.setattr(cd.QMessageBox, "information", fake_information)
+    monkeypatch.setattr(cd, "show_help", fake_help)
     tab.file_count_help_btn.click()
 
     assert captured["title"] == tab.file_count_help_btn.toolTip()
@@ -279,11 +279,11 @@ def test_skip_images_help_dialog_is_reachable(qtbot, tmp_path, monkeypatch):
     tab = make_tab(qtbot, tmp_path)
     captured = {}
 
-    def fake_information(parent, title, text, *args, **kwargs):
+    def fake_help(host, title, text, topic_id=None, related=()):
         captured["title"] = title
         captured["text"] = text
 
-    monkeypatch.setattr(cd.QMessageBox, "information", fake_information)
+    monkeypatch.setattr(cd, "show_help", fake_help)
     tab.creator_skip_images_info_btn.click()
 
     assert captured["title"] == tab.creator_skip_images_info_btn.toolTip()

@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
 )
 
 from kemonodownloader import kd_paths
+from kemonodownloader.kd_help import show_help
 from kemonodownloader.kd_language import language_manager, translate
 from kemonodownloader.kd_theme import scoped
 
@@ -127,6 +128,14 @@ PUNCTUATION_MATCHING_MODES = ("default", "lenient")
 _PUNCTUATION_LABEL_KEYS = {
     "default": "punctuation_rules_default",
     "lenient": "punctuation_rules_relaxed",
+}
+
+# "Tag Matching Behavior": "default" compares whole tags; "lenient" restores
+# substring matching across every tag search/rule.
+TAG_MATCHING_MODES = ("default", "lenient")
+_TAG_MATCHING_LABEL_KEYS = {
+    "default": "tag_matching_default",
+    "lenient": "tag_matching_lenient",
 }
 
 # "Queue Input Field Behavior": what the Creator Queue's input row does after
@@ -249,6 +258,7 @@ class SettingsTab(QWidget):
             "creator_folder_name_template": "{post_id}_{post_title}",
             # Matching rule for the Creator tab's skip keywords and sorting.
             "punctuation_matching_rules": "default",  # default|lenient
+            "tag_matching_behavior": "default",  # default|lenient
             # Font setting
             "font": "JetBrains Mono",  # "JetBrains Mono", "Poppins"
         }
@@ -398,6 +408,13 @@ class SettingsTab(QWidget):
             not in PUNCTUATION_MATCHING_MODES
         ):
             settings_dict["punctuation_matching_rules"] = "default"
+        settings_dict["tag_matching_behavior"] = self.qsettings.value(
+            "tag_matching_behavior",
+            self.default_settings.get("tag_matching_behavior", "default"),
+            type=str,
+        )
+        if settings_dict["tag_matching_behavior"] not in TAG_MATCHING_MODES:
+            settings_dict["tag_matching_behavior"] = "default"
         # Font setting
         settings_dict["font"] = self.qsettings.value(
             "font", self.default_settings.get("font", "JetBrains Mono"), type=str
@@ -470,6 +487,10 @@ class SettingsTab(QWidget):
         self.qsettings.setValue(
             "punctuation_matching_rules",
             self.settings.get("punctuation_matching_rules", "default"),
+        )
+        self.qsettings.setValue(
+            "tag_matching_behavior",
+            self.settings.get("tag_matching_behavior", "default"),
         )
         # Font setting
         self.qsettings.setValue(
@@ -757,6 +778,12 @@ class SettingsTab(QWidget):
         )
         creator_custom_layout.addWidget(self.creator_unique_filenames_combo, 3, 1, 1, 2)
 
+        self.creator_unique_filenames_help_btn = make_info_button()
+        self.creator_unique_filenames_help_btn.clicked.connect(
+            self.show_unique_filenames_help
+        )
+        creator_custom_layout.addWidget(self.creator_unique_filenames_help_btn, 3, 3)
+
         self.creator_folder_strategy_label = QLabel()
         creator_custom_layout.addWidget(self.creator_folder_strategy_label, 4, 0)
 
@@ -860,11 +887,41 @@ class SettingsTab(QWidget):
         )
         creator_custom_layout.addWidget(self.punctuation_matching_help_btn, 6, 3)
 
+        # Tag matching behavior: whole tag by default, substring in Lenient.
+        self.tag_matching_behavior_label = QLabel()
+        creator_custom_layout.addWidget(self.tag_matching_behavior_label, 7, 0)
+
+        self.tag_matching_behavior_combo = QComboBox()
+        for label_key, mode in (
+            ("tag_matching_default", "default"),
+            ("tag_matching_lenient", "lenient"),
+        ):
+            self.tag_matching_behavior_combo.addItem(translate(label_key), mode)
+        self.tag_matching_behavior_combo.setStyleSheet(
+            scoped("QComboBox", "padding: 5px; border-radius: 5px;")
+        )
+        current_tag_mode = self.temp_settings.get("tag_matching_behavior", "default")
+        for i in range(self.tag_matching_behavior_combo.count()):
+            if self.tag_matching_behavior_combo.itemData(i) == current_tag_mode:
+                self.tag_matching_behavior_combo.setCurrentIndex(i)
+                break
+        self.tag_matching_behavior_combo.currentIndexChanged.connect(
+            lambda idx: self.update_temp_setting(
+                "tag_matching_behavior",
+                self.tag_matching_behavior_combo.itemData(idx),
+            )
+        )
+        creator_custom_layout.addWidget(self.tag_matching_behavior_combo, 7, 1, 1, 2)
+
+        self.tag_matching_help_btn = make_info_button()
+        self.tag_matching_help_btn.clicked.connect(self.show_tag_matching_help)
+        creator_custom_layout.addWidget(self.tag_matching_help_btn, 7, 3)
+
         # What the Creator Queue's input row does once a URL is committed.
         # Adding is identical in every mode; only the auto-loading differs.
         self.queue_input_behavior_label = QLabel()
         self.queue_input_behavior_label.setStyleSheet("color: white;")
-        creator_custom_layout.addWidget(self.queue_input_behavior_label, 7, 0)
+        creator_custom_layout.addWidget(self.queue_input_behavior_label, 8, 0)
 
         self.queue_input_behavior_combo = QComboBox()
         for label_key, mode in (
@@ -887,13 +944,13 @@ class SettingsTab(QWidget):
                 self.queue_input_behavior_combo.itemData(idx),
             )
         )
-        creator_custom_layout.addWidget(self.queue_input_behavior_combo, 7, 1, 1, 2)
+        creator_custom_layout.addWidget(self.queue_input_behavior_combo, 8, 1, 1, 2)
 
         self.queue_input_behavior_help_btn = make_info_button()
         self.queue_input_behavior_help_btn.clicked.connect(
             self.show_queue_input_behavior_help
         )
-        creator_custom_layout.addWidget(self.queue_input_behavior_help_btn, 7, 3)
+        creator_custom_layout.addWidget(self.queue_input_behavior_help_btn, 8, 3)
 
         self.creator_custom_group.setLayout(creator_custom_layout)
         layout.addWidget(self.creator_custom_group)
@@ -1197,18 +1254,29 @@ class SettingsTab(QWidget):
         font_family = self.font_combo.itemData(index)
         self.update_temp_setting("font", font_family)
 
+    def _help_host(self):
+        """Use the main window when available so tabs share one help window."""
+        return self.parent if isinstance(self.parent, QWidget) else self
+
+    def _show_help(self, title_key, text_key, related=()):
+        """Open a translated topic in the shared, modeless help window."""
+        show_help(
+            self._help_host(),
+            translate(title_key),
+            translate(text_key),
+            related=related,
+        )
+
+    def _show_help_text(self, title, text, related=()):
+        show_help(self._help_host(), title, text, related=related)
+
     def show_template_help(self):
         """Show help text explaining the available filename template placeholders."""
         try:
-            QMessageBox.information(
-                self,
-                translate("filename_template_help_title"),
-                translate("filename_template_help_text"),
-            )
+            self._show_help("filename_template_help_title", "filename_template_help_text")
         except Exception:
             # In case translation lookup or UI fails, fall back to a simple message
-            QMessageBox.information(
-                self,
+            self._show_help_text(
                 "Template Help",
                 "Placeholders: {post_id}, {post_title}, {orig_name}, {ext}, "
                 "{file_number}, {file_index}, {post_file_count}, {total_files}, "
@@ -1223,8 +1291,7 @@ class SettingsTab(QWidget):
         that files from different posts can end up in the same folder.
         """
         try:
-            QMessageBox.information(
-                self,
+            self._show_help_text(
                 translate("filename_template_help_title"),
                 translate("filename_template_help_body")
                 + "<br><br>"
@@ -1234,8 +1301,7 @@ class SettingsTab(QWidget):
             )
         except Exception:
             # In case translation lookup or UI fails, fall back to a simple message
-            QMessageBox.information(
-                self,
+            self._show_help_text(
                 "Template Help",
                 "Placeholders: {post_id}, {post_title}, {orig_name}, {ext}, "
                 "{file_number}, {file_index}, {post_file_count}, {total_files}, "
@@ -1247,14 +1313,12 @@ class SettingsTab(QWidget):
     def show_folder_name_template_help(self):
         """Show help text explaining the available folder name template placeholders."""
         try:
-            QMessageBox.information(
-                self,
-                translate("folder_name_template_help_title"),
-                translate("folder_name_template_help_text"),
+            self._show_help(
+                "folder_name_template_help_title",
+                "folder_name_template_help_text",
             )
         except Exception:
-            QMessageBox.information(
-                self,
+            self._show_help_text(
                 "Folder Name Template Help",
                 "Placeholders: {post_id}, {post_title}, {creator_id}, {creator_name}. "
                 "Only applies when Folder Structure is 'Per-post folders'.",
@@ -1262,27 +1326,35 @@ class SettingsTab(QWidget):
 
     def show_filetype_display_help(self):
         """Explain what the Filetype Display modes show."""
-        QMessageBox.information(
-            self,
-            translate("filetype_display_help_title"),
-            translate("filetype_display_help_text"),
-        )
+        self._show_help("filetype_display_help_title", "filetype_display_help_text")
 
     def show_queue_input_behavior_help(self):
         """Explain what the three Queue Input Field Behavior modes do."""
-        QMessageBox.information(
-            self,
-            translate("queue_input_behavior_help_title"),
-            translate("queue_input_behavior_help_text"),
+        self._show_help(
+            "queue_input_behavior_help_title", "queue_input_behavior_help_text"
         )
 
     def show_punctuation_matching_help(self):
         """Explain how punctuation at a keyword/rule edge is treated."""
-        QMessageBox.information(
-            self,
-            translate("punctuation_matching_help_title"),
-            translate("punctuation_matching_help_text"),
+        self._show_help(
+            "punctuation_matching_help_title",
+            "punctuation_matching_help_text",
+            related=("keyword-syntax",),
         )
+
+    def show_tag_matching_help(self):
+        """Explain whole-tag vs substring matching."""
+        self._show_help(
+            "tag_matching_help_title",
+            "tag_matching_help_text",
+        )
+
+    def show_unique_filenames_help(self):
+        """Explain which names receive the dedup suffix."""
+        self._show_help(
+            "unique_filenames_help_title", "unique_filenames_help_text"
+        )
+
 
     def browse_directory(self):
         directory = QFileDialog.getExistingDirectory(
@@ -1724,6 +1796,16 @@ class SettingsTab(QWidget):
                 "punctuation_matching_rules",
             ),
             (
+                translate("tag_matching_behavior"),
+                translate(
+                    _TAG_MATCHING_LABEL_KEYS.get(
+                        values.get("tag_matching_behavior", "default"),
+                        "tag_matching_default",
+                    )
+                ),
+                "tag_matching_behavior",
+            ),
+            (
                 translate("queue_input_field_behavior"),
                 translate(
                     _QUEUE_INPUT_LABEL_KEYS.get(
@@ -1925,6 +2007,7 @@ class SettingsTab(QWidget):
             (self.creator_folder_strategy_combo, "creator_folder_strategy"),
             (self.creator_unique_filenames_combo, "creator_unique_filenames"),
             (self.punctuation_matching_rules_combo, "punctuation_matching_rules"),
+            (self.tag_matching_behavior_combo, "tag_matching_behavior"),
             (self.queue_input_behavior_combo, "queue_input_behavior"),
         ):
             combo.blockSignals(True)
@@ -1986,6 +2069,21 @@ class SettingsTab(QWidget):
             )
         self.punctuation_matching_rules_combo.blockSignals(False)
 
+        self.tag_matching_behavior_label.setText(
+            translate("tag_matching_behavior")
+        )
+        self.tag_matching_behavior_combo.blockSignals(True)
+        for index in range(self.tag_matching_behavior_combo.count()):
+            mode = self.tag_matching_behavior_combo.itemData(index)
+            self.tag_matching_behavior_combo.setItemText(
+                index,
+                translate(_TAG_MATCHING_LABEL_KEYS.get(mode, "tag_matching_default")),
+            )
+        self.tag_matching_behavior_combo.blockSignals(False)
+        self.tag_matching_help_btn.setToolTip(
+            translate("tag_matching_help_title")
+        )
+
         self.queue_input_behavior_label.setText(translate("queue_input_field_behavior"))
         self.queue_input_behavior_combo.blockSignals(True)
         for index in range(self.queue_input_behavior_combo.count()):
@@ -2016,8 +2114,9 @@ class SettingsTab(QWidget):
         self.creator_folder_name_label.setText(translate("folder_name_template"))
         self.creator_folder_strategy_label.setText(translate("folder_strategy"))
         self.creator_unique_filenames_label.setText(translate("unique_filenames"))
-        self.creator_unique_filenames_combo.setToolTip(
-            translate("unique_filenames_tooltip")
+        self.creator_unique_filenames_combo.setToolTip("")
+        self.creator_unique_filenames_help_btn.setToolTip(
+            translate("unique_filenames_help_title")
         )
         self.creator_unique_filenames_combo.blockSignals(True)
         for index in range(self.creator_unique_filenames_combo.count()):
@@ -2153,6 +2252,11 @@ class SettingsTab(QWidget):
         """Return "default" (enclosing punctuation only) or "lenient" (any)."""
         mode = str(self.settings.get("punctuation_matching_rules", "default"))
         return mode if mode in PUNCTUATION_MATCHING_MODES else "default"
+
+    def get_tag_matching_behavior(self):
+        """Return "default" (whole tags) or "lenient" (substring tags)."""
+        mode = str(self.settings.get("tag_matching_behavior", "default"))
+        return mode if mode in TAG_MATCHING_MODES else "default"
 
     def get_creator_filename_template(self):
         """Template for files that land in a folder of their own (post folder)."""
@@ -2554,7 +2658,7 @@ GeoIPExcludeUnknown 1
 5. You can start downloading now with Tor proxy enabled<br><br>
 <b>Note:</b> Tor provides anonymity but may be slower than direct connections."""
 
-        QMessageBox.information(self, "Tor Setup Help", help_text)
+        self._show_help_text("Tor Setup Help", help_text)
 
     def download_tor(self):
         try:

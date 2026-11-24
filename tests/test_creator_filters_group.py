@@ -63,6 +63,9 @@ class FakeSettingsTab(SimpleNamespace):
     def get_punctuation_matching_rules(self):
         return getattr(self, "punctuation_matching_rules", "default")
 
+    def get_tag_matching_behavior(self):
+        return getattr(self, "tag_matching_behavior", "default")
+
 
 def make_parent(tmp_path):
     class FakeTabs:
@@ -547,11 +550,11 @@ def test_the_help_button_explains_the_filetype_filter(qtbot, tmp_path, monkeypat
     tab = make_tab(qtbot, tmp_path)
     shown = {}
 
-    def fake_information(parent, title, text):
+    def fake_help(host, title, text, topic_id=None, related=()):
         shown["title"] = title
         shown["text"] = text
 
-    monkeypatch.setattr(cd.QMessageBox, "information", fake_information)
+    monkeypatch.setattr(cd, "show_help", fake_help)
 
     tab.filter_no_selected_filetypes_help_btn.click()
 
@@ -674,6 +677,7 @@ def _run_pass(tab):
         creator_url=tab.current_creator_url,
         file_skip_keywords=tab._file_skip_keywords_from_widgets(),
         lenient_punctuation=tab._punctuation_matching_lenient(),
+        lenient_tags=tab._tag_matching_lenient(),
     )
     thread.finished = SimpleNamespace(emit=MagicMock())
     thread.run()
@@ -937,6 +941,24 @@ def test_punctuation_setting_maps_to_the_threads(qtbot, tmp_path, monkeypatch):
     assert tab._punctuation_matching_lenient() is True
     assert tab._post_filters_from_widgets()[0].lenient_punctuation is True
     assert FakeFilterThread.instances[-1].kwargs["lenient_punctuation"] is True
+
+
+def test_tag_setting_maps_to_the_threads(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr(cd, "FilterThread", FakeFilterThread)
+    tab = make_tab(qtbot, tmp_path)
+    _two_ticked_posts(tab)
+
+    tab._parent.settings_tab.tag_matching_behavior = "default"
+    tab.filter_items()
+    assert tab._tag_matching_lenient() is False
+    assert tab._post_filters_from_widgets()[0].lenient_tags is False
+    assert FakeFilterThread.instances[-1].kwargs["lenient_tags"] is False
+
+    tab._parent.settings_tab.tag_matching_behavior = "lenient"
+    tab.filter_items()
+    assert tab._tag_matching_lenient() is True
+    assert tab._post_filters_from_widgets()[0].lenient_tags is True
+    assert FakeFilterThread.instances[-1].kwargs["lenient_tags"] is True
 
 
 def test_wildcard_keywords_replace_lenient_matching_in_the_summary(

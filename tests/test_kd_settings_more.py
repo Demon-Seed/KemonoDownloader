@@ -37,9 +37,9 @@ def test_show_template_help_and_browse_directory(monkeypatch, tmp_path, qapp):
 
     called = {}
 
-    # Monkeypatch QMessageBox.information
+    # Monkeypatch the shared help window
     monkeypatch.setattr(
-        "kemonodownloader.kd_settings.QMessageBox.information",
+        "kemonodownloader.kd_settings.show_help",
         lambda *a, **k: called.setdefault("info", True),
     )
 

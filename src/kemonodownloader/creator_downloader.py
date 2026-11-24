@@ -88,6 +88,7 @@ from kemonodownloader.download_utils import (
     wait_for_pawchive_cooldown,
 )
 from kemonodownloader.hash_db import HashDB
+from kemonodownloader.kd_help import show_help
 from kemonodownloader.kd_language import translate
 from kemonodownloader.kd_paths import ensure_directory
 from kemonodownloader.kd_theme import MENU_STYLE, scoped
@@ -589,15 +590,21 @@ def analyze_post(post):
 
 
 def post_matches_search(
-    post_title, post_id, search_text, search_scopes, post_search_index=None
+    post_title,
+    post_id,
+    search_text,
+    search_scopes,
+    post_search_index=None,
+    lenient_tags=False,
 ):
     """Return True when a post matches the Creator tab's search bar text.
 
-    Matching is a case-insensitive substring test against every enabled scope
-    (title, filenames, description, tags). Scopes other than the title are
-    served by the per-post index built while detecting posts, so a post with
-    no index entry still matches on its title alone. An empty scope set falls
-    back to the title, which is the historical behaviour.
+    Title, filenames and description are case-insensitive substring tests.
+    Tags are matched against each whole tag by default, or as substrings in
+    Tag Matching Behavior: Lenient. Scopes other than the title are served by
+    the per-post index built while detecting posts, so a post with no index
+    entry still matches on its title alone. An empty scope set falls back to
+    the title, which is the historical behaviour.
     """
     if not search_text:
         return True
@@ -610,9 +617,22 @@ def post_matches_search(
     entry = post_search_index.get(post_id)
     if not isinstance(entry, dict):
         return False
-    for scope in ("filenames", "description", "tags"):
+    for scope in ("filenames", "description"):
         if scope in scopes and needle in str(entry.get(scope) or ""):
             return True
+    if "tags" in scopes:
+        tags = entry.get("tag_list")
+        if tags is None:
+            # Older/synthetic index entries only have the space-joined text.
+            tags = str(entry.get("tags") or "").split()
+        needle_folded = needle.casefold()
+        for tag in tags:
+            folded_tag = str(tag).casefold()
+            if lenient_tags:
+                if needle_folded in folded_tag:
+                    return True
+            elif needle_folded == folded_tag:
+                return True
     return False
 
 
@@ -641,6 +661,9 @@ class PostFilters(NamedTuple):
     # "Punctuation Matching Behavior: Relaxed": any punctuation at a keyword edge
     # is its own delimiter. False keeps the default enclosing-punctuation list.
     lenient_punctuation: bool = False
+    # "Tag Matching Behavior: Lenient": tag values match anywhere inside a tag.
+    # False keeps the default whole-tag comparison.
+    lenient_tags: bool = False
 
 
 def keyword_skip_reason(post_title, facts, filters):
@@ -690,15 +713,11 @@ def keyword_skip_reason(post_title, facts, filters):
             if matched:
                 return matched
     if "tags" in scopes:
+        lenient_tags = bool(filters.lenient_tags)
         for tag in facts.get("tag_list") or ():
-            matched = _keyword_or_wildcard_match(
-                keywords,
-                tag,
-                punctuation_lenient,
-                whole_field=True,
-            )
-            if matched:
-                return matched
+            for keyword in keywords:
+                if _tag_matches(keyword, tag, lenient_tags):
+                    return keyword
     return ""
 
 
@@ -2374,6 +2393,24 @@ def _wildcard_matches(
     return re.search(lead + body + trail, folded_text, re.DOTALL) is not None
 
 
+def _tag_matches(pattern, tag, lenient_tags=False):
+    """Match one tag value against one tag.
+
+    Default compares the whole tag (wildcards still allowed).  Lenient keeps
+    the old substring behavior, so a value can match any part of a tag.  Tag
+    matching deliberately does not use the punctuation-edge setting: a tag is
+    a complete label, not a word inside a text field.
+    """
+    folded = str(pattern or "").strip().casefold()
+    folded_tag = str(tag or "").casefold()
+    if not folded or not folded_tag or wildcard_value_is_unusable(folded):
+        return False
+    body = re.escape(folded).replace(r"\*", ".*").replace(r"\?", ".")
+    if lenient_tags:
+        return re.search(body, folded_tag, re.DOTALL) is not None
+    return re.fullmatch(body, folded_tag, re.DOTALL) is not None
+
+
 def _keyword_or_wildcard_match(
     keywords,
     text,
@@ -2494,12 +2531,15 @@ def _scope_texts(post_title, facts, scope):
     return []
 
 
-def sort_rule_matches(post_title, facts, rule, lenient_punctuation=False):
+def sort_rule_matches(
+    post_title, facts, rule, lenient_punctuation=False, lenient_tags=False
+):
     """True when *rule* sends this post to its folder.
 
     Every value is one wildcard pattern. Tags are matched against the whole
-    tag; Title/Filenames/Description are matched word-wise. Literal edges
-    follow the Punctuation Matching Behavior setting, while a ``*`` edge matches
+    tag by default, or as a substring in Tag Matching Behavior: Lenient.
+    Title/Filenames/Description are matched word-wise. Literal edges follow
+    the Punctuation Matching Behavior setting, while a ``*`` edge matches
     freely. A post with no facts can still match on its title; every other
     scope needs the facts and is skipped when they are missing.
     """
@@ -2518,10 +2558,14 @@ def sort_rule_matches(post_title, facts, rule, lenient_punctuation=False):
         matched = False
         for scope in scopes:
             for text in _scope_texts(post_title, facts, scope):
-                if _wildcard_matches(
+                if scope == "tags":
+                    if _tag_matches(value, text, lenient_tags):
+                        matched = True
+                        break
+                elif _wildcard_matches(
                     value,
                     text,
-                    whole_field=scope == "tags",
+                    whole_field=False,
                     lenient_punctuation=lenient_punctuation,
                 ):
                     matched = True
@@ -2533,12 +2577,19 @@ def sort_rule_matches(post_title, facts, rule, lenient_punctuation=False):
 
 
 def resolve_sort_folders(
-    posts, post_search_index, rules, lenient_punctuation=False
+    posts,
+    post_search_index,
+    rules,
+    lenient_punctuation=False,
+    lenient_tags=False,
+    unsorted_folder="",
 ):
     """Route *posts* through *rules*, first match wins.
 
     ``folders`` keeps every matching folder (not just the winner), so the
     hardlink option can use them later without re-running the matchers.
+    Unmatched posts are routed to *unsorted_folder* when one is supplied;
+    they still count as unsorted so the preview can report them.
     """
     folders = {}
     counts = {}
@@ -2547,6 +2598,7 @@ def resolve_sort_folders(
     unsorted = 0
     index = post_search_index or {}
     usable = [rule for rule in (rules or ()) if rule.enabled]
+    unsorted_folder = str(unsorted_folder or "").strip()
     for post_title, (post_id, _thumbnail) in posts or ():
         key = str(post_id)
         facts = index.get(post_id)
@@ -2561,7 +2613,7 @@ def resolve_sort_folders(
             if not has_facts and "title" not in (rule.scopes or ()):
                 continue
             if not sort_rule_matches(
-                post_title, facts, rule, lenient_punctuation
+                post_title, facts, rule, lenient_punctuation, lenient_tags
             ):
                 continue
             # A hand-edited profile can name the same folder twice; one link
@@ -2577,6 +2629,9 @@ def resolve_sort_folders(
                 unsorted += 1
             else:
                 missing_facts += 1
+            if unsorted_folder:
+                folders[key] = (unsorted_folder,)
+                counts[unsorted_folder] = counts.get(unsorted_folder, 0) + 1
             continue
         folders[key] = matched
         counts[matched[0]] = counts.get(matched[0], 0) + 1
@@ -3513,6 +3568,7 @@ class FilterThread(_StoppableThread, QThread):
         creator_url=None,
         file_skip_keywords=None,
         lenient_punctuation=False,
+        lenient_tags=False,
         hidden_post_ids=None,
     ):
         super().__init__()
@@ -3545,6 +3601,8 @@ class FilterThread(_StoppableThread, QThread):
         self.file_skip_keywords = list(file_skip_keywords or ())
         # "Punctuation Matching Behavior: Relaxed" — snapshotted from Settings.
         self.lenient_punctuation = bool(lenient_punctuation)
+        # "Tag Matching Behavior: Lenient" — snapshotted from Settings.
+        self.lenient_tags = bool(lenient_tags)
         self.file_keyword_skipped_count = 0
         self.file_keyword_skip_counts = {}
         # Post ids a list filter hides outright ("Hide Downloaded"). They are
@@ -3595,6 +3653,7 @@ class FilterThread(_StoppableThread, QThread):
                 self.search_text,
                 self.search_scopes,
                 self.post_search_index,
+                self.lenient_tags,
             ):
                 continue
             if self.file_skip_keywords:
@@ -6146,7 +6205,10 @@ class SortRulesDialog(QDialog):
         posts,
         post_search_index,
         ticked_ids,
+        download_unsorted=True,
+        unsorted_folder="",
         lenient_punctuation=False,
+        lenient_tags=False,
         parent=None,
     ):
         super().__init__(parent)
@@ -6155,20 +6217,38 @@ class SortRulesDialog(QDialog):
         self._post_search_index = post_search_index or {}
         self._ticked_ids = {str(post_id) for post_id in (ticked_ids or ())}
         self._lenient_punctuation = bool(lenient_punctuation)
+        self._lenient_tags = bool(lenient_tags)
+        self._download_unsorted = bool(download_unsorted)
+        folder, _problem = normalize_sort_folder(unsorted_folder)
+        rule_folders = {
+            normalize_sort_folder(rule.folder)[0].casefold()
+            for rule in self._rules
+            if normalize_sort_folder(rule.folder)[0]
+        }
+        self._unsorted_folder = (
+            folder if folder and folder.casefold() in rule_folders else ""
+        )
         self._loading = False
 
         self.setWindowTitle(translate("sort_title"))
         self.setModal(False)
         self.resize(940, 700)
         self.setStyleSheet("background: #1A2B4A; color: white;")
-        self._build_ui(sorting_enabled, link_all)
+        self._build_ui(sorting_enabled, link_all, download_unsorted, unsorted_folder)
         self._refresh_list()
         if self._rules:
-            self._rule_list.setCurrentRow(0)
+            start_row = 0
+            if self._unsorted_folder:
+                for index, rule in enumerate(self._rules):
+                    folder, _problem = normalize_sort_folder(rule.folder)
+                    if folder and folder.casefold() == self._unsorted_folder.casefold():
+                        start_row = index
+                        break
+            self._rule_list.setCurrentRow(start_row)
         self._load_editor()
         self._update_preview()
 
-    def _build_ui(self, sorting_enabled, link_all):
+    def _build_ui(self, sorting_enabled, link_all, download_unsorted, unsorted_folder):
         layout = QVBoxLayout(self)
 
         header = QHBoxLayout()
@@ -6197,18 +6277,14 @@ class SortRulesDialog(QDialog):
         editor_layout = QVBoxLayout(self._editor_page)
         editor_layout.setContentsMargins(0, 0, 0, 0)
 
-        self._link_all_check = QCheckBox(translate("sort_link_all"))
-        self._link_all_check.setChecked(bool(link_all))
-        self._link_all_check.setStyleSheet("color: white;")
-        self._link_all_check.setToolTip(translate("sort_link_all_tooltip"))
-        self._link_all_check.stateChanged.connect(self._update_preview)
-        editor_layout.addWidget(self._link_all_check)
-
         middle = QHBoxLayout()
-        left = QVBoxLayout()
-        rules_label = QLabel(translate("sort_rules_label"))
-        rules_label.setStyleSheet("color: white;")
-        left.addWidget(rules_label)
+        rules_group = QGroupBox(translate("sort_rules_label"))
+        rules_group.setStyleSheet(
+            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+        )
+        self._rules_group = rules_group
+        left = QVBoxLayout(rules_group)
+        left.setContentsMargins(9, 20, 9, 9)
 
         self._no_rules_label = QLabel(translate("sort_no_rules_hint"))
         self._no_rules_label.setStyleSheet("color: #8FA6C8;")
@@ -6234,15 +6310,25 @@ class SortRulesDialog(QDialog):
         self._up_btn.clicked.connect(lambda: self._move_rule(-1))
         self._down_btn = QPushButton(translate("sort_rule_down"))
         self._down_btn.clicked.connect(lambda: self._move_rule(1))
-        for button in (self._add_btn, self._remove_btn, self._up_btn, self._down_btn):
+        self._unsorted_button = QPushButton(translate("sort_set_unsorted"))
+        self._unsorted_button.clicked.connect(self._toggle_unsorted)
+        for button in (
+            self._add_btn,
+            self._remove_btn,
+            self._up_btn,
+            self._down_btn,
+            self._unsorted_button,
+        ):
             button.setStyleSheet(_RUN_BUTTON_STYLE)
             rule_buttons.addWidget(button)
         rule_buttons.addStretch()
         left.addLayout(rule_buttons)
-        middle.addLayout(left, stretch=3)
+        middle.addWidget(rules_group, stretch=3)
 
-        self._editor_group = QGroupBox()
-        self._editor_group.setStyleSheet("QGroupBox { color: white; }")
+        self._editor_group = QGroupBox(translate("sort_rule_settings"))
+        self._editor_group.setStyleSheet(
+            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+        )
         form = QGridLayout()
         form.addWidget(QLabel(translate("sort_rule_folder")), 0, 0)
         self._folder_edit = QLineEdit()
@@ -6285,14 +6371,47 @@ class SortRulesDialog(QDialog):
         editor_layout.addLayout(middle, stretch=1)
 
         preview_group = QGroupBox(translate("sort_preview_label"))
+        preview_group.setStyleSheet(
+            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+        )
         preview_layout = QVBoxLayout()
         self._preview = QTextEdit()
         self._preview.setReadOnly(True)
         self._preview.setStyleSheet("background: #2A3B5A; border-radius: 5px;")
-        self._preview.setFixedHeight(130)
+        self._preview.setFixedHeight(65)
         preview_layout.addWidget(self._preview)
         preview_group.setLayout(preview_layout)
-        editor_layout.addWidget(preview_group)
+
+        self._run_settings_group = QGroupBox(translate("sort_run_settings"))
+        self._run_settings_group.setStyleSheet(
+            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+        )
+        settings_layout = QVBoxLayout(self._run_settings_group)
+        settings_layout.setContentsMargins(9, 20, 9, 9)
+        settings_layout.setSpacing(4)
+
+        self._link_all_check = QCheckBox(translate("sort_link_all"))
+        self._link_all_check.setChecked(bool(link_all))
+        self._link_all_check.setStyleSheet("color: white;")
+        self._link_all_check.setToolTip(translate("sort_link_all_tooltip"))
+        self._link_all_check.stateChanged.connect(self._update_preview)
+        settings_layout.addWidget(self._link_all_check)
+
+        self._download_unsorted_check = QCheckBox(
+            translate("sort_download_unsorted")
+        )
+        self._download_unsorted_check.setChecked(bool(download_unsorted))
+        self._download_unsorted_check.setStyleSheet("color: white;")
+        self._download_unsorted_check.setToolTip(
+            translate("sort_download_unsorted_tooltip")
+        )
+        self._download_unsorted_check.stateChanged.connect(self._update_preview)
+        settings_layout.addWidget(self._download_unsorted_check)
+
+        bottom = QHBoxLayout()
+        bottom.addWidget(preview_group, stretch=3)
+        bottom.addWidget(self._run_settings_group, stretch=2)
+        editor_layout.addLayout(bottom)
 
         buttons_row = QHBoxLayout()
         buttons_row.addStretch()
@@ -6335,6 +6454,46 @@ class SortRulesDialog(QDialog):
     def link_all(self):
         return self._link_all_check.isChecked()
 
+    def download_unsorted(self):
+        return self._download_unsorted_check.isChecked()
+
+    def unsorted_folder(self):
+        return self._unsorted_folder
+
+    def _toggle_unsorted(self):
+        """Clear the current unsorted folder, or set it from the selected rule."""
+        if self._unsorted_folder:
+            self._unsorted_folder = ""
+            self._refresh_list(select=self._selected_index())
+            self._load_editor()
+            self._update_preview()
+            return
+
+        row = self._selected_index()
+        if not (0 <= row < len(self._rules)):
+            return
+        folder, _problem = normalize_sort_folder(self._rules[row].folder)
+        if not folder:
+            return
+        self._unsorted_folder = folder
+        self._refresh_list(select=row)
+        self._load_editor()
+        self._update_preview()
+
+    def _update_unsorted_button(self):
+        if self._unsorted_folder:
+            self._unsorted_button.setText(translate("sort_clear_unsorted"))
+            self._unsorted_button.setEnabled(True)
+            self._unsorted_button.setToolTip(translate("sort_clear_unsorted_tooltip"))
+            return
+
+        row = self._selected_index()
+        rule = self._rules[row] if 0 <= row < len(self._rules) else None
+        folder, _problem = normalize_sort_folder(rule.folder) if rule else ("", "")
+        self._unsorted_button.setText(translate("sort_set_unsorted"))
+        self._unsorted_button.setEnabled(bool(folder))
+        self._unsorted_button.setToolTip(translate("sort_set_unsorted_tooltip"))
+
     def set_sorting_enabled(self, enabled):
         """Keep the read-only status line in step with the page checkbox."""
         self._status_label.setText(
@@ -6344,6 +6503,11 @@ class SortRulesDialog(QDialog):
     def set_lenient_punctuation(self, lenient):
         """Refresh the preview when Settings changes the punctuation rule."""
         self._lenient_punctuation = bool(lenient)
+        self._update_preview()
+
+    def set_lenient_tags(self, lenient):
+        """Refresh the preview when Settings changes the tag matching rule."""
+        self._lenient_tags = bool(lenient)
         self._update_preview()
 
     # ------------------------------------------------------------------
@@ -6375,6 +6539,13 @@ class SortRulesDialog(QDialog):
             if scope in SORT_SCOPE_LABELS
         ] or [translate("sort_scope_tags")]
         summary += f" [{', '.join(scope_labels)}]"
+        folder, _problem = normalize_sort_folder(rule.folder)
+        if (
+            self._unsorted_folder
+            and folder
+            and folder.casefold() == self._unsorted_folder.casefold()
+        ):
+            summary += f" [{translate('sort_unsorted_marker')}]"
         if rule.match_all:
             summary += f" ({translate('sort_rule_all')})"
         return summary
@@ -6461,6 +6632,7 @@ class SortRulesDialog(QDialog):
             self._loading = False
         self._set_editor_enabled(has_rule)
         self._no_rules_label.setVisible(not self._rules)
+        self._update_unsorted_button()
 
     def _commit_editor(self, *_args):
         if self._loading:
@@ -6472,6 +6644,7 @@ class SortRulesDialog(QDialog):
         scopes = frozenset(
             scope for scope, box in self._scope_checks.items() if box.isChecked()
         ) or frozenset({"tags"})
+        old_folder, _problem = normalize_sort_folder(self._rules[row].folder)
         self._rules[row] = SortRule(
             folder=self._folder_edit.text().strip(),
             values=values,
@@ -6479,7 +6652,15 @@ class SortRulesDialog(QDialog):
             scopes=scopes,
             enabled=self._rules[row].enabled,
         )
+        if (
+            self._unsorted_folder
+            and old_folder
+            and self._unsorted_folder.casefold() == old_folder.casefold()
+        ):
+            new_folder, problem = normalize_sort_folder(self._rules[row].folder)
+            self._unsorted_folder = new_folder if not problem else ""
         self._refresh_item(row)
+        self._update_unsorted_button()
         self._update_preview()
 
     def _add_rule(self):
@@ -6503,6 +6684,13 @@ class SortRulesDialog(QDialog):
         row = self._selected_index()
         if not (0 <= row < len(self._rules)):
             return
+        folder, _problem = normalize_sort_folder(self._rules[row].folder)
+        if (
+            self._unsorted_folder
+            and folder
+            and self._unsorted_folder.casefold() == folder.casefold()
+        ):
+            self._unsorted_folder = ""
         del self._rules[row]
         self._refresh_list(select=min(row, len(self._rules) - 1))
         self._load_editor()
@@ -6550,17 +6738,30 @@ class SortRulesDialog(QDialog):
         if not posts:
             self._preview.setPlainText(translate("sort_preview_none"))
             return
+        unsorted_folder = (
+            self.unsorted_folder()
+            if self._download_unsorted_check.isChecked()
+            else ""
+        )
         routing = resolve_sort_folders(
             posts,
             self._post_search_index,
             usable,
             self._lenient_punctuation,
+            self._lenient_tags,
+            unsorted_folder,
         )
         lines = [
             translate("sort_preview_line", folder, count)
             for folder, count in sorted(routing.counts.items())
         ]
-        lines.append(translate("sort_preview_unsorted", routing.unsorted))
+        if not unsorted_folder:
+            key = (
+                "sort_preview_unsorted"
+                if self._download_unsorted_check.isChecked()
+                else "sort_preview_unsorted_skipped"
+            )
+            lines.append(translate(key, routing.unsorted))
         if routing.missing_facts:
             lines.append(translate("sort_preview_missing", routing.missing_facts))
         if routing.multi_match:
@@ -6753,6 +6954,8 @@ class CreatorDownloaderTab(QWidget):
         # SortRule tuples, so a config profile can carry them as plain dicts.
         self._sort_rules = []
         self._sort_link_all = False
+        self._sort_download_unsorted = True
+        self._sort_unsorted_folder = ""
         # The modeless rules editor, reused while it is open.
         self._sort_rules_dialog = None
         # The run's routing snapshot, reused by Retry Failed Downloads so a
@@ -6907,6 +7110,7 @@ class CreatorDownloaderTab(QWidget):
         dialog = getattr(self, "_sort_rules_dialog", None)
         if dialog is not None:
             dialog.set_lenient_punctuation(self._punctuation_matching_lenient())
+            dialog.set_lenient_tags(self._tag_matching_lenient())
         fetch = getattr(self, "post_detection_thread", None)
         if fetch is not None and fetch.isRunning():
             # The fetch owns the list and runs its own pass at the end.
@@ -8033,6 +8237,8 @@ class CreatorDownloaderTab(QWidget):
             "sorting": {
                 "enabled": self.creator_sort_enabled_check.isChecked(),
                 "link_all": bool(self._sort_link_all),
+                "download_unsorted": bool(self._sort_download_unsorted),
+                "unsorted_folder": self._sort_unsorted_folder,
                 "rules": [sort_rule_to_dict(rule) for rule in self._sort_rules],
             },
         }
@@ -8144,8 +8350,23 @@ class CreatorDownloaderTab(QWidget):
                     self.creator_sort_enabled_check, sorting["enabled"]
                 )
             self._sort_link_all = bool(sorting.get("link_all", False))
+            self._sort_download_unsorted = bool(
+                sorting.get("download_unsorted", True)
+            )
+            unsorted_folder, _problem = normalize_sort_folder(
+                sorting.get("unsorted_folder", "")
+            )
+            self._sort_unsorted_folder = unsorted_folder
             if "rules" in sorting:
                 self._sort_rules = sort_rules_from_config(sorting)
+            if self._sort_unsorted_folder:
+                rule_folders = {
+                    normalize_sort_folder(rule.folder)[0].casefold()
+                    for rule in self._sort_rules
+                    if normalize_sort_folder(rule.folder)[0]
+                }
+                if self._sort_unsorted_folder.casefold() not in rule_folders:
+                    self._sort_unsorted_folder = ""
 
         # A restored filetype tick has to stay visible even when only the
         # types this creator has are shown.
@@ -8281,6 +8502,36 @@ class CreatorDownloaderTab(QWidget):
             rules.append(rule._replace(folder=folder, values=values))
         return rules
 
+    def _post_ids_to_download(self):
+        """Return the ticked posts that should be prepared for this run.
+
+        Sorting disabled, or Download Unsorted on, keeps every ticked post.
+        With Download Unsorted off, only posts matched by a rule remain.
+        """
+        if (
+            not self.creator_sort_enabled_check.isChecked()
+            or self._sort_download_unsorted
+        ):
+            return list(self.posts_to_download)
+        ticked = {str(post_id) for post_id in self.posts_to_download}
+        posts = [
+            (title, (post_id, thumbnail))
+            for title, (post_id, thumbnail) in self.all_detected_posts
+            if str(post_id) in ticked
+        ]
+        routing = resolve_sort_folders(
+            posts,
+            self.post_search_index,
+            self._usable_sort_rules(),
+            self._punctuation_matching_lenient(),
+            self._tag_matching_lenient(),
+        )
+        return [
+            post_id
+            for post_id in self.posts_to_download
+            if str(post_id) in routing.folders
+        ]
+
     def _resolve_run_sort_folders(self, available_post_ids=None):
         """Route the posts that actually have files for this run.
 
@@ -8309,6 +8560,8 @@ class CreatorDownloaderTab(QWidget):
             self.post_search_index,
             rules,
             self._punctuation_matching_lenient(),
+            self._tag_matching_lenient(),
+            self._sort_unsorted_folder if self._sort_download_unsorted else "",
         )
         if routing.counts:
             counts = ", ".join(
@@ -8351,10 +8604,13 @@ class CreatorDownloaderTab(QWidget):
             rules=list(self._sort_rules),
             sorting_enabled=self.creator_sort_enabled_check.isChecked(),
             link_all=self._sort_link_all,
+            download_unsorted=self._sort_download_unsorted,
             posts=list(self.all_detected_posts),
             post_search_index=self.post_search_index,
             ticked_ids=set(self.posts_to_download),
             lenient_punctuation=self._punctuation_matching_lenient(),
+            lenient_tags=self._tag_matching_lenient(),
+            unsorted_folder=self._sort_unsorted_folder,
             parent=self,
         )
         dialog.applied.connect(lambda: self._apply_sort_rules_from_dialog(dialog))
@@ -8369,6 +8625,8 @@ class CreatorDownloaderTab(QWidget):
         """Take the rules from an accepted modeless editor."""
         self._sort_rules = dialog.rules()
         self._sort_link_all = dialog.link_all()
+        self._sort_download_unsorted = dialog.download_unsorted()
+        self._sort_unsorted_folder = dialog.unsorted_folder()
         self.append_log_to_console(
             translate("log_info", translate("sort_rules_saved", len(self._sort_rules))),
             "INFO",
@@ -8564,9 +8822,18 @@ class CreatorDownloaderTab(QWidget):
         if self._is_hiding_downloaded():
             self.filter_items()
 
-    def _show_info(self, title_key, text_key):
-        """Show a translated help dialog (the text may be rich HTML)."""
-        QMessageBox.information(self, translate(title_key), translate(text_key))
+    def _help_host(self):
+        """Use the main window when available so tabs share one help window."""
+        return self._parent if isinstance(self._parent, QWidget) else self
+
+    def _show_info(self, title_key, text_key, related=()):
+        """Show a translated help topic in the shared, modeless help window."""
+        show_help(
+            self._help_host(),
+            translate(title_key),
+            translate(text_key),
+            related=related,
+        )
 
     def show_downloader_box_info(self):
         """Explain the post rows shown in the downloader box."""
@@ -9604,6 +9871,7 @@ class CreatorDownloaderTab(QWidget):
                 search_text,
                 search_scopes,
                 self.post_search_index,
+                self._tag_matching_lenient(),
             ):
                 is_checked = self.checked_urls.get(post_id, False)
                 filtered_batch.append((post_title, post_id, thumbnail_url, is_checked))
@@ -10040,6 +10308,14 @@ class CreatorDownloaderTab(QWidget):
             )
             return
 
+        post_ids = self._post_ids_to_download()
+        if not post_ids:
+            self.append_log_to_console(
+                translate("log_warning", translate("sort_no_sorted_posts")),
+                "WARNING",
+            )
+            return
+
         self.downloading = True
         self._run_finished = False
         self.set_downloading_ui_state(True)
@@ -10048,7 +10324,7 @@ class CreatorDownloaderTab(QWidget):
         self.creator_download_btn.setEnabled(False)
         self.creator_cancel_btn.setEnabled(True)
         self.creator_overall_progress.setValue(0)
-        self.total_posts_to_download = len(self.posts_to_download)
+        self.total_posts_to_download = len(post_ids)
         self.completed_posts.clear()
         self.completed_files.clear()
         self.failed_files.clear()
@@ -10070,7 +10346,7 @@ class CreatorDownloaderTab(QWidget):
 
         self.append_log_to_console(
             translate(
-                "log_info", translate("posts_to_download_num", self.posts_to_download)
+                "log_info", translate("posts_to_download_num", post_ids)
             ),
             "INFO",
         )
@@ -10081,7 +10357,7 @@ class CreatorDownloaderTab(QWidget):
             ),
             "INFO",
         )
-        self.prepare_files_for_download([self.current_creator_url])
+        self.prepare_files_for_download([self.current_creator_url], post_ids=post_ids)
 
     def _apply_post_link_selection(self):
         """Apply this load's post selection.
@@ -10165,7 +10441,7 @@ class CreatorDownloaderTab(QWidget):
                 self.current_page = index // self.posts_per_page + 1
                 return
 
-    def prepare_files_for_download(self, urls):
+    def prepare_files_for_download(self, urls, post_ids=None):
         if (
             self.file_preparation_thread is not None
             and self.file_preparation_thread.isRunning()
@@ -10182,20 +10458,23 @@ class CreatorDownloaderTab(QWidget):
             )
             self.creator_download_finished()
             return
+        selected_post_ids = list(
+            self.posts_to_download if post_ids is None else post_ids
+        )
         current_creator_posts = {
             post_id
             for _, (post_id, _) in self.all_files_map.get(self.current_creator_url, [])
         }
         post_ids = [
             post_id
-            for post_id in self.posts_to_download
+            for post_id in selected_post_ids
             if post_id in current_creator_posts
         ]
-        if set(post_ids) != set(self.posts_to_download):
+        if set(post_ids) != set(selected_post_ids):
             self.append_log_to_console(
                 translate(
                     "log_error",
-                    translate("post_id_mismatch", self.posts_to_download, post_ids),
+                    translate("post_id_mismatch", selected_post_ids, post_ids),
                 ),
                 "ERROR",
             )
@@ -10902,13 +11181,17 @@ class CreatorDownloaderTab(QWidget):
     def show_skip_keywords_help(self):
         """Show help text explaining the inline skip-keywords post filter."""
         self._show_info(
-            "skip_posts_keywords_help_title", "skip_posts_keywords_help_text"
+            "skip_posts_keywords_help_title",
+            "skip_posts_keywords_help_text",
+            related=("keyword-syntax", "punctuation-matching"),
         )
 
     def show_file_skip_keywords_help(self):
         """Show help text explaining the inline skip-keywords file filter."""
         self._show_info(
-            "skip_files_keywords_help_title", "skip_files_keywords_help_text"
+            "skip_files_keywords_help_title",
+            "skip_files_keywords_help_text",
+            related=("keyword-syntax", "punctuation-matching"),
         )
 
     def show_date_filter_help(self):
@@ -11302,6 +11585,7 @@ class CreatorDownloaderTab(QWidget):
             creator_url=self.current_creator_url,
             file_skip_keywords=self._file_skip_keywords_from_widgets(),
             lenient_punctuation=lenient_punctuation,
+            lenient_tags=self._tag_matching_lenient(),
             hidden_post_ids=(
                 self._post_history_cache.keys() if self._is_hiding_downloaded() else ()
             ),
@@ -12053,6 +12337,17 @@ class CreatorDownloaderTab(QWidget):
         rules = rules_getter() if callable(rules_getter) else "default"
         return rules == "lenient"
 
+    def _tag_matching_lenient(self):
+        """Return whether Tag Matching Behavior is set to Lenient.
+
+        A missing getter (tests, no parent) falls back to the default,
+        whole-tag comparison.
+        """
+        settings_tab = getattr(self._parent, "settings_tab", None)
+        getter = getattr(settings_tab, "get_tag_matching_behavior", None)
+        mode = getter() if callable(getter) else "default"
+        return mode == "lenient"
+
     def _post_filters_from_widgets(self):
         """Return ``(PostFilters, warnings)`` for the current Filters box.
 
@@ -12068,6 +12363,7 @@ class CreatorDownloaderTab(QWidget):
             if not wildcard_value_is_unusable(keyword)
         ]
         lenient_punctuation = self._punctuation_matching_lenient()
+        lenient_tags = self._tag_matching_lenient()
 
         warnings = []
         if any(wildcard_value_is_unusable(k) for k in raw_keywords) or any(
@@ -12105,6 +12401,7 @@ class CreatorDownloaderTab(QWidget):
                 if checkbox.isChecked()
             ),
             lenient_punctuation=lenient_punctuation,
+            lenient_tags=lenient_tags,
             date_after=date_after,
             date_before=date_before,
             file_count_min=file_count_min,

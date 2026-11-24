@@ -91,8 +91,8 @@ def test_queue_input_behavior_help_uses_the_translated_text(tmp_path, monkeypatc
     tab = make_tab(tmp_path)
     shown = []
     monkeypatch.setattr(
-        "kemonodownloader.kd_settings.QMessageBox.information",
-        lambda _parent, title, text: shown.append((title, text)),
+        "kemonodownloader.kd_settings.show_help",
+        lambda _host, title, text, topic_id=None, related=(): shown.append((title, text)),
     )
 
     tab.show_queue_input_behavior_help()
@@ -159,6 +159,39 @@ def make_tab(tmp_path):
     return ks.SettingsTab(parent)
 
 
+def test_every_settings_help_method_uses_the_shared_window(tmp_path, qapp, monkeypatch):
+    tab = make_tab(tmp_path)
+    shown = []
+    monkeypatch.setattr(
+        ks,
+        "show_help",
+        lambda host, title, text, topic_id=None, related=(): shown.append((host, title, text)),
+    )
+    try:
+        methods = (
+            ("show_template_help", "filename_template_help_title"),
+            ("show_shared_template_help", "filename_template_help_title"),
+            ("show_folder_name_template_help", "folder_name_template_help_title"),
+            ("show_unique_filenames_help", "unique_filenames_help_title"),
+            ("show_filetype_display_help", "filetype_display_help_title"),
+            ("show_punctuation_matching_help", "punctuation_matching_help_title"),
+            ("show_tag_matching_help", "tag_matching_help_title"),
+            ("show_queue_input_behavior_help", "queue_input_behavior_help_title"),
+            ("show_tor_help", None),
+        )
+        for method_name, title_key in methods:
+            getattr(tab, method_name)()
+            assert shown[-1][0] is tab._help_host()
+            assert shown[-1][1] == (
+                "Tor Setup Help" if title_key is None else ks.translate(title_key)
+            )
+            assert shown[-1][2]
+
+        assert len(shown) == len(methods)
+    finally:
+        tab.deleteLater()
+
+
 def test_settings_help_buttons_match_the_creator_tab_info_buttons(tmp_path, qapp):
     """Every settings help popup opens from the Creator tab's icon button."""
     tab = make_tab(tmp_path)
@@ -167,8 +200,10 @@ def test_settings_help_buttons_match_the_creator_tab_info_buttons(tmp_path, qapp
             tab.creator_template_help_btn,
             tab.creator_shared_template_help_btn,
             tab.creator_folder_name_help_btn,
+            tab.creator_unique_filenames_help_btn,
             tab.filetype_display_help_btn,
             tab.punctuation_matching_help_btn,
+            tab.tag_matching_help_btn,
             tab.queue_input_behavior_help_btn,
         )
         for button in buttons:

@@ -477,8 +477,7 @@ class TestSettingsUIInteractions:
             st.deleteLater()
 
     def test_show_help_dialogs(self, qapp, monkeypatch):
-        from PyQt6.QtWidgets import QMessageBox
-
+        import kemonodownloader.kd_settings as ks
         from kemonodownloader.kd_settings import SettingsTab
 
         class MockParent:
@@ -487,14 +486,18 @@ class TestSettingsUIInteractions:
 
         st = SettingsTab(MockParent())
         try:
-            mock_info = []
+            shown = []
             monkeypatch.setattr(
-                QMessageBox, "information", lambda *a, **k: mock_info.append(a)
+                ks,
+                "show_help",
+                lambda _host, title, text, topic_id=None, related=(): shown.append(
+                    (title, text)
+                ),
             )
 
             st.show_template_help()
             st.show_tor_help()
-            assert len(mock_info) == 2
+            assert len(shown) == 2
         finally:
             st.deleteLater()
 
@@ -907,21 +910,24 @@ class TestDetailedUI:
     """Tests for remaining UI edge cases and help dialogs."""
 
     def test_help_dialogs(self, qapp, monkeypatch):
+        import kemonodownloader.kd_settings as ks
         from kemonodownloader.kd_settings import SettingsTab
 
         st = SettingsTab(MagicMock())
         try:
-            from PyQt6.QtWidgets import QMessageBox
-
             shown = []
             monkeypatch.setattr(
-                QMessageBox, "information", lambda *a, **k: shown.append(a)
+                ks,
+                "show_help",
+                lambda _host, title, text, topic_id=None, related=(): shown.append(
+                    (title, text)
+                ),
             )
             st.show_template_help()
             st.show_tor_help()
 
-            assert len(shown) == 2, "both help buttons must show a dialog"
-            assert all(call[1] for call in shown), "each dialog needs a title"
+            assert len(shown) == 2, "both help buttons must show a topic"
+            assert all(call[0] for call in shown), "each topic needs a title"
         finally:
             st.deleteLater()
 
@@ -1059,17 +1065,19 @@ class TestQSettingsIntegration:
             st.deleteLater()
 
     def test_help_dialog_exception(self, qapp, monkeypatch):
-        from PyQt6.QtWidgets import QMessageBox
-
         import kemonodownloader.kd_settings
         from kemonodownloader.kd_settings import SettingsTab
 
         st = SettingsTab(MagicMock())
         try:
-            # Trigger exception in show_template_help (777-779)
+            # Trigger the translation failure in show_template_help.
             shown = []
             monkeypatch.setattr(
-                QMessageBox, "information", lambda *a, **k: shown.append(a)
+                kemonodownloader.kd_settings,
+                "show_help",
+                lambda _host, title, text, topic_id=None, related=(): shown.append(
+                    (title, text)
+                ),
             )
             monkeypatch.setattr(
                 kemonodownloader.kd_settings,
@@ -1078,8 +1086,8 @@ class TestQSettingsIntegration:
             )
             st.show_template_help()
 
-            assert shown, "the fallback help dialog must still appear"
-            assert shown[0][1] == "Template Help"
+            assert shown, "the fallback help topic must still appear"
+            assert shown[0][0] == "Template Help"
         finally:
             st.deleteLater()
 
