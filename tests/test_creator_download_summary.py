@@ -6,7 +6,7 @@ under the progress bars, with a per-filter breakdown of what was skipped.
 
 from types import SimpleNamespace
 
-from kemonodownloader import creator_downloader as cd
+from kemonodownloader import creator_downloader as cd, kd_theme
 
 
 def make_parent(tmp_path):
@@ -143,13 +143,13 @@ def test_failed_counter_turns_red_only_after_a_failure(qtbot, tmp_path):
     tab = make_tab(qtbot, tmp_path)
 
     tab._update_download_summary(3, 0)
-    assert "#E06C75" not in tab.creator_download_summary_label.text()
+    assert kd_theme.ERROR not in tab.creator_download_summary_label.text()
 
     tab._update_download_summary(3, 2)
-    assert "#E06C75" in tab.creator_download_summary_label.text()
+    assert kd_theme.ERROR in tab.creator_download_summary_label.text()
 
     tab._update_download_summary(3, 0)
-    assert "#E06C75" not in tab.creator_download_summary_label.text()
+    assert kd_theme.ERROR not in tab.creator_download_summary_label.text()
 
 
 def test_a_late_second_finish_does_not_reset_the_stats(qtbot, tmp_path):
@@ -380,15 +380,15 @@ def test_progress_and_summary_sit_in_their_own_group(qtbot, tmp_path):
 def test_skip_rows_colour_reflects_the_state(qtbot, tmp_path):
     tab = make_tab(qtbot, tmp_path)
 
-    # Nothing loaded yet: white, the resting state.
-    assert "white" in tab.creator_skip_summary_label.styleSheet()
-    assert "white" in tab.creator_skip_files_label.styleSheet()
+    # Nothing loaded yet: the theme's normal text colour, the resting state.
+    assert kd_theme.TEXT in tab.creator_skip_summary_label.styleSheet()
+    assert kd_theme.TEXT in tab.creator_skip_files_label.styleSheet()
 
-    # A loaded list with nothing skipped: sand.
+    # A loaded list with nothing skipped: warning colour.
     tab.all_detected_posts = [("A post", ("1", None))]
     tab._skip_summary_cache = None
     tab._update_download_summary(0, 0, refresh_skips=True)
-    assert "#E5C07B" in tab.creator_skip_summary_label.styleSheet()
+    assert kd_theme.WARNING in tab.creator_skip_summary_label.styleSheet()
 
     # Something skipped: green, while the file row keeps its own state.
     tab._post_skip_stats = {
@@ -399,5 +399,5 @@ def test_skip_rows_colour_reflects_the_state(qtbot, tmp_path):
     }
     tab._skip_summary_cache = None
     tab._update_download_summary(0, 0, refresh_skips=True)
-    assert "#7BD88F" in tab.creator_skip_summary_label.styleSheet()
-    assert "#E5C07B" in tab.creator_skip_files_label.styleSheet()
+    assert kd_theme.SUCCESS in tab.creator_skip_summary_label.styleSheet()
+    assert kd_theme.WARNING in tab.creator_skip_files_label.styleSheet()

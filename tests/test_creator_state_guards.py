@@ -7,7 +7,13 @@ that belonged to the GUI thread.
 
 from types import SimpleNamespace
 
+import pytest
+
 from kemonodownloader import creator_downloader as cd
+
+# Captured before the module fixture patches the name; the one test that runs
+# a real pass uses this class directly.
+RealFilterThread = cd.FilterThread
 
 
 def make_parent(tmp_path):
@@ -67,6 +73,29 @@ class FakeDetectionThread:
 
     def stop(self):
         self.stopped = True
+
+
+class FakeFilterThread:
+    """A filter pass that never starts a real QThread."""
+
+    def __init__(self, *args, **kwargs):
+        self.finished = SimpleNamespace(connect=lambda callback: None)
+
+    def start(self):
+        pass
+
+    def isRunning(self):
+        return False
+
+
+@pytest.fixture(autouse=True)
+def no_live_filter_threads(monkeypatch):
+    """These tests read tab state; none needs a live filter pass.
+
+    A real FilterThread whose tab is deleted at teardown aborts the process,
+    and the one test that wants a real pass builds it explicitly.
+    """
+    monkeypatch.setattr(cd, "FilterThread", FakeFilterThread)
 
 
 def test_cancelling_a_fetch_keeps_the_pages_already_loaded(qtbot, tmp_path):
@@ -249,7 +278,7 @@ def test_filetype_filter_list_matches_the_file_counts(qtbot, tmp_path):
 
     def run_pass():
         filters, _warnings = tab._post_filters_from_widgets()
-        thread = cd.FilterThread(
+        thread = RealFilterThread(
             posts,
             {},
             "",

@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
 )
 
 from kemonodownloader.kd_language import translate
-from kemonodownloader.kd_theme import BUTTON_BG, PANEL_BG, WINDOW_BG, scoped
+from kemonodownloader.kd_theme import BUTTON_BG, PANEL_BG, TEXT_MUTED, WINDOW_BG, scoped
 
 # A help window should stay readable rather than filling the screen. Short
 # topics use only the space their text needs; long topics stop growing and
@@ -148,7 +148,7 @@ class HelpWindow(QDialog):
             return
 
         label = QLabel(translate("related_help"))
-        label.setStyleSheet("color: #8FA6C8;")
+        label.setStyleSheet(f"color: {TEXT_MUTED};")
         self._related_layout.addWidget(label)
         label.show()
         for topic_id in topic_ids:
@@ -326,4 +326,3 @@ def show_help(host, title, text, topic_id=None, related=()):
     window = _help_window_for(host)
     window.show_topic(title, text, topic_id=topic_id, related=related)
     return window
-

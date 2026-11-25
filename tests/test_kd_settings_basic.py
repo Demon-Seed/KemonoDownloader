@@ -426,3 +426,15 @@ def test_B5_editing_the_proxy_refreshes_the_cached_answer(tmp_path):
         "http": "1.2.3.4:8080",
         "https": "1.2.3.4:8080",
     }
+
+
+def test_proxy_and_log_toggles_use_the_shared_checkbox_style(qtbot, tmp_path):
+    tab = make_tab(tmp_path)
+    qtbot.addWidget(tab)
+    tab.update_ui_text()
+
+    for checkbox in (tab.use_proxy_checkbox, tab.verbose_logging_checkbox):
+        # The app-wide theme owns the indicator now; no local override is left
+        # to hide the check mark.
+        assert "QCheckBox::indicator" not in checkbox.styleSheet()
+        assert checkbox.text()

@@ -400,7 +400,6 @@ def test_legacy_kind_migrates_to_scopes():
     assert dropped.values == ("cat",)
 
 
-
 # ---------------------------------------------------------------------------
 # Folder resolution in the download thread
 # ---------------------------------------------------------------------------
@@ -557,7 +556,6 @@ def test_a_failed_link_is_a_warning_not_a_failure(tmp_path, monkeypatch):
 
     assert thread._link_extra_sort_copies("1", primary, "art.jpg") == 0
     assert thread.failed_sort_links == 1
-
 
 
 # ---------------------------------------------------------------------------
@@ -785,7 +783,6 @@ def test_a_download_closes_the_rules_editor(qtbot, tmp_path):
     tab.set_downloading_ui_state(True)
 
     assert dialog.isVisible() is False
-
 
 
 # ---------------------------------------------------------------------------
@@ -1052,7 +1049,6 @@ def test_dialog_link_mode_preview_counts_extra_folders(qtbot):
     assert translate("sort_preview_extra_links", 1) in preview
 
 
-
 # ---------------------------------------------------------------------------
 # Skip boxes: wildcard terms and quoted values
 # ---------------------------------------------------------------------------
@@ -1133,8 +1129,9 @@ def test_creator_tab_uses_the_keyword_labels(qtbot, tmp_path):
     tab = make_tab(qtbot, tmp_path)
     tab.update_ui_text()
 
-    assert tab.creator_sort_enabled_check.text() == "Sort posts by keyword"
-    assert tab.creator_sort_rules_btn.text() == "Keyword Rules"
+    assert tab.creator_sort_enabled_check.text() == ""
+    assert tab.creator_sort_rules_btn.text() == "Keyword Folder Sorting"
+    assert tab.creator_recommended_btn.text() == "Recommended Keywords"
     assert (
         tab.skip_keywords_edit.placeholderText()
         == "e.g. JP, EN (comma-separated)"
@@ -1271,7 +1268,6 @@ def test_sorting_translation_keys_exist_and_old_ones_are_gone():
         assert translate(removed) == removed
 
 
-
 def test_dialog_title_rule_previews_post_without_facts(qtbot):
     dialog = make_dialog(qtbot)
     dialog._rules = [
@@ -1306,7 +1302,6 @@ def test_creator_change_closes_the_rules_editor(qtbot, tmp_path):
     tab._load_config_for_creator()
 
     assert dialog.isVisible() is False
-
 
 
 def test_sort_literal_edges_follow_punctuation_rules():
@@ -1424,4 +1419,3 @@ def test_settings_apply_refreshes_open_sort_dialog(qtbot, tmp_path):
     assert translate("sort_preview_line", "Dots", 1) in (
         dialog._preview.toPlainText()
     )
-

@@ -503,12 +503,17 @@ def test_required_filetypes_needs_the_box_and_a_ticked_type(
     assert tab._required_filetypes() == {".psd"}
 
 
-def test_required_filetypes_is_empty_when_nothing_is_ticked(qtbot, tmp_path):
+def test_required_filetypes_is_empty_when_nothing_is_ticked(
+    qtbot, tmp_path, monkeypatch
+):
     """On with nothing ticked: no post can match, so nothing is listed.
 
     It used to go inert, which meant an enabled filter quietly showed
     everything.
     """
+    # The assertion is about the filter value, not the pass; stubbing the
+    # worker keeps a real QThread from outliving the tab being torn down.
+    monkeypatch.setattr(cd, "FilterThread", FakeFilterThread)
     tab = make_tab(qtbot, tmp_path)
 
     tab.filter_no_selected_filetypes_check.setChecked(True)

@@ -125,17 +125,16 @@ def test_confirm_and_apply_settings_language_changed(tmp_path, monkeypatch, qapp
     monkeypatch.setattr(ks.os.path, "isdir", lambda _p: True)
     monkeypatch.setattr(tab, "save_settings", lambda: None)
 
-    called = {"lang": 0, "emit": 0, "log": 0, "ui": 0}
+    called = {"lang": 0, "emit": 0, "ui": 0}
     monkeypatch.setattr(
         ks.language_manager, "set_language", lambda _v: called.__setitem__("lang", 1)
     )
     tab.language_changed = SimpleNamespace(emit=lambda: called.__setitem__("emit", 1))
-    tab.parent.log = lambda *_a, **_k: called.__setitem__("log", 1)
     monkeypatch.setattr(tab, "update_ui_text", lambda: called.__setitem__("ui", 1))
 
     tab.confirm_and_apply_settings()
 
-    assert called == {"lang": 1, "emit": 1, "log": 1, "ui": 1}
+    assert called == {"lang": 1, "emit": 1, "ui": 1}
 
 
 def test_update_ui_text_keeps_a_typed_template(tmp_path, monkeypatch, qapp):

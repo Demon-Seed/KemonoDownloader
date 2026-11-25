@@ -76,8 +76,6 @@ def make_parent(tmp_path):
     )
 
 
-
-
 def make_tab(qtbot, tmp_path):
     tab = cd.CreatorDownloaderTab(make_parent(tmp_path))
     qtbot.addWidget(tab)
@@ -255,6 +253,24 @@ def test_file_count_help_dialog_explains_the_filter(qtbot, tmp_path, monkeypatch
 
 
 # ---------------------------------------------------------------------------
+# "Skip Post Folder" row
+# ---------------------------------------------------------------------------
+
+
+def test_skip_folder_info_button_sits_right_of_the_count_dropdown(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+
+    row_index = _options_index_holding(tab, tab.creator_skip_folder_combo)
+    assert row_index >= 0
+    assert row_index == _options_index_holding(tab, tab.creator_skip_folder_info_btn)
+
+    row = tab.creator_options_group.layout().itemAt(row_index).layout()
+    assert row.indexOf(tab.creator_skip_folder_info_btn) > row.indexOf(
+        tab.creator_skip_folder_combo
+    )
+
+
+# ---------------------------------------------------------------------------
 # "Skip Images if Compressed" toggle
 # ---------------------------------------------------------------------------
 
@@ -297,7 +313,7 @@ def test_new_info_buttons_share_the_small_icon_style(qtbot, tmp_path):
         assert button.text() == "", "info buttons carry an icon, not text"
         assert not button.icon().isNull()
         assert (button.minimumWidth(), button.maximumWidth()) == (26, 26)
-        assert "border-radius: 5px" in button.styleSheet()
+        assert f"border-radius: {cd.RADIUS}px" in button.styleSheet()
         assert button.toolTip()
 
 

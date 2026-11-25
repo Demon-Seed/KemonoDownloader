@@ -133,7 +133,20 @@ def test_snapshot_holds_options_and_filters_only(qtbot, tmp_path):
     snapshot = tab._config_snapshot()
 
     # No post ticks, no URL box, no search text: a profile is configuration.
-    assert set(snapshot) == {"options", "filters", "search_scopes", "sorting"}
+    assert set(snapshot) == {
+        "options",
+        "filters",
+        "search_scopes",
+        "recommended",
+        "sorting",
+    }
+    assert snapshot["recommended"] == {
+        "scopes": ["tags", "title"],
+        "min_count": 2,
+        "max_words": 3,
+        "ignore_common_words": True,
+        "ignore_accents": False,
+    }
     assert set(snapshot["sorting"]) == {
         "enabled",
         "link_all",
@@ -166,6 +179,37 @@ def test_snapshot_holds_options_and_filters_only(qtbot, tmp_path):
         "keep_compressed",
         "filter_no_selected_filetypes",
         "hide_downloaded",
+    }
+
+
+def test_recommended_options_round_trip_through_the_config(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+    tab._recommended_options = {
+        "scopes": {"tags", "description"},
+        "min_count": 7,
+        "max_words": 1,
+        "ignore_common_words": False,
+        "ignore_accents": True,
+    }
+
+    snapshot = tab._config_snapshot()
+
+    assert snapshot["recommended"] == {
+        "scopes": ["description", "tags"],
+        "min_count": 7,
+        "max_words": 1,
+        "ignore_common_words": False,
+        "ignore_accents": True,
+    }
+
+    fresh = make_tab(qtbot, tmp_path)
+    fresh._apply_config(snapshot, refresh=False)
+    assert fresh._recommended_options == {
+        "scopes": {"tags", "description"},
+        "min_count": 7,
+        "max_words": 1,
+        "ignore_common_words": False,
+        "ignore_accents": True,
     }
 
 
@@ -624,5 +668,3 @@ def test_a_profile_without_the_sorting_key_gets_the_page_default(qtbot, tmp_path
     assert tab._sort_link_all is True
     assert [rule.folder for rule in tab._sort_rules] == ["Cats"]
     assert tab.creator_skip_folder_check.isChecked() is True
-
-

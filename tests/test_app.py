@@ -1,11 +1,10 @@
 import os
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from PyQt6.QtWidgets import QWidget
 
-from kemonodownloader.app import GITHUB_REPO_URL, KemonoDownloader
+from kemonodownloader.app import KemonoDownloader
 
 
 @pytest.fixture
@@ -120,17 +119,14 @@ class TestKemonoDownloader:
         try:
             window.update_all_ui()
 
-            assert window.status_label.text() == "idle"
+            assert window.windowTitle() == "app_title"
+            assert window.tabs.tabText(0) == "creator_downloader_tab"
         finally:
             window.deleteLater()
 
     def test_dialogs(self, qapp, mock_app_dependencies, monkeypatch):
         window = KemonoDownloader()
         try:
-            # Test status logging
-            window.log("Test log")
-            assert window.status_label.text() == "Test log"
-
             # Test animate_button (lines 570-578)
             from PyQt6.QtWidgets import QPushButton
 
@@ -175,15 +171,10 @@ class TestKemonoDownloader:
 
 
 class TestKemonoDownloaderExtra:
-    def test_update_status_idle(self, qapp, window):
-        window.status_label.setText("Idle")
-        window.update_all_ui()
-        assert window.status_label.text() != "Idle"
-
-    def test_footer_repository_link(self, qapp, window):
-        """The footer links to the main repository instead of auto-updating."""
-        assert GITHUB_REPO_URL in window.dev_label.text()
-        assert window.dev_label.openExternalLinks() is True
+    def test_footer_removed(self, qapp, window):
+        """The footer was removed; no status or repository-strip widgets remain."""
+        assert not hasattr(window, "status_label")
+        assert not hasattr(window, "dev_label")
         assert not hasattr(window, "version_checker")
         assert not hasattr(window, "check_for_updates")
         assert not hasattr(window, "show_update_notification")
@@ -230,7 +221,12 @@ def test_main_app(monkeypatch):
     assert mock_app.exec.called
     # Every context menu, including the ones Qt builds for plain line edits,
     # shares the queue's highlight.
-    assert "QMenu::item:selected" in mock_app.setStyleSheet.call_args.args[0]
+    stylesheet = mock_app.setStyleSheet.call_args.args[0]
+    assert "QMenu::item:selected" in stylesheet
+    # The app-wide sheet gives every checkbox a real check mark and every
+    # button a hover state, not just the widgets that used to be styled inline.
+    assert "QCheckBox::indicator:checked" in stylesheet
+    assert "QPushButton:hover" in stylesheet
 
 
 def test_main_block(monkeypatch):
@@ -256,18 +252,6 @@ def test_close_stops_name_lookups(window):
     window.close()
 
     assert stopped == [True]
-
-
-def test_app_log_updates_status(monkeypatch):
-    called = {"text": None}
-
-    dummy = SimpleNamespace(
-        status_label=SimpleNamespace(setText=lambda m: called.__setitem__("text", m))
-    )
-
-    KemonoDownloader.log(dummy, "hello")
-
-    assert called["text"] == "hello"
 
 
 def test_main_exec_calls_exit(monkeypatch):

@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -53,8 +54,11 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTextBrowser,
     QTextEdit,
     QVBoxLayout,
@@ -91,7 +95,32 @@ from kemonodownloader.hash_db import HashDB
 from kemonodownloader.kd_help import show_help
 from kemonodownloader.kd_language import translate
 from kemonodownloader.kd_paths import ensure_directory
-from kemonodownloader.kd_theme import MENU_STYLE, scoped
+from kemonodownloader.kd_recommended import (
+    DEFAULT_SCOPES,
+    SCOPES,
+    count_recommended_keywords,
+)
+from kemonodownloader.kd_theme import (
+    ACCENT,
+    ACCENT_HOVER,
+    ACCENT_PRESSED,
+    BORDER,
+    CONSOLE,
+    CONTROL,
+    DANGER,
+    DANGER_HOVER,
+    DANGER_PRESSED,
+    INFO,
+    MENU_STYLE,
+    RADIUS,
+    SURFACE_ALT,
+    TEXT,
+    WINDOW_BG,
+    button_states,
+    scoped,
+    set_progress_state,
+    style_progress_bar,
+)
 from kemonodownloader.preview_cache import (
     DEFAULT_PREVIEW_CACHE_BYTES,
     PreviewImageCache,
@@ -131,17 +160,17 @@ POST_PREVIEW_CACHE_LIMIT = 20
 
 # One colour per level, shared by the inline console and the log window and
 # taken from the muted palette the rest of the tab uses. The plain CSS
-# primaries this replaces were unreadable on the #2A3B5A console (green
+# primaries this replaces were unreadable on the #2B2D31 console (green
 # #008000 sat at 2.2:1, red at 2.8:1) and DEBUG fell through to white, which
 # made the least important lines the loudest thing on screen.
 LOG_LEVEL_COLORS = {
-    "DEBUG": "#8A9BB5",
-    "INFO": "#D7E1F0",
-    "WARNING": "#E5C07B",
-    "ERROR": "#E06C75",
+    "DEBUG": "#A3A6AD",
+    "INFO": "#D4D6DA",
+    "WARNING": "#FFD93D",
+    "ERROR": "#FF6B6B",
 }
 # Unknown levels keep the body text colour rather than shouting in white.
-LOG_DEFAULT_COLOR = "#D7E1F0"
+LOG_DEFAULT_COLOR = "#D4D6DA"
 
 # The Creator Queue's menus use the shared app menu style (kd_theme.MENU_STYLE,
 # which app.main() applies to every context menu). The menu chrome and item
@@ -164,12 +193,53 @@ WORKER_CANCEL_GRACE_SECONDS = 30.0
 
 # Repeated small-button chrome. Scoped, so a tooltip label parented to the
 # button cannot inherit the size/background rule.
-_RUN_BUTTON_STYLE = scoped(
-    "QPushButton", "background: #4A5B7A; padding: 8px; border-radius: 5px;"
+_RUN_BUTTON_STYLE = (
+    scoped(
+        "QPushButton",
+        f"color: {TEXT}; background: {CONTROL}; border: 1px solid {CONTROL};"
+        f" padding: 6px 12px; border-radius: {RADIUS}px;",
+    )
+    + button_states()
 )
-_TOOL_BUTTON_STYLE = scoped(
-    "QPushButton", "background: #4A5B7A; padding: 6px; border-radius: 5px;"
+_PRIMARY_BUTTON_STYLE = scoped(
+    "QPushButton",
+    f"color: {TEXT}; background: {ACCENT}; border: 1px solid {ACCENT};"
+    f" padding: 6px 12px; border-radius: {RADIUS}px; font-weight: bold;",
+) + button_states(ACCENT_HOVER, ACCENT_PRESSED)
+_DANGER_BUTTON_STYLE = scoped(
+    "QPushButton",
+    f"color: {TEXT}; background: {DANGER}; border: 1px solid {DANGER};"
+    f" padding: 6px 12px; border-radius: {RADIUS}px;",
+) + button_states(DANGER_HOVER, DANGER_PRESSED)
+_TOOL_BUTTON_STYLE = (
+    scoped(
+        "QPushButton",
+        f"color: {TEXT}; background: {CONTROL}; border: 1px solid {CONTROL};"
+        f" padding: 5px 10px; border-radius: {RADIUS}px;",
+    )
+    + button_states()
 )
+_INFO_BUTTON_STYLE = (
+    scoped(
+        "QPushButton",
+        f"color: {TEXT}; background: {CONTROL}; border: 1px solid {CONTROL};"
+        f" padding: 0px; border-radius: {RADIUS}px;",
+    )
+    + button_states()
+)
+
+
+def icon_button_style(extra=""):
+    """Shared chrome for the small square eye/remove/clear buttons."""
+    return (
+        scoped(
+            "QPushButton",
+            f"color: {TEXT}; background: {CONTROL};"
+            f" border: 1px solid {CONTROL};"
+            f" padding: 2px; border-radius: {RADIUS}px; {extra}",
+        )
+        + button_states()
+    )
 
 
 def _post_published_datetime(post):
@@ -1303,9 +1373,7 @@ class ImageModal(QDialog):
         self._closed = False
 
         self._progress_bar = QProgressBar()
-        self._progress_bar.setStyleSheet(
-            "QProgressBar { border: 1px solid #4A5B7A; border-radius: 5px; } QProgressBar::chunk { background: #4A5B7A; }"
-        )
+        style_progress_bar(self._progress_bar)
         self._layout.addWidget(self._progress_bar)
         self.setLayout(self._layout)
 
@@ -1762,7 +1830,7 @@ class _PostImageRow(QWidget):
         )
         self._image_label.setText(translate("loading_image_simple"))
         self._image_label.setStyleSheet(
-            "QLabel { background: #24344F; color: #8A9BB5; border-radius: 4px; }"
+            "QLabel { background: #18191C; color: #A3A6AD; border-radius: 4px; }"
         )
         layout.addWidget(self._image_label)
         self._caption = QLabel(entry.name or translate("not_available"))
@@ -1771,20 +1839,20 @@ class _PostImageRow(QWidget):
         self._caption.setAttribute(
             Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
         )
-        self._caption.setStyleSheet("QLabel { color: #8A9BB5; font-size: 11px; }")
+        self._caption.setStyleSheet("QLabel { color: #A3A6AD; font-size: 11px; }")
         layout.addWidget(self._caption)
 
     def set_image(self, image):
         self._image = image
         self._image_label.setStyleSheet(
-            "QLabel { background: #24344F; border-radius: 4px; }"
+            "QLabel { background: #18191C; border-radius: 4px; }"
         )
         self._image_label.set_source(image)
 
     def release_image(self):
         self._image = None
         self._image_label.setStyleSheet(
-            "QLabel { background: #24344F; color: #8A9BB5; border-radius: 4px; }"
+            "QLabel { background: #18191C; color: #A3A6AD; border-radius: 4px; }"
         )
         self._image_label.release_source()
 
@@ -1792,7 +1860,7 @@ class _PostImageRow(QWidget):
         self._image = None
         self._image_label.release_source()
         self._image_label.setStyleSheet(
-            "QLabel { background: #3A2A2A; color: #E06C75; border-radius: 4px; }"
+            "QLabel { background: #3A2A2A; color: #FF6B6B; border-radius: 4px; }"
         )
         self._image_label.setText(translate("post_preview_image_failed"))
 
@@ -1859,22 +1927,22 @@ class PostPreviewDialog(QDialog):
         self._title_label.setTextFormat(Qt.TextFormat.PlainText)
         self._title_label.setWordWrap(True)
         self._title_label.setStyleSheet(
-            "QLabel { color: #FFFFFF; font-size: 16px; font-weight: bold; }"
+            "QLabel { color: #F2F3F5; font-size: 16px; font-weight: bold; }"
         )
         header.addWidget(self._title_label)
         self._meta_label = QLabel("")
         self._meta_label.setTextFormat(Qt.TextFormat.PlainText)
-        self._meta_label.setStyleSheet("QLabel { color: #8A9BB5; }")
+        self._meta_label.setStyleSheet("QLabel { color: #A3A6AD; }")
         header.addWidget(self._meta_label)
         self._tags_label = QLabel("")
         self._tags_label.setTextFormat(Qt.TextFormat.PlainText)
         self._tags_label.setWordWrap(True)
-        self._tags_label.setStyleSheet("QLabel { color: #A0C0FF; }")
+        self._tags_label.setStyleSheet("QLabel { color: #9DB8FF; }")
         self._tags_label.hide()
         header.addWidget(self._tags_label)
         self._status_label = QLabel("")
         self._status_label.setTextFormat(Qt.TextFormat.PlainText)
-        self._status_label.setStyleSheet("QLabel { color: #8A9BB5; }")
+        self._status_label.setStyleSheet("QLabel { color: #A3A6AD; }")
         header.addWidget(self._status_label)
         layout.addLayout(header)
 
@@ -1882,15 +1950,15 @@ class PostPreviewDialog(QDialog):
         self._description.setOpenExternalLinks(True)
         self._description.setMinimumHeight(48)
         self._description.setStyleSheet(
-            "QTextBrowser { background: #24344F; color: #D7E1F0; "
-            "border: 1px solid #3A4B6A; border-radius: 5px; padding: 6px; }"
+            "QTextBrowser { background: #18191C; color: #D4D6DA; "
+            "border: 1px solid #3A3C42; border-radius: 5px; padding: 6px; }"
         )
         self._description.hide()
 
         self._error_label = QLabel("")
         self._error_label.setTextFormat(Qt.TextFormat.PlainText)
         self._error_label.setWordWrap(True)
-        self._error_label.setStyleSheet("QLabel { color: #E06C75; }")
+        self._error_label.setStyleSheet("QLabel { color: #FF6B6B; }")
         self._error_label.hide()
         layout.addWidget(self._error_label)
 
@@ -1923,7 +1991,7 @@ class PostPreviewDialog(QDialog):
         self._splitter.setChildrenCollapsible(False)
         self._splitter.setHandleWidth(6)
         self._splitter.setStyleSheet(
-            "QSplitter::handle:vertical { background: #3A4B6A; height: 5px; }"
+            "QSplitter::handle:vertical { background: #3A3C42; height: 5px; }"
         )
         self._splitter.addWidget(self._description)
         self._splitter.addWidget(self._scroll)
@@ -1934,7 +2002,7 @@ class PostPreviewDialog(QDialog):
 
         close_row = QHBoxLayout()
         self._open_browser_btn = QPushButton(
-            qta.icon("fa5s.external-link-alt", color="white"),
+            qta.icon("fa5s.external-link-alt", color=TEXT),
             translate("open_post_in_browser"),
         )
         self._open_browser_btn.setStyleSheet(_RUN_BUTTON_STYLE)
@@ -1956,7 +2024,6 @@ class PostPreviewDialog(QDialog):
         url = self._post_url()
         if url:
             QDesktopServices.openUrl(QUrl(url))
-
 
     def _start_fetch(self):
         self._error_label.hide()
@@ -2103,7 +2170,6 @@ class PostPreviewDialog(QDialog):
         if total <= 1:
             total = 600
         self._splitter.setSizes([target, max(1, total - target)])
-
 
     def _request_visible(self):
         if self._loader is None or not self._rows:
@@ -2384,6 +2450,23 @@ def parse_keyword_values(text):
     if value:
         values.append(value)
     return values
+
+
+def format_keyword_values(values):
+    """Join keyword values into the comma-separated text the boxes accept.
+
+    The inverse of :func:`parse_keyword_values`: a value containing a comma,
+    a quote or a backslash is quoted and escaped so it survives a round trip.
+    """
+    parts = []
+    for value in values or ():
+        text = str(value)
+        if not text:
+            continue
+        if any(character in text for character in ',"\\'):
+            text = '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        parts.append(text)
+    return ", ".join(parts)
 
 
 def _has_wildcards(value):
@@ -3721,6 +3804,56 @@ class FilterThread(_StoppableThread, QThread):
             is_checked = self.checked_urls.get(post_id, False)
             filtered_items.append((post_title, post_id, thumbnail_url, is_checked))
         self.finished.emit(filtered_items)
+
+
+class RecommendedKeywordsThread(_StoppableThread, QThread):
+    """Scan the loaded posts for repeated words and tags.
+
+    The work is CPU-only over the tab's existing index, but a large library
+    still takes a moment, so it runs off the GUI thread.  ``stop()`` is
+    checked between posts, which is enough for a scan to abandon quickly.
+    """
+
+    finished = pyqtSignal(list)
+
+    def __init__(
+        self,
+        post_rows,
+        post_search_index,
+        scopes,
+        min_count=2,
+        max_words=3,
+        ignore_common_words=True,
+        ignore_accents=False,
+        limit=300,
+    ):
+        super().__init__()
+        self.post_rows = [(str(post_id), title) for post_id, title in (post_rows or ())]
+        self.post_search_index = post_search_index or {}
+        self.scopes = frozenset(scopes or ())
+        self.min_count = min_count
+        self.max_words = max_words
+        self.ignore_common_words = bool(ignore_common_words)
+        self.ignore_accents = bool(ignore_accents)
+        self.limit = limit
+        self.is_running = True
+
+    def run(self):
+        if not self.is_running:
+            return
+        results = count_recommended_keywords(
+            self.post_rows,
+            self.post_search_index,
+            self.scopes,
+            min_count=self.min_count,
+            max_words=self.max_words,
+            ignore_common_words=self.ignore_common_words,
+            ignore_accents=self.ignore_accents,
+            limit=self.limit,
+            cancel=lambda: not self.is_running,
+        )
+        if self.is_running:
+            self.finished.emit(results)
 
 
 class FilePreparationThread(_StoppableThread, QThread):
@@ -6076,7 +6209,7 @@ class LogsWindow(QDialog):
         self.setWindowTitle(translate("full_logs"))
         self.setModal(False)
         self.resize(800, 600)
-        self.setStyleSheet("background: #1A2B4A; color: white;")
+        self.setStyleSheet(f"background: {WINDOW_BG}; color: #F2F3F5;")
 
         layout = QVBoxLayout(self)
 
@@ -6084,7 +6217,8 @@ class LogsWindow(QDialog):
         self.logs_display = QTextEdit()
         self.logs_display.setReadOnly(True)
         self.logs_display.setStyleSheet(
-            "background: #2A3B5A; border-radius: 5px; padding: 5px;"
+            f"background: {CONSOLE}; border: 1px solid {BORDER};"
+            f" border-radius: {RADIUS}px; padding: 5px; color: {TEXT};"
         )
         self.logs_display.document().setMaximumBlockCount(LOG_LINE_LIMIT)
         layout.addWidget(self.logs_display)
@@ -6282,7 +6416,7 @@ class SortRulesDialog(QDialog):
         self.setWindowTitle(translate("sort_title"))
         self.setModal(False)
         self.resize(940, 700)
-        self.setStyleSheet("background: #1A2B4A; color: white;")
+        self.setStyleSheet(f"background: {WINDOW_BG}; color: #F2F3F5;")
         self._build_ui(sorting_enabled, link_all, download_unsorted, unsorted_folder)
         self._refresh_list()
         if self._rules:
@@ -6303,19 +6437,15 @@ class SortRulesDialog(QDialog):
         header = QHBoxLayout()
         self._status_label = QLabel()
         self._status_label.setWordWrap(True)
-        self._status_label.setStyleSheet("color: #8FA6C8;")
+        self._status_label.setStyleSheet("color: #A3A6AD;")
         self._status_label.setText(
             translate("sort_status_on" if sorting_enabled else "sort_status_off")
         )
         header.addWidget(self._status_label, stretch=1)
 
-        self._help_button = QPushButton(
-            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
-        )
+        self._help_button = QPushButton(qta.icon("fa5s.info-circle", color=INFO), "")
         self._help_button.setFixedSize(26, 26)
-        self._help_button.setStyleSheet(
-            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
-        )
+        self._help_button.setStyleSheet(_INFO_BUTTON_STYLE)
         self._help_button.setToolTip(translate("sort_help_title"))
         self._help_button.clicked.connect(self._toggle_help)
         header.addWidget(self._help_button)
@@ -6329,20 +6459,20 @@ class SortRulesDialog(QDialog):
         middle = QHBoxLayout()
         rules_group = QGroupBox(translate("sort_rules_label"))
         rules_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         self._rules_group = rules_group
         left = QVBoxLayout(rules_group)
         left.setContentsMargins(9, 20, 9, 9)
 
         self._no_rules_label = QLabel(translate("sort_no_rules_hint"))
-        self._no_rules_label.setStyleSheet("color: #8FA6C8;")
+        self._no_rules_label.setStyleSheet("color: #A3A6AD;")
         self._no_rules_label.setWordWrap(True)
         self._no_rules_label.setVisible(not self._rules)
         left.addWidget(self._no_rules_label)
 
         self._rule_list = QListWidget()
-        self._rule_list.setStyleSheet("background: #2A3B5A; border-radius: 5px;")
+        self._rule_list.setStyleSheet("background: #2B2D31; border-radius: 5px;")
         self._rule_list.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
@@ -6376,7 +6506,7 @@ class SortRulesDialog(QDialog):
 
         self._editor_group = QGroupBox(translate("sort_rule_settings"))
         self._editor_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         form = QGridLayout()
         form.addWidget(QLabel(translate("sort_rule_folder")), 0, 0)
@@ -6410,7 +6540,7 @@ class SortRulesDialog(QDialog):
             )
         ):
             box = QCheckBox(translate(key))
-            box.setStyleSheet("color: white;")
+            box.setStyleSheet("color: #F2F3F5;")
             box.stateChanged.connect(self._commit_editor)
             scopes_layout.addWidget(box, index // 2, index % 2)
             self._scope_checks[scope] = box
@@ -6421,19 +6551,19 @@ class SortRulesDialog(QDialog):
 
         preview_group = QGroupBox(translate("sort_preview_label"))
         preview_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         preview_layout = QVBoxLayout()
         self._preview = QTextEdit()
         self._preview.setReadOnly(True)
-        self._preview.setStyleSheet("background: #2A3B5A; border-radius: 5px;")
+        self._preview.setStyleSheet("background: #2B2D31; border-radius: 5px;")
         self._preview.setFixedHeight(65)
         preview_layout.addWidget(self._preview)
         preview_group.setLayout(preview_layout)
 
         self._run_settings_group = QGroupBox(translate("sort_run_settings"))
         self._run_settings_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         settings_layout = QVBoxLayout(self._run_settings_group)
         settings_layout.setContentsMargins(9, 20, 9, 9)
@@ -6441,7 +6571,7 @@ class SortRulesDialog(QDialog):
 
         self._link_all_check = QCheckBox(translate("sort_link_all"))
         self._link_all_check.setChecked(bool(link_all))
-        self._link_all_check.setStyleSheet("color: white;")
+        self._link_all_check.setStyleSheet("color: #F2F3F5;")
         self._link_all_check.setToolTip(translate("sort_link_all_tooltip"))
         self._link_all_check.stateChanged.connect(self._update_preview)
         settings_layout.addWidget(self._link_all_check)
@@ -6450,7 +6580,7 @@ class SortRulesDialog(QDialog):
             translate("sort_download_unsorted")
         )
         self._download_unsorted_check.setChecked(bool(download_unsorted))
-        self._download_unsorted_check.setStyleSheet("color: white;")
+        self._download_unsorted_check.setStyleSheet("color: #F2F3F5;")
         self._download_unsorted_check.setToolTip(
             translate("sort_download_unsorted_tooltip")
         )
@@ -6481,7 +6611,7 @@ class SortRulesDialog(QDialog):
         self._help_browser = QTextBrowser()
         self._help_browser.setOpenExternalLinks(False)
         self._help_browser.setStyleSheet(
-            "background: #2A3B5A; border-radius: 5px; color: white;"
+            "background: #2B2D31; border-radius: 5px; color: #F2F3F5;"
         )
         self._help_browser.setHtml(translate("sort_help_text"))
         help_layout.addWidget(self._help_browser)
@@ -6911,16 +7041,362 @@ class SortRulesDialog(QDialog):
     def _toggle_help(self):
         if self._pages.currentWidget() is self._help_page:
             self._pages.setCurrentWidget(self._editor_page)
-            self._help_button.setIcon(
-                qta.icon("fa5s.info-circle", color="#A0C0FF")
-            )
+            self._help_button.setIcon(qta.icon("fa5s.info-circle", color=INFO))
             self._help_button.setToolTip(translate("sort_help_title"))
         else:
             self._pages.setCurrentWidget(self._help_page)
-            self._help_button.setIcon(
-                qta.icon("fa5s.arrow-left", color="#A0C0FF")
-            )
+            self._help_button.setIcon(qta.icon("fa5s.arrow-left", color=INFO))
             self._help_button.setToolTip(translate("sort_help_back"))
+
+
+class RecommendedKeywordsDialog(QDialog):
+    """List the words and tags that repeat across the loaded posts.
+
+    All of the data is local: the tab passes its post rows and the index it
+    built while fetching.  The scan runs in a worker so a large library does
+    not freeze the tab, and every control re-runs it after a short debounce.
+    The window deliberately mirrors the Keyword Folder Sorting editor.
+    """
+
+    search_requested = pyqtSignal(str, object)
+    skip_keywords_requested = pyqtSignal(object, object)
+    options_changed = pyqtSignal(dict)
+
+    def __init__(self, posts, post_search_index, options=None, parent=None):
+        super().__init__(parent)
+        self._post_rows = [
+            (str(post_id), title) for title, (post_id, _thumb) in (posts or ())
+        ]
+        self._post_search_index = post_search_index or {}
+        self._results = []
+        self._thread = None
+        self._scan_pending = False
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(250)
+        self._debounce.timeout.connect(self._start_scan)
+
+        self.setWindowTitle(translate("recommended_keywords_title"))
+        self.setModal(False)
+        self.resize(880, 640)
+        self.setStyleSheet(f"background: {WINDOW_BG}; color: #F2F3F5;")
+        self._build_ui(options)
+        self._start_scan()
+
+    def _build_ui(self, options):
+        options = options or {}
+        try:
+            min_count = max(1, min(999, int(options.get("min_count", 2))))
+        except (TypeError, ValueError):
+            min_count = 2
+        try:
+            max_words = max(1, min(3, int(options.get("max_words", 3))))
+        except (TypeError, ValueError):
+            max_words = 3
+        layout = QVBoxLayout(self)
+
+        header = QHBoxLayout()
+        intro = QLabel(translate("recommended_keywords_intro"))
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color: #A3A6AD;")
+        header.addWidget(intro, stretch=1)
+        self._help_button = QPushButton(qta.icon("fa5s.info-circle", color=INFO), "")
+        self._help_button.setFixedSize(26, 26)
+        self._help_button.setStyleSheet(_INFO_BUTTON_STYLE)
+        self._help_button.setToolTip(translate("recommended_keywords_help_title"))
+        self._help_button.clicked.connect(self._toggle_help)
+        header.addWidget(self._help_button)
+        layout.addLayout(header)
+
+        self._pages = QStackedWidget()
+        self._editor_page = QWidget()
+        editor_layout = QVBoxLayout(self._editor_page)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+
+        scopes_row = QHBoxLayout()
+        scopes_row.setContentsMargins(0, 0, 0, 0)
+        scopes_row.addWidget(QLabel(translate("recommended_keywords_scopes")))
+        chosen = {str(scope) for scope in (options.get("scopes") or DEFAULT_SCOPES)}
+        self._scope_checks = {}
+        for scope, key in (
+            ("title", "search_scope_title_toggle"),
+            ("tags", "search_scope_tags_toggle"),
+            ("description", "search_scope_description_toggle"),
+            ("filenames", "search_scope_filenames_toggle"),
+        ):
+            box = QCheckBox(translate(key))
+            box.setStyleSheet("color: #F2F3F5;")
+            box.setChecked(scope in chosen)
+            box.stateChanged.connect(self._schedule_scan)
+            scopes_row.addWidget(box)
+            self._scope_checks[scope] = box
+        scopes_row.addStretch()
+        editor_layout.addLayout(scopes_row)
+
+        options_row = QHBoxLayout()
+        options_row.setContentsMargins(0, 0, 0, 0)
+        options_row.addWidget(QLabel(translate("recommended_keywords_min_posts")))
+        self._min_posts = QSpinBox()
+        self._min_posts.setRange(1, 999)
+        self._min_posts.setValue(min_count)
+        self._min_posts.setMinimumWidth(64)
+        self._min_posts.setStyleSheet(
+            scoped("QSpinBox", "padding: 3px; border-radius: 5px;")
+        )
+        self._min_posts.valueChanged.connect(self._schedule_scan)
+        options_row.addWidget(self._min_posts)
+        options_row.addWidget(QLabel(translate("recommended_keywords_posts_suffix")))
+        options_row.addSpacing(14)
+        options_row.addWidget(QLabel(translate("recommended_keywords_phrase_length")))
+        self._max_words = QComboBox()
+        for words in (1, 2, 3):
+            self._max_words.addItem(str(words), words)
+        max_words_index = self._max_words.findData(max_words)
+        self._max_words.setCurrentIndex(max_words_index if max_words_index >= 0 else 2)
+        self._max_words.currentIndexChanged.connect(self._schedule_scan)
+        options_row.addWidget(self._max_words)
+        options_row.addSpacing(14)
+        self._ignore_common = QCheckBox(translate("recommended_keywords_ignore_common"))
+        self._ignore_common.setChecked(bool(options.get("ignore_common_words", True)))
+        self._ignore_common.setStyleSheet("color: #F2F3F5;")
+        self._ignore_common.stateChanged.connect(self._schedule_scan)
+        options_row.addWidget(self._ignore_common)
+        self._ignore_accents = QCheckBox(
+            translate("recommended_keywords_ignore_accents")
+        )
+        self._ignore_accents.setChecked(bool(options.get("ignore_accents", False)))
+        self._ignore_accents.setStyleSheet("color: #F2F3F5;")
+        self._ignore_accents.stateChanged.connect(self._schedule_scan)
+        options_row.addWidget(self._ignore_accents)
+        options_row.addStretch()
+        self._refresh_btn = QPushButton(translate("recommended_keywords_refresh"))
+        self._refresh_btn.setStyleSheet(_RUN_BUTTON_STYLE)
+        self._refresh_btn.clicked.connect(self._start_scan)
+        options_row.addWidget(self._refresh_btn)
+        editor_layout.addLayout(options_row)
+
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet("color: #A3A6AD;")
+        editor_layout.addWidget(self._status_label)
+
+        self._table = QTableWidget(0, 3)
+        self._table.setHorizontalHeaderLabels(
+            [
+                translate("recommended_keywords_column_keyword"),
+                translate("recommended_keywords_column_posts"),
+                translate("recommended_keywords_column_mentions"),
+            ]
+        )
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setShowGrid(False)
+        self._table.setStyleSheet(
+            "QTableWidget { background: #2B2D31; border-radius: 5px; "
+            "color: #F2F3F5; }"
+            "QHeaderView::section { background: #3A3C42; color: #F2F3F5; "
+            "padding: 5px; border: none; }"
+        )
+        table_header = self._table.horizontalHeader()
+        table_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        table_header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        table_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        table_header.setStretchLastSection(False)
+        self._table.itemSelectionChanged.connect(self._update_actions)
+        editor_layout.addWidget(self._table, stretch=1)
+
+        self._empty_label = QLabel(translate("recommended_keywords_empty"))
+        self._empty_label.setStyleSheet("color: #A3A6AD;")
+        self._empty_label.setWordWrap(True)
+        self._empty_label.setVisible(False)
+        editor_layout.addWidget(self._empty_label)
+
+        buttons_row = QHBoxLayout()
+        buttons_row.addStretch()
+        self._search_btn = QPushButton(translate("recommended_keywords_search"))
+        self._add_skip_btn = QPushButton(translate("recommended_keywords_add_skip"))
+        self._copy_btn = QPushButton(translate("recommended_keywords_copy"))
+        close_btn = QPushButton(translate("close"))
+        for button in (self._search_btn, self._add_skip_btn, self._copy_btn, close_btn):
+            button.setStyleSheet(_RUN_BUTTON_STYLE)
+            buttons_row.addWidget(button)
+        editor_layout.addLayout(buttons_row)
+        self._pages.addWidget(self._editor_page)
+
+        self._help_page = QWidget()
+        help_layout = QVBoxLayout(self._help_page)
+        help_layout.setContentsMargins(0, 0, 0, 0)
+        self._help_browser = QTextBrowser()
+        self._help_browser.setOpenExternalLinks(False)
+        self._help_browser.setStyleSheet(
+            "background: #2B2D31; border-radius: 5px; color: #F2F3F5;"
+        )
+        self._help_browser.setHtml(translate("recommended_keywords_help_text"))
+        help_layout.addWidget(self._help_browser)
+        help_row = QHBoxLayout()
+        help_row.addStretch()
+        self._help_back_btn = QPushButton(translate("back"))
+        self._help_back_btn.setStyleSheet(_RUN_BUTTON_STYLE)
+        self._help_back_btn.clicked.connect(self._toggle_help)
+        help_row.addWidget(self._help_back_btn)
+        help_layout.addLayout(help_row)
+        self._pages.addWidget(self._help_page)
+
+        layout.addWidget(self._pages)
+        self._search_btn.clicked.connect(self._request_search)
+        self._add_skip_btn.clicked.connect(self._request_skip_keywords)
+        self._copy_btn.clicked.connect(self._copy_keyword)
+        close_btn.clicked.connect(self.close)
+        self._update_actions()
+
+    def _selected_scopes(self):
+        """Return the ticked scan scopes, defaulting to Title + Tags."""
+        scopes = {scope for scope, box in self._scope_checks.items() if box.isChecked()}
+        return scopes or set(DEFAULT_SCOPES)
+
+    def _schedule_scan(self):
+        """Coalesce a burst of control changes into one rescan."""
+        self.options_changed.emit(self.options())
+        self._debounce.start()
+
+    def options(self):
+        """Return the current scan controls as a config block."""
+        return {
+            "scopes": sorted(self._selected_scopes()),
+            "min_count": self._min_posts.value(),
+            "max_words": int(self._max_words.currentData() or 3),
+            "ignore_common_words": self._ignore_common.isChecked(),
+            "ignore_accents": self._ignore_accents.isChecked(),
+        }
+
+    def _start_scan(self):
+        """Run a scan, or queue one if the previous scan is still going."""
+        if self._thread is not None and self._thread.isRunning():
+            self._scan_pending = True
+            return
+        self._scan_pending = False
+        self._refresh_btn.setEnabled(False)
+        self._status_label.setText(translate("recommended_keywords_scanning"))
+        self._thread = RecommendedKeywordsThread(
+            self._post_rows,
+            self._post_search_index,
+            self._selected_scopes(),
+            min_count=self._min_posts.value(),
+            max_words=int(self._max_words.currentData() or 3),
+            ignore_common_words=self._ignore_common.isChecked(),
+            ignore_accents=self._ignore_accents.isChecked(),
+            limit=300,
+        )
+        self._thread.finished.connect(self._on_scan_finished)
+        self._thread.finished.connect(self._forget_thread)
+        self._thread.start()
+
+    def _on_scan_finished(self, results):
+        """Paint a completed scan and keep the summary honest."""
+        self._results = list(results)
+        self._table.setRowCount(0)
+        for row, result in enumerate(self._results):
+            self._table.insertRow(row)
+            self._table.setItem(row, 0, QTableWidgetItem(result.keyword))
+            for column, value in (
+                (1, result.count),
+                (2, result.mentions),
+            ):
+                cell = QTableWidgetItem(str(value))
+                cell.setTextAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
+                self._table.setItem(row, column, cell)
+        if self._results:
+            self._table.selectRow(0)
+        else:
+            self._empty_label.setText(
+                translate(
+                    "recommended_keywords_no_posts"
+                    if not self._post_rows
+                    else "recommended_keywords_empty"
+                )
+            )
+        self._empty_label.setVisible(not self._results)
+        self._status_label.setText(
+            translate(
+                "recommended_keywords_summary",
+                len(self._results),
+                len(self._post_rows),
+            )
+        )
+        self._update_actions()
+
+    def _forget_thread(self):
+        """Drop a finished worker and run any scan queued behind it."""
+        thread = self._thread
+        self._thread = None
+        if thread is not None:
+            thread.deleteLater()
+        self._refresh_btn.setEnabled(True)
+        if self._scan_pending and self.isVisible():
+            self._start_scan()
+
+    def _selected_result(self):
+        row = self._table.currentRow()
+        if 0 <= row < len(self._results):
+            return self._results[row]
+        return None
+
+    def _update_actions(self):
+        enabled = self._selected_result() is not None
+        for button in (self._search_btn, self._add_skip_btn, self._copy_btn):
+            button.setEnabled(enabled)
+
+    def _request_search(self):
+        result = self._selected_result()
+        if result is not None:
+            self.search_requested.emit(
+                result.keyword, frozenset(self._selected_scopes())
+            )
+
+    def _request_skip_keywords(self):
+        result = self._selected_result()
+        if result is not None:
+            variants = result.variants or (result.keyword,)
+            self.skip_keywords_requested.emit(
+                tuple(variants), frozenset(result.scopes or ())
+            )
+
+    def _copy_keyword(self):
+        result = self._selected_result()
+        if result is not None:
+            QApplication.clipboard().setText(result.keyword)
+
+    def _toggle_help(self):
+        if self._pages.currentWidget() is self._help_page:
+            self._pages.setCurrentWidget(self._editor_page)
+            self._help_button.setIcon(qta.icon("fa5s.info-circle", color=INFO))
+            self._help_button.setToolTip(translate("recommended_keywords_help_title"))
+        else:
+            self._pages.setCurrentWidget(self._help_page)
+            self._help_button.setIcon(qta.icon("fa5s.arrow-left", color=INFO))
+            self._help_button.setToolTip(translate("back"))
+
+    def closeEvent(self, a0):
+        """Stop the scan before the window and its worker disappear."""
+        self._debounce.stop()
+        thread = self._thread
+        self._thread = None
+        if thread is not None:
+            thread.stop()
+            try:
+                if thread.isRunning():
+                    thread.wait(5000)
+            except (AttributeError, RuntimeError):
+                pass
+            try:
+                thread.deleteLater()
+            except (AttributeError, RuntimeError):
+                pass
+        if a0 is not None:
+            super().closeEvent(a0)
 
 
 class _CreatorQueueRow(QWidget):
@@ -7037,6 +7513,16 @@ class CreatorDownloaderTab(QWidget):
         self._sort_unsorted_folder = ""
         # The modeless rules editor, reused while it is open.
         self._sort_rules_dialog = None
+        # The modeless keyword-scan window, reused while it is open.
+        self._recommended_keywords_dialog = None
+        # Last-used scan controls, saved in the page/creator config.
+        self._recommended_options = {
+            "scopes": set(DEFAULT_SCOPES),
+            "min_count": 2,
+            "max_words": 3,
+            "ignore_common_words": True,
+            "ignore_accents": False,
+        }
         # The run's routing snapshot, reused by Retry Failed Downloads so a
         # rule edit between runs cannot move the files that failed.
         self._last_run_post_sort_folders = {}
@@ -7226,23 +7712,23 @@ class CreatorDownloaderTab(QWidget):
         # never disturb the widget being typed into.
         self.creator_queue_group = QGroupBox()
         self.creator_queue_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         creator_queue_layout = QVBoxLayout()
 
         self.creator_queue_list = QListWidget()
         self.creator_queue_list.setFixedHeight(100)
         self.creator_queue_list.setStyleSheet(
-            # A muted, low-opacity selection (and hover) that matches the post
-            # list's selected-row tint. The :!active rule is the important one:
-            # without it Fusion paints an opaque black bar once the list loses
-            # focus, which looked like a stuck selection.
-            "QListWidget { background: #2A3B5A; border-radius: 5px; }"
+            # The queue is a console-dark panel so it reads as a list, not as
+            # an input. The :!active rule is the important one: without it
+            # Fusion paints an opaque black bar once the list loses focus.
+            f"QListWidget {{ background: {CONSOLE};"
+            f" border: 1px solid {BORDER}; border-radius: {RADIUS}px; }}"
             "QListWidget::item { background: transparent; border-radius: 4px; }"
-            "QListWidget::item:hover { background: rgba(74, 91, 122, 60); }"
-            "QListWidget::item:selected { background: rgba(74, 91, 122, 150); }"
-            "QListWidget::item:selected:!active"
-            " { background: rgba(74, 91, 122, 90); }"
+            f"QListWidget::item:hover {{ background: {SURFACE_ALT}; }}"
+            f"QListWidget::item:selected {{ background: {ACCENT}; }}"
+            f"QListWidget::item:selected:!active"
+            f" {{ background: {ACCENT_PRESSED}; }}"
         )
         # File import has no button of its own any more; it is reachable from
         # the queue's context menu instead of taking a row of its own.
@@ -7258,18 +7744,14 @@ class CreatorDownloaderTab(QWidget):
         creator_queue_input_layout.setContentsMargins(0, 0, 0, 0)
         creator_queue_input_layout.setSpacing(5)
 
-        self.creator_queue_input_btn = QPushButton(
-            qta.icon("fa5s.eye", color="white"), ""
-        )
+        self.creator_queue_input_btn = QPushButton(qta.icon("fa5s.eye", color=TEXT), "")
         self.creator_queue_input_btn.setStyleSheet(
             # Scoped to QPushButton: an unscoped rule also lands on the
             # tooltip label Qt parents to the button, which squeezed the
             # tooltip down to the button's own size.
-            scoped(
-                "QPushButton",
-                "background: #4A5B7A; padding: 2px; border-radius: 5px; "
+            icon_button_style(
                 "min-width: 30px; max-width: 30px; min-height: 30px; "
-                "max-height: 30px;",
+                "max-height: 30px;"
             )
         )
         self.creator_queue_input_btn.setToolTip(
@@ -7287,8 +7769,8 @@ class CreatorDownloaderTab(QWidget):
             # standard edit menu Qt parents to it.
             scoped(
                 "QLineEdit",
-                "background: #2A3B5A; border-radius: 5px;"
-                " padding: 2px 8px; color: white;",
+                "background: #2B2D31; border-radius: 5px;"
+                " padding: 2px 8px; color: #F2F3F5;",
             )
         )
         self.creator_queue_input.setFixedHeight(30)
@@ -7302,7 +7784,7 @@ class CreatorDownloaderTab(QWidget):
         # Download Options Group
         self.creator_options_group = QGroupBox()
         self.creator_options_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         creator_options_layout = QVBoxLayout()
 
@@ -7322,7 +7804,7 @@ class CreatorDownloaderTab(QWidget):
         # Download text checkbox
         self.creator_download_text_check = QCheckBox(translate("download_text"))
         self.creator_download_text_check.setChecked(False)
-        self.creator_download_text_check.setStyleSheet("color: white;")
+        self.creator_download_text_check.setStyleSheet("color: #F2F3F5;")
         creator_options_layout.addWidget(self.creator_download_text_check)
 
         # Skip post folder for low-image-count posts toggle + dropdown
@@ -7332,32 +7814,21 @@ class CreatorDownloaderTab(QWidget):
             translate("skip_folder_for_few_images")
         )
         self.creator_skip_folder_check.setChecked(False)
-        self.creator_skip_folder_check.setStyleSheet("color: white;")
+        self.creator_skip_folder_check.setStyleSheet("color: #F2F3F5;")
         skip_single_image_layout.addWidget(self.creator_skip_folder_check)
 
         # Toggle: keep compressed archives (ZIP/7z/RAR) in their own post
         # folder even when Skip Post Folder would otherwise skip it.
         self.creator_force_compressed_folder_check = QCheckBox()
         self.creator_force_compressed_folder_check.setIcon(
-            qta.icon("fa5s.file-archive", color="#FFD700")
+            qta.icon("fa5s.file-archive", color="#FFD93D")
         )
         self.creator_force_compressed_folder_check.setChecked(False)
-        self.creator_force_compressed_folder_check.setStyleSheet("color: white;")
+        self.creator_force_compressed_folder_check.setStyleSheet("color: #F2F3F5;")
         self.creator_force_compressed_folder_check.setToolTip(
             translate("force_folder_for_compressed")
         )
         skip_single_image_layout.addWidget(self.creator_force_compressed_folder_check)
-
-        self.creator_skip_folder_info_btn = QPushButton(
-            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
-        )
-        self.creator_skip_folder_info_btn.setFixedSize(26, 26)
-        self.creator_skip_folder_info_btn.setStyleSheet(
-            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
-        )
-        self.creator_skip_folder_info_btn.clicked.connect(self.show_skip_folder_info)
-        skip_single_image_layout.addWidget(self.creator_skip_folder_info_btn)
-        skip_single_image_layout.addSpacing(10)
 
         self.creator_skip_folder_combo = QComboBox()
         for n in range(1, 11):
@@ -7368,6 +7839,15 @@ class CreatorDownloaderTab(QWidget):
             scoped("QComboBox", "padding: 5px; border-radius: 5px;")
         )
         skip_single_image_layout.addWidget(self.creator_skip_folder_combo)
+
+        self.creator_skip_folder_info_btn = QPushButton(
+            qta.icon("fa5s.info-circle", color=INFO), ""
+        )
+        self.creator_skip_folder_info_btn.setFixedSize(26, 26)
+        self.creator_skip_folder_info_btn.setStyleSheet(_INFO_BUTTON_STYLE)
+        self.creator_skip_folder_info_btn.clicked.connect(self.show_skip_folder_info)
+        skip_single_image_layout.addSpacing(10)
+        skip_single_image_layout.addWidget(self.creator_skip_folder_info_btn)
         skip_single_image_layout.addStretch()
         creator_options_layout.addLayout(skip_single_image_layout)
 
@@ -7380,16 +7860,14 @@ class CreatorDownloaderTab(QWidget):
             translate("skip_images_if_compressed")
         )
         self.creator_skip_images_check.setChecked(False)
-        self.creator_skip_images_check.setStyleSheet("color: white;")
+        self.creator_skip_images_check.setStyleSheet("color: #F2F3F5;")
         skip_images_layout.addWidget(self.creator_skip_images_check)
 
         self.creator_skip_images_info_btn = QPushButton(
-            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+            qta.icon("fa5s.info-circle", color=INFO), ""
         )
         self.creator_skip_images_info_btn.setFixedSize(26, 26)
-        self.creator_skip_images_info_btn.setStyleSheet(
-            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
-        )
+        self.creator_skip_images_info_btn.setStyleSheet(_INFO_BUTTON_STYLE)
         self.creator_skip_images_info_btn.clicked.connect(self.show_skip_images_info)
         skip_images_layout.addWidget(self.creator_skip_images_info_btn)
         skip_images_layout.addStretch()
@@ -7397,22 +7875,37 @@ class CreatorDownloaderTab(QWidget):
 
         # Keyword folders: destination rules for keyword matches. The rules
         # live in the config profile; this row is the on/off plus the editor.
-        sort_layout = QHBoxLayout()
-        sort_layout.setContentsMargins(0, 0, 0, 0)
+        # The switch shares row 0 with the folder button, so it sits beside it
+        # instead of floating between the two buttons.
+        sort_grid = QGridLayout()
+        sort_grid.setContentsMargins(0, 0, 0, 0)
+        sort_grid.setHorizontalSpacing(8)
         self.creator_sort_enabled_check = QCheckBox()
         self.creator_sort_enabled_check.setChecked(False)
-        self.creator_sort_enabled_check.setStyleSheet("color: white;")
-        sort_layout.addWidget(self.creator_sort_enabled_check)
+        sort_grid.addWidget(
+            self.creator_sort_enabled_check,
+            0,
+            0,
+            alignment=Qt.AlignmentFlag.AlignVCenter,
+        )
 
         self.creator_sort_rules_btn = QPushButton()
         self.creator_sort_rules_btn.setStyleSheet(_RUN_BUTTON_STYLE)
         self.creator_sort_rules_btn.clicked.connect(self._open_sort_rules_dialog)
-        sort_layout.addWidget(self.creator_sort_rules_btn)
-        sort_layout.addStretch()
-        creator_options_layout.addLayout(sort_layout)
+        sort_grid.addWidget(self.creator_sort_rules_btn, 0, 1)
+
+        self.creator_recommended_btn = QPushButton()
+        self.creator_recommended_btn.setStyleSheet(_RUN_BUTTON_STYLE)
+        self.creator_recommended_btn.clicked.connect(
+            self._open_recommended_keywords_dialog
+        )
+        sort_grid.addWidget(self.creator_recommended_btn, 1, 1)
+
+        sort_grid.setColumnStretch(2, 1)
+        creator_options_layout.addLayout(sort_grid)
 
         self.creator_ext_group = QGroupBox()
-        self.creator_ext_group.setStyleSheet("QGroupBox { color: white; }")
+        self.creator_ext_group.setStyleSheet("QGroupBox { color: #F2F3F5; }")
         creator_ext_layout = QGridLayout()
         creator_ext_layout.setHorizontalSpacing(20)
         creator_ext_layout.setVerticalSpacing(10)
@@ -7455,7 +7948,7 @@ class CreatorDownloaderTab(QWidget):
         self.creator_ext_empty_label = QLabel(
             translate("supported_filetypes_not_present")
         )
-        self.creator_ext_empty_label.setStyleSheet("color: #8FA6C8;")
+        self.creator_ext_empty_label.setStyleSheet("color: #A3A6AD;")
         self.creator_ext_empty_label.setVisible(False)
         creator_options_layout.addWidget(self.creator_ext_group)
 
@@ -7466,7 +7959,7 @@ class CreatorDownloaderTab(QWidget):
         # buttons reads as a single section.
         self.run_summary_group = QGroupBox()
         self.run_summary_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         run_summary_layout = QVBoxLayout()
 
@@ -7474,18 +7967,18 @@ class CreatorDownloaderTab(QWidget):
         self.creator_file_progress_label = QLabel()
         creator_progress_layout.addWidget(self.creator_file_progress_label)
         self.creator_file_progress = QProgressBar()
-        self.creator_file_progress.setStyleSheet(
-            "QProgressBar { border: 1px solid #4A5B7A; border-radius: 5px; background: #2A3B5A; } QProgressBar::chunk { background: #4A5B7A; }"
-        )
         self.creator_file_progress.setRange(0, 100)
+        self.creator_file_progress.setTextVisible(True)
+        self.creator_file_progress.setFormat("%p%")
+        style_progress_bar(self.creator_file_progress)
         creator_progress_layout.addWidget(self.creator_file_progress)
         self.creator_overall_progress_label = QLabel()
         creator_progress_layout.addWidget(self.creator_overall_progress_label)
         self.creator_overall_progress = QProgressBar()
-        self.creator_overall_progress.setStyleSheet(
-            "QProgressBar { border: 1px solid #4A5B7A; border-radius: 5px; background: #2A3B5A; } QProgressBar::chunk { background: #4A5B7A; }"
-        )
         self.creator_overall_progress.setRange(0, 100)
+        self.creator_overall_progress.setTextVisible(True)
+        self.creator_overall_progress.setFormat("%p%")
+        style_progress_bar(self.creator_overall_progress)
         creator_progress_layout.addWidget(self.creator_overall_progress)
         run_summary_layout.addLayout(creator_progress_layout)
 
@@ -7493,12 +7986,12 @@ class CreatorDownloaderTab(QWidget):
         # visible while the log panel is minimised.
         self.creator_download_summary_label = QLabel()
         self.creator_download_summary_label.setTextFormat(Qt.TextFormat.RichText)
-        self.creator_download_summary_label.setStyleSheet("color: white;")
+        self.creator_download_summary_label.setStyleSheet("color: #F2F3F5;")
         run_summary_layout.addWidget(self.creator_download_summary_label)
 
         self.creator_skip_summary_label = QLabel()
         self.creator_skip_summary_label.setTextFormat(Qt.TextFormat.RichText)
-        self.creator_skip_summary_label.setStyleSheet("color: white;")
+        self.creator_skip_summary_label.setStyleSheet("color: #F2F3F5;")
         self.creator_skip_summary_label.setWordWrap(True)
         run_summary_layout.addWidget(self.creator_skip_summary_label)
 
@@ -7506,7 +7999,7 @@ class CreatorDownloaderTab(QWidget):
         # rule is only decided when a download runs.
         self.creator_skip_files_label = QLabel()
         self.creator_skip_files_label.setTextFormat(Qt.TextFormat.RichText)
-        self.creator_skip_files_label.setStyleSheet("color: white;")
+        self.creator_skip_files_label.setStyleSheet("color: #F2F3F5;")
         self.creator_skip_files_label.setWordWrap(True)
         run_summary_layout.addWidget(self.creator_skip_files_label)
 
@@ -7516,21 +8009,21 @@ class CreatorDownloaderTab(QWidget):
         # Buttons layout
         creator_btn_layout = QHBoxLayout()
         self.creator_download_btn = QPushButton(
-            qta.icon("fa5s.download", color="white"), ""
+            qta.icon("fa5s.download", color=TEXT), ""
         )
         self.creator_download_btn.clicked.connect(self.start_creator_download)
-        self.creator_download_btn.setStyleSheet(_RUN_BUTTON_STYLE)
+        self.creator_download_btn.setStyleSheet(_PRIMARY_BUTTON_STYLE)
         creator_btn_layout.addWidget(self.creator_download_btn)
-        self.creator_cancel_btn = QPushButton(qta.icon("fa5s.times", color="white"), "")
+        self.creator_cancel_btn = QPushButton(qta.icon("fa5s.times", color=TEXT), "")
         self.creator_cancel_btn.clicked.connect(self.cancel_creator_download)
-        self.creator_cancel_btn.setStyleSheet(_RUN_BUTTON_STYLE)
+        self.creator_cancel_btn.setStyleSheet(_DANGER_BUTTON_STYLE)
         self.creator_cancel_btn.setEnabled(False)
         creator_btn_layout.addWidget(self.creator_cancel_btn)
 
         # Retry sits with the other run controls. It stays visible and is only
         # greyed out when there is nothing to retry (or a run is in progress).
         self.creator_retry_failed_btn = QPushButton(
-            qta.icon("fa5s.redo", color="white"), ""
+            qta.icon("fa5s.redo", color=TEXT), ""
         )
         self.creator_retry_failed_btn.clicked.connect(self.retry_failed_downloads)
         self.creator_retry_failed_btn.setStyleSheet(_RUN_BUTTON_STYLE)
@@ -7540,7 +8033,7 @@ class CreatorDownloaderTab(QWidget):
         # Sits with the run controls but follows the folder, not the run: it
         # stays greyed until this run's creator folder actually exists.
         self.creator_open_folder_btn = QPushButton(
-            qta.icon("fa5s.folder-open", color="white"), ""
+            qta.icon("fa5s.folder-open", color=TEXT), ""
         )
         self.creator_open_folder_btn.clicked.connect(self._open_creator_folder)
         self.creator_open_folder_btn.setStyleSheet(_RUN_BUTTON_STYLE)
@@ -7571,7 +8064,7 @@ class CreatorDownloaderTab(QWidget):
         # Posts to Download Group
         self.post_list_group = QGroupBox()
         self.post_list_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         post_list_layout = QVBoxLayout()
 
@@ -7580,7 +8073,7 @@ class CreatorDownloaderTab(QWidget):
         # post group leaves that group height for the posts themselves.
         self.filters_group = QGroupBox()
         self.filters_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         filters_layout = QVBoxLayout()
 
@@ -7589,7 +8082,7 @@ class CreatorDownloaderTab(QWidget):
         skip_filter_layout.setContentsMargins(0, 0, 0, 0)
 
         self.skip_keywords_label = QLabel(translate("skip_posts_keywords"))
-        self.skip_keywords_label.setStyleSheet("color: white;")
+        self.skip_keywords_label.setStyleSheet("color: #F2F3F5;")
         skip_filter_layout.addWidget(self.skip_keywords_label)
 
         self.skip_keywords_edit = QLineEdit()
@@ -7602,12 +8095,10 @@ class CreatorDownloaderTab(QWidget):
         skip_filter_layout.addWidget(self.skip_keywords_edit, stretch=1)
 
         self.skip_keywords_help_btn = QPushButton(
-            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+            qta.icon("fa5s.info-circle", color=INFO), ""
         )
         self.skip_keywords_help_btn.setFixedSize(26, 26)
-        self.skip_keywords_help_btn.setStyleSheet(
-            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
-        )
+        self.skip_keywords_help_btn.setStyleSheet(_INFO_BUTTON_STYLE)
         self.skip_keywords_help_btn.clicked.connect(self.show_skip_keywords_help)
         skip_filter_layout.addWidget(self.skip_keywords_help_btn)
 
@@ -7619,7 +8110,7 @@ class CreatorDownloaderTab(QWidget):
         skip_scope_layout.setContentsMargins(0, 0, 0, 0)
 
         self.skip_scope_label = QLabel(translate("skip_keywords_scope"))
-        self.skip_scope_label.setStyleSheet("color: white;")
+        self.skip_scope_label.setStyleSheet("color: #F2F3F5;")
         skip_scope_layout.addWidget(self.skip_scope_label)
 
         self._skip_scope_options = [
@@ -7631,7 +8122,7 @@ class CreatorDownloaderTab(QWidget):
         self.skip_scope_checkboxes = {}
         for label_key, value in self._skip_scope_options:
             checkbox = QCheckBox(translate(label_key))
-            checkbox.setStyleSheet("color: white;")
+            checkbox.setStyleSheet("color: #F2F3F5;")
             checkbox.setChecked(value == "title")  # Title enabled by default
             skip_scope_layout.addWidget(checkbox)
             self.skip_scope_checkboxes[value] = checkbox
@@ -7643,7 +8134,7 @@ class CreatorDownloaderTab(QWidget):
         file_skip_filter_layout.setContentsMargins(0, 0, 0, 0)
 
         self.file_skip_keywords_label = QLabel(translate("skip_files_keywords"))
-        self.file_skip_keywords_label.setStyleSheet("color: white;")
+        self.file_skip_keywords_label.setStyleSheet("color: #F2F3F5;")
         file_skip_filter_layout.addWidget(self.file_skip_keywords_label)
 
         self.file_skip_keywords_edit = QLineEdit()
@@ -7656,12 +8147,10 @@ class CreatorDownloaderTab(QWidget):
         file_skip_filter_layout.addWidget(self.file_skip_keywords_edit, stretch=1)
 
         self.file_skip_keywords_help_btn = QPushButton(
-            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+            qta.icon("fa5s.info-circle", color=INFO), ""
         )
         self.file_skip_keywords_help_btn.setFixedSize(26, 26)
-        self.file_skip_keywords_help_btn.setStyleSheet(
-            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
-        )
+        self.file_skip_keywords_help_btn.setStyleSheet(_INFO_BUTTON_STYLE)
         self.file_skip_keywords_help_btn.clicked.connect(
             self.show_file_skip_keywords_help
         )
@@ -7676,11 +8165,11 @@ class CreatorDownloaderTab(QWidget):
         date_range_layout.setContentsMargins(0, 0, 0, 0)
 
         self.date_range_label = QLabel(translate("date_range_filter"))
-        self.date_range_label.setStyleSheet("color: white;")
+        self.date_range_label.setStyleSheet("color: #F2F3F5;")
         date_range_layout.addWidget(self.date_range_label)
 
         self.date_from_label = QLabel(translate("date_range_from"))
-        self.date_from_label.setStyleSheet("color: white;")
+        self.date_from_label.setStyleSheet("color: #F2F3F5;")
         date_range_layout.addWidget(self.date_from_label)
 
         self.date_from_edit = QLineEdit()
@@ -7691,7 +8180,7 @@ class CreatorDownloaderTab(QWidget):
         date_range_layout.addWidget(self.date_from_edit, stretch=1)
 
         self.date_to_label = QLabel(translate("date_range_to"))
-        self.date_to_label.setStyleSheet("color: white;")
+        self.date_to_label.setStyleSheet("color: #F2F3F5;")
         date_range_layout.addWidget(self.date_to_label)
 
         self.date_to_edit = QLineEdit()
@@ -7702,12 +8191,10 @@ class CreatorDownloaderTab(QWidget):
         date_range_layout.addWidget(self.date_to_edit, stretch=1)
 
         self.date_filter_help_btn = QPushButton(
-            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+            qta.icon("fa5s.info-circle", color=INFO), ""
         )
         self.date_filter_help_btn.setFixedSize(26, 26)
-        self.date_filter_help_btn.setStyleSheet(
-            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
-        )
+        self.date_filter_help_btn.setStyleSheet(_INFO_BUTTON_STYLE)
         self.date_filter_help_btn.clicked.connect(self.show_date_filter_help)
         date_range_layout.addWidget(self.date_filter_help_btn)
 
@@ -7721,7 +8208,7 @@ class CreatorDownloaderTab(QWidget):
         file_count_layout.setContentsMargins(0, 0, 0, 0)
 
         self.file_count_label = QLabel(translate("file_count_filter"))
-        self.file_count_label.setStyleSheet("color: white;")
+        self.file_count_label.setStyleSheet("color: #F2F3F5;")
         file_count_layout.addWidget(self.file_count_label)
 
         self.file_count_from_edit = QLineEdit()
@@ -7734,7 +8221,7 @@ class CreatorDownloaderTab(QWidget):
         file_count_layout.addWidget(self.file_count_from_edit, stretch=1)
 
         self.file_count_to_label = QLabel(translate("file_count_to"))
-        self.file_count_to_label.setStyleSheet("color: white;")
+        self.file_count_to_label.setStyleSheet("color: #F2F3F5;")
         file_count_layout.addWidget(self.file_count_to_label)
 
         self.file_count_to_edit = QLineEdit()
@@ -7750,16 +8237,14 @@ class CreatorDownloaderTab(QWidget):
             translate("file_count_keep_compressed")
         )
         self.file_count_keep_compressed_check.setChecked(False)
-        self.file_count_keep_compressed_check.setStyleSheet("color: white;")
+        self.file_count_keep_compressed_check.setStyleSheet("color: #F2F3F5;")
         file_count_layout.addWidget(self.file_count_keep_compressed_check)
 
         self.file_count_help_btn = QPushButton(
-            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+            qta.icon("fa5s.info-circle", color=INFO), ""
         )
         self.file_count_help_btn.setFixedSize(26, 26)
-        self.file_count_help_btn.setStyleSheet(
-            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
-        )
+        self.file_count_help_btn.setStyleSheet(_INFO_BUTTON_STYLE)
         self.file_count_help_btn.clicked.connect(self.show_file_count_help)
         file_count_layout.addWidget(self.file_count_help_btn)
 
@@ -7773,16 +8258,14 @@ class CreatorDownloaderTab(QWidget):
 
         self.filter_no_selected_filetypes_check = QCheckBox()
         self.filter_no_selected_filetypes_check.setChecked(False)
-        self.filter_no_selected_filetypes_check.setStyleSheet("color: white;")
+        self.filter_no_selected_filetypes_check.setStyleSheet("color: #F2F3F5;")
         filetype_filter_layout.addWidget(self.filter_no_selected_filetypes_check)
 
         self.filter_no_selected_filetypes_help_btn = QPushButton(
-            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+            qta.icon("fa5s.info-circle", color=INFO), ""
         )
         self.filter_no_selected_filetypes_help_btn.setFixedSize(26, 26)
-        self.filter_no_selected_filetypes_help_btn.setStyleSheet(
-            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
-        )
+        self.filter_no_selected_filetypes_help_btn.setStyleSheet(_INFO_BUTTON_STYLE)
         self.filter_no_selected_filetypes_help_btn.clicked.connect(
             self.show_filter_no_selected_filetypes_help
         )
@@ -7801,7 +8284,7 @@ class CreatorDownloaderTab(QWidget):
         search_scope_layout.setContentsMargins(0, 0, 0, 0)
 
         self.search_scope_label = QLabel(translate("search_scope"))
-        self.search_scope_label.setStyleSheet("color: white;")
+        self.search_scope_label.setStyleSheet("color: #F2F3F5;")
         search_scope_layout.addWidget(self.search_scope_label)
 
         self._search_scope_options = [
@@ -7813,7 +8296,7 @@ class CreatorDownloaderTab(QWidget):
         self.search_scope_checkboxes = {}
         for label_key, value in self._search_scope_options:
             checkbox = QCheckBox(translate(label_key))
-            checkbox.setStyleSheet("color: white;")
+            checkbox.setStyleSheet("color: #F2F3F5;")
             checkbox.setChecked(value == "title")  # Title enabled by default
             checkbox.stateChanged.connect(self.filter_items)
             search_scope_layout.addWidget(checkbox)
@@ -7838,26 +8321,21 @@ class CreatorDownloaderTab(QWidget):
         self.creator_check_all = QCheckBox()
         self.creator_check_all.setTristate(True)
         self.creator_check_all.setChecked(False)
-        self.creator_check_all.setStyleSheet("color: white;")
+        self.creator_check_all.setStyleSheet("color: #F2F3F5;")
         self.creator_check_all.clicked.connect(self._on_check_page_clicked)
         checkbox_layout.addWidget(self.creator_check_all)
 
         self.creator_check_all_all = QCheckBox()
         self.creator_check_all_all.setTristate(True)
         self.creator_check_all_all.setChecked(False)
-        self.creator_check_all_all.setStyleSheet("color: white;")
+        self.creator_check_all_all.setStyleSheet("color: #F2F3F5;")
         self.creator_check_all_all.clicked.connect(self._on_check_all_clicked)
         checkbox_layout.addWidget(self.creator_check_all_all)
 
         # One clear control for both scopes: the page (what is listed) and
         # every post from the creator. A menu keeps it to a single widget.
         self.creator_deselect_btn = QPushButton()
-        self.creator_deselect_btn.setStyleSheet(
-            scoped(
-                "QPushButton",
-                "background: #4A5B7A; border-radius: 5px; padding: 2px 8px;",
-            )
-        )
+        self.creator_deselect_btn.setStyleSheet(icon_button_style("padding: 2px 8px;"))
         self.creator_deselect_menu = QMenu(self.creator_deselect_btn)
         self.creator_deselect_menu.setStyleSheet(MENU_STYLE)
         self.creator_deselect_page_action = self.creator_deselect_menu.addAction(
@@ -7874,7 +8352,7 @@ class CreatorDownloaderTab(QWidget):
         # Downloaded posts leave the list while this is on.
         self.creator_hide_downloaded_check = QCheckBox()
         self.creator_hide_downloaded_check.setChecked(False)
-        self.creator_hide_downloaded_check.setStyleSheet("color: white;")
+        self.creator_hide_downloaded_check.setStyleSheet("color: #F2F3F5;")
         self.creator_hide_downloaded_check.stateChanged.connect(
             self.on_hide_downloaded_changed
         )
@@ -7885,12 +8363,10 @@ class CreatorDownloaderTab(QWidget):
         # buttons on the filter rows above.
         checkbox_layout.addStretch()
         self.creator_box_info_btn = QPushButton(
-            qta.icon("fa5s.info-circle", color="#A0C0FF"), ""
+            qta.icon("fa5s.info-circle", color=INFO), ""
         )
         self.creator_box_info_btn.setFixedSize(26, 26)
-        self.creator_box_info_btn.setStyleSheet(
-            scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
-        )
+        self.creator_box_info_btn.setStyleSheet(_INFO_BUTTON_STYLE)
         self.creator_box_info_btn.clicked.connect(self.show_downloader_box_info)
         checkbox_layout.addWidget(self.creator_box_info_btn)
 
@@ -7899,14 +8375,17 @@ class CreatorDownloaderTab(QWidget):
         # Explains an empty list that is empty because of the filters, not
         # because the creator has nothing.
         self.creator_post_empty_label = QLabel()
-        self.creator_post_empty_label.setStyleSheet("color: #8FA6C8;")
+        self.creator_post_empty_label.setStyleSheet("color: #A3A6AD;")
         # Centred: it stands in for the list when every post is filtered out.
         self.creator_post_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.creator_post_empty_label.setVisible(False)
         post_list_layout.addWidget(self.creator_post_empty_label)
 
         self.creator_post_list = QListWidget()
-        self.creator_post_list.setStyleSheet("background: #2A3B5A; border-radius: 5px;")
+        self.creator_post_list.setStyleSheet(
+            f"background: {CONSOLE}; border: 1px solid {BORDER};"
+            f" border-radius: {RADIUS}px;"
+        )
         self.creator_post_list.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
         )
@@ -7929,12 +8408,12 @@ class CreatorDownloaderTab(QWidget):
         # right and held well clear of the count by expanding spacers.
         bottom_layout = QHBoxLayout()
         self.creator_post_count_label = QLabel()
-        self.creator_post_count_label.setStyleSheet("color: white;")
+        self.creator_post_count_label.setStyleSheet("color: #F2F3F5;")
         bottom_layout.addWidget(self.creator_post_count_label)
 
         bottom_layout.addStretch()
         self.creator_last_download_label = QLabel()
-        self.creator_last_download_label.setStyleSheet("color: white;")
+        self.creator_last_download_label.setStyleSheet("color: #F2F3F5;")
         self.creator_last_download_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         bottom_layout.addWidget(self.creator_last_download_label)
         bottom_layout.addStretch()
@@ -7944,16 +8423,14 @@ class CreatorDownloaderTab(QWidget):
         # Pagination controls sit on their own row below the counters.
         controls_layout = QHBoxLayout()
         self.page_label = QLabel()
-        self.page_label.setStyleSheet("color: white;")
+        self.page_label.setStyleSheet("color: #F2F3F5;")
         controls_layout.addWidget(self.page_label)
 
-        self.prev_page_btn = QPushButton(
-            qta.icon("fa5s.chevron-left", color="white"), ""
-        )
+        self.prev_page_btn = QPushButton(qta.icon("fa5s.chevron-left", color=TEXT), "")
         self.prev_page_btn.setStyleSheet(
             scoped(
                 "QPushButton",
-                "background: #4A5B7A; padding: 2px; border-radius: 5px; "
+                "background: #45484F; padding: 2px; border-radius: 5px; "
                 "min-width: 30px; max-width: 30px; min-height: 30px; "
                 "max-height: 30px;",
             )
@@ -7962,13 +8439,11 @@ class CreatorDownloaderTab(QWidget):
         self.prev_page_btn.setEnabled(False)
         controls_layout.addWidget(self.prev_page_btn)
 
-        self.next_page_btn = QPushButton(
-            qta.icon("fa5s.chevron-right", color="white"), ""
-        )
+        self.next_page_btn = QPushButton(qta.icon("fa5s.chevron-right", color=TEXT), "")
         self.next_page_btn.setStyleSheet(
             scoped(
                 "QPushButton",
-                "background: #4A5B7A; padding: 2px; border-radius: 5px; "
+                "background: #45484F; padding: 2px; border-radius: 5px; "
                 "min-width: 30px; max-width: 30px; min-height: 30px; "
                 "max-height: 30px;",
             )
@@ -7985,15 +8460,13 @@ class CreatorDownloaderTab(QWidget):
 
         # Background task indicators
         self.background_task_label = QLabel()
-        self.background_task_label.setStyleSheet("color: white;")
+        self.background_task_label.setStyleSheet("color: #F2F3F5;")
         right_layout.addWidget(self.background_task_label)
 
         self.background_task_progress = QProgressBar()
-        self.background_task_progress.setStyleSheet(
-            "QProgressBar { border: 1px solid #4A5B7A; border-radius: 5px; background: #2A3B5A; } QProgressBar::chunk { background: #4A5B7A; }"
-        )
         self.background_task_progress.setRange(0, 100)
         self.background_task_progress.setValue(0)
+        style_progress_bar(self.background_task_progress)
         right_layout.addWidget(self.background_task_progress)
 
         # Log + config row: the log button opens the full log window (there is
@@ -8005,7 +8478,7 @@ class CreatorDownloaderTab(QWidget):
         log_config_layout.setContentsMargins(0, 0, 0, 0)
 
         self.creator_log_btn = QPushButton(
-            qta.icon("fa5s.chevron-right", color="white"), ""
+            qta.icon("fa5s.chevron-right", color=TEXT), ""
         )
         self.creator_log_btn.clicked.connect(self.open_logs)
         self.creator_log_btn.setStyleSheet(_TOOL_BUTTON_STYLE)
@@ -8013,14 +8486,14 @@ class CreatorDownloaderTab(QWidget):
 
         # Saved page state, first for every creator, then for this one only.
         self.creator_save_config_btn = QPushButton(
-            qta.icon("fa5s.save", color="white"), ""
+            qta.icon("fa5s.save", color=TEXT), ""
         )
         self.creator_save_config_btn.clicked.connect(self.save_page_config)
         self.creator_save_config_btn.setStyleSheet(_TOOL_BUTTON_STYLE)
         log_config_layout.addWidget(self.creator_save_config_btn)
 
         self.creator_save_creator_config_btn = QPushButton(
-            qta.icon("fa5s.user-shield", color="white"), ""
+            qta.icon("fa5s.user-shield", color=TEXT), ""
         )
         self.creator_save_creator_config_btn.clicked.connect(self.save_creator_config)
         self.creator_save_creator_config_btn.setStyleSheet(_TOOL_BUTTON_STYLE)
@@ -8034,28 +8507,15 @@ class CreatorDownloaderTab(QWidget):
 
         layout.addWidget(right_widget, stretch=1)
 
-        # Button hover animations
-        if self._parent:
-            self.creator_download_btn.enterEvent = (
-                lambda *a, **k: self._parent.animate_button(
-                    self.creator_download_btn, True
-                )
-            )
-            self.creator_download_btn.leaveEvent = (
-                lambda *a, **k: self._parent.animate_button(
-                    self.creator_download_btn, False
-                )
-            )
-            self.creator_cancel_btn.enterEvent = (
-                lambda *a, **k: self._parent.animate_button(
-                    self.creator_cancel_btn, True
-                )
-            )
-            self.creator_cancel_btn.leaveEvent = (
-                lambda *a, **k: self._parent.animate_button(
-                    self.creator_cancel_btn, False
-                )
-            )
+        # Button hover animations. The keyword editors use the same motion as
+        # Download/Cancel so every action in the page reacts the same way.
+        for button in (
+            self.creator_download_btn,
+            self.creator_cancel_btn,
+            self.creator_sort_rules_btn,
+            self.creator_recommended_btn,
+        ):
+            self._install_hover_animation(button)
 
         # Initial text update
         self.update_ui_text()
@@ -8065,6 +8525,18 @@ class CreatorDownloaderTab(QWidget):
 
         # Connect the live filters last: every widget they read now exists.
         self._connect_live_filters()
+
+    def _install_hover_animation(self, widget):
+        """Grow *widget* slightly while the pointer is over it.
+
+        A parent without ``animate_button`` (tests, bare stubs) is a no-op,
+        so the hover motion never becomes a hard requirement for the tab.
+        """
+        animate = getattr(self._parent, "animate_button", None)
+        if not callable(animate):
+            return
+        widget.enterEvent = lambda *args, **kwargs: animate(widget, True)
+        widget.leaveEvent = lambda *args, **kwargs: animate(widget, False)
 
     def update_ui_text(self):
         self.creator_queue_input.setPlaceholderText(
@@ -8119,13 +8591,15 @@ class CreatorDownloaderTab(QWidget):
         self.creator_skip_images_info_btn.setToolTip(
             translate("skip_images_info_title")
         )
-        self.creator_sort_enabled_check.setText(translate("sort_by_keyword"))
-        self.creator_sort_enabled_check.setToolTip(
-            translate("sort_by_keyword_tooltip")
-        )
+        # The keyword-folder switch carries no text of its own; the tooltip,
+        # accessible name and the button beside it explain the row.
+        self.creator_sort_enabled_check.setToolTip(translate("sort_by_keyword_tooltip"))
+        self.creator_sort_enabled_check.setAccessibleName(translate("sort_by_keyword"))
         self.creator_sort_rules_btn.setText(translate("sort_keyword_rules"))
-        self.creator_sort_rules_btn.setToolTip(
-            translate("sort_keyword_rules_tooltip")
+        self.creator_sort_rules_btn.setToolTip(translate("sort_keyword_rules_tooltip"))
+        self.creator_recommended_btn.setText(translate("recommended_keywords"))
+        self.creator_recommended_btn.setToolTip(
+            translate("recommended_keywords_tooltip")
         )
         self.file_count_help_btn.setToolTip(translate("file_count_help_title"))
         self.file_count_label.setText(translate("file_count_filter"))
@@ -8194,10 +8668,13 @@ class CreatorDownloaderTab(QWidget):
         self.update_creator_queue_list()
 
     def update_progress_bar_style(self):
-        separator_style = "QProgressBar { border: 1px solid #4A5B7A; border-radius: 5px; background: #2A3B5A; } QProgressBar::chunk { background: #4A5B7A; }"
-        self.creator_file_progress.setStyleSheet(separator_style)
-        self.creator_overall_progress.setStyleSheet(separator_style)
-        self.background_task_progress.setStyleSheet(separator_style)
+        """Return the run bars to the normal theme colour."""
+        for bar in (
+            self.creator_file_progress,
+            self.creator_overall_progress,
+            self.background_task_progress,
+        ):
+            set_progress_state(bar, None)
 
     def refresh_ui(self):
         """Re-apply the visual state after settings change.
@@ -8319,6 +8796,19 @@ class CreatorDownloaderTab(QWidget):
                 for scope, box in self.search_scope_checkboxes.items()
                 if box.isChecked()
             ),
+            "recommended": {
+                "scopes": sorted(
+                    self._recommended_options.get("scopes") or DEFAULT_SCOPES
+                ),
+                "min_count": int(self._recommended_options.get("min_count", 2)),
+                "max_words": int(self._recommended_options.get("max_words", 3)),
+                "ignore_common_words": bool(
+                    self._recommended_options.get("ignore_common_words", True)
+                ),
+                "ignore_accents": bool(
+                    self._recommended_options.get("ignore_accents", False)
+                ),
+            },
             "sorting": {
                 "enabled": self.creator_sort_enabled_check.isChecked(),
                 "link_all": bool(self._sort_link_all),
@@ -8428,6 +8918,10 @@ class CreatorDownloaderTab(QWidget):
                 self.search_scope_checkboxes, config["search_scopes"]
             )
 
+        recommended = config.get("recommended")
+        if isinstance(recommended, dict):
+            self._recommended_options = self._normalize_recommended_options(recommended)
+
         sorting = config.get("sorting")
         if isinstance(sorting, dict):
             if "enabled" in sorting:
@@ -8493,6 +8987,7 @@ class CreatorDownloaderTab(QWidget):
         page_default = None
         creator_config = None
         self._close_sort_rules_dialog()
+        self._close_recommended_keywords_dialog()
         if store is not None:
             if self.current_creator_url:
                 try:
@@ -8730,6 +9225,125 @@ class CreatorDownloaderTab(QWidget):
     def _close_sort_rules_dialog(self):
         """Close the editor when the page it describes is changing."""
         dialog = getattr(self, "_sort_rules_dialog", None)
+        if dialog is not None and dialog.isVisible():
+            dialog.close()
+
+    @staticmethod
+    def _normalize_recommended_options(options):
+        """Return a validated recommended-keywords option block."""
+        if not isinstance(options, dict):
+            options = {}
+        scopes = {
+            str(scope) for scope in (options.get("scopes") or DEFAULT_SCOPES)
+        } & SCOPES
+        if not scopes:
+            scopes = set(DEFAULT_SCOPES)
+        try:
+            min_count = int(options.get("min_count", 2))
+        except (TypeError, ValueError):
+            min_count = 2
+        try:
+            max_words = int(options.get("max_words", 3))
+        except (TypeError, ValueError):
+            max_words = 3
+        return {
+            "scopes": scopes,
+            "min_count": max(1, min(999, min_count)),
+            "max_words": max(1, min(3, max_words)),
+            "ignore_common_words": bool(options.get("ignore_common_words", True)),
+            "ignore_accents": bool(options.get("ignore_accents", False)),
+        }
+
+    def _store_recommended_options(self, options):
+        self._recommended_options = self._normalize_recommended_options(options)
+
+    def _open_recommended_keywords_dialog(self):
+        """Show the local keyword scan, reusing the window when it is open."""
+        dialog = getattr(self, "_recommended_keywords_dialog", None)
+        if dialog is not None and dialog.isVisible():
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        # It opens even with no posts loaded: the window then says there is
+        # nothing to scan. The scan is local, so opening never fetches.
+        dialog = RecommendedKeywordsDialog(
+            list(self.all_detected_posts),
+            self.post_search_index,
+            options=dict(self._recommended_options),
+            parent=self,
+        )
+        dialog.search_requested.connect(self._apply_recommended_search)
+        dialog.skip_keywords_requested.connect(self._add_recommended_skip_keywords)
+        dialog.options_changed.connect(self._store_recommended_options)
+        dialog.finished.connect(
+            lambda _result: self._forget_recommended_keywords_dialog(dialog)
+        )
+        self._recommended_keywords_dialog = dialog
+        dialog.show()
+
+    def _apply_recommended_search(self, keyword, scopes):
+        """Point the search box at a suggested keyword and its scopes."""
+        for scope, checkbox in self.search_scope_checkboxes.items():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(scope in scopes)
+            checkbox.blockSignals(False)
+        if self.creator_search_input.text() == keyword:
+            self.filter_items()
+        else:
+            self.creator_search_input.setText(keyword)
+
+    def _add_recommended_skip_keywords(self, variants, scopes):
+        """Append a suggestion to the skip box and enable its scope.
+
+        The scope is enabled even when every spelling is already present:
+        otherwise "Add" on an existing keyword would look like a no-op while
+        the keyword stayed unreachable in an unticked scope.
+        """
+        existing = parse_keyword_values(self.skip_keywords_edit.text())
+        known = {value.casefold() for value in existing}
+        added = []
+        for variant in variants or ():
+            text = str(variant).strip()
+            if not text or text.casefold() in known:
+                continue
+            existing.append(text)
+            known.add(text.casefold())
+            added.append(text)
+
+        if added:
+            self.skip_keywords_edit.blockSignals(True)
+            self.skip_keywords_edit.setText(format_keyword_values(existing))
+            self.skip_keywords_edit.blockSignals(False)
+        for scope in scopes or ():
+            checkbox = self.skip_scope_checkboxes.get(scope)
+            if checkbox is not None and not checkbox.isChecked():
+                checkbox.blockSignals(True)
+                checkbox.setChecked(True)
+                checkbox.blockSignals(False)
+        self.filter_items()
+        if added:
+            self.append_log_to_console(
+                translate(
+                    "log_info",
+                    translate("recommended_keywords_added", ", ".join(added)),
+                ),
+                "INFO",
+            )
+
+    def _forget_recommended_keywords_dialog(self, dialog):
+        try:
+            self._recommended_options = self._normalize_recommended_options(
+                dialog.options()
+            )
+        except (AttributeError, RuntimeError):
+            pass
+        if getattr(self, "_recommended_keywords_dialog", None) is dialog:
+            self._recommended_keywords_dialog = None
+        dialog.deleteLater()
+
+    def _close_recommended_keywords_dialog(self):
+        """Close the scan when the page it describes is changing."""
+        dialog = getattr(self, "_recommended_keywords_dialog", None)
         if dialog is not None and dialog.isVisible():
             dialog.close()
 
@@ -9464,13 +10078,11 @@ class CreatorDownloaderTab(QWidget):
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(5)
 
-            view_button = QPushButton(qta.icon("fa5s.eye", color="white"), "")
+            view_button = QPushButton(qta.icon("fa5s.eye", color=TEXT), "")
             view_button.setStyleSheet(
-                scoped(
-                    "QPushButton",
-                    "background: #4A5B7A; padding: 2px; border-radius: 5px; "
+                icon_button_style(
                     "min-width: 30px; max-width: 30px; min-height: 30px; "
-                    "max-height: 30px;",
+                    "max-height: 30px;"
                 )
             )
             view_button.clicked.connect(self.create_view_handler(url, checked))
@@ -9479,12 +10091,12 @@ class CreatorDownloaderTab(QWidget):
             full_creator_button = None
             if is_post_row:
                 full_creator_button = QPushButton(
-                    qta.icon("fa5s.layer-group", color="white"), ""
+                    qta.icon("fa5s.layer-group", color=TEXT), ""
                 )
                 full_creator_button.setStyleSheet(
                     scoped(
                         "QPushButton",
-                        "background: #4A5B7A; padding: 2px; border-radius: 5px; "
+                        "background: #45484F; padding: 2px; border-radius: 5px; "
                         "min-width: 30px; max-width: 30px; min-height: 30px; "
                         "max-height: 30px;",
                     )
@@ -9508,7 +10120,7 @@ class CreatorDownloaderTab(QWidget):
             # The window's stylesheet paints every descendant, which put a dark
             # band over the row's selection highlight; a transparent label lets
             # the highlight show through.
-            label.setStyleSheet("color: white; background: transparent;")
+            label.setStyleSheet("color: #F2F3F5; background: transparent;")
             label.setAlignment(
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
             )
@@ -9517,13 +10129,11 @@ class CreatorDownloaderTab(QWidget):
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             layout.addWidget(label, stretch=1)
 
-            remove_button = QPushButton(qta.icon("fa5s.times", color="white"), "")
+            remove_button = QPushButton(qta.icon("fa5s.times", color=TEXT), "")
             remove_button.setStyleSheet(
-                scoped(
-                    "QPushButton",
-                    "background: #4A5B7A; padding: 2px; border-radius: 5px; "
+                icon_button_style(
                     "min-width: 30px; max-width: 30px; min-height: 30px; "
-                    "max-height: 30px;",
+                    "max-height: 30px;"
                 )
             )
             remove_button.clicked.connect(self.create_remove_handler(url))
@@ -10012,6 +10622,7 @@ class CreatorDownloaderTab(QWidget):
         """Enable/disable UI elements during fetching."""
         if is_fetching:
             self._close_sort_rules_dialog()
+            self._close_recommended_keywords_dialog()
         # Main action buttons
         self.creator_download_btn.setEnabled(not is_fetching)
         self.creator_cancel_btn.setEnabled(is_fetching)
@@ -10093,6 +10704,7 @@ class CreatorDownloaderTab(QWidget):
         """
         if is_downloading:
             self._close_sort_rules_dialog()
+            self._close_recommended_keywords_dialog()
         enabled = not is_downloading
 
         # Action buttons
@@ -10169,11 +10781,6 @@ class CreatorDownloaderTab(QWidget):
             for i in range(self._parent.tabs.count()):
                 if i != self._parent.tabs.currentIndex():
                     self._parent.tabs.setTabEnabled(i, enabled)
-        if self._parent and hasattr(self._parent, "status_label"):
-            self._parent.status_label.setText(
-                translate("preparing_files") if is_downloading else translate("idle")
-            )
-
     def prev_page(self):
         """Go to previous page"""
         if self.current_page > 1:
@@ -10409,8 +11016,6 @@ class CreatorDownloaderTab(QWidget):
         self.downloading = True
         self._run_finished = False
         self.set_downloading_ui_state(True)
-        if self._parent and hasattr(self._parent, "status_label"):
-            self._parent.status_label.setText(translate("preparing_files"))
         self.creator_download_btn.setEnabled(False)
         self.creator_cancel_btn.setEnabled(True)
         self.creator_overall_progress.setValue(0)
@@ -11045,12 +11650,8 @@ class CreatorDownloaderTab(QWidget):
             self._cancellation_thread.deleteLater()
             self._cancellation_thread = None
 
-        self.creator_file_progress.setStyleSheet(
-            "QProgressBar { border: 1px solid #4A5B7A; border-radius: 5px; background: #2A3B5A; } QProgressBar::chunk { background: #D4A017; }"
-        )
-        self.creator_overall_progress.setStyleSheet(
-            "QProgressBar { border: 1px solid #4A5B7A; border-radius: 5px; background: #2A3B5A; } QProgressBar::chunk { background: #D4A017; }"
-        )
+        set_progress_state(self.creator_file_progress, "paused")
+        set_progress_state(self.creator_overall_progress, "paused")
         self.creator_file_progress_label.setText(translate("downloads_terminated"))
         self.creator_overall_progress_label.setText(translate("downloads_terminated"))
         self.downloading = False
@@ -11237,12 +11838,8 @@ class CreatorDownloaderTab(QWidget):
             )
 
         # Always show Downloads Complete, even if some files failed
-        self.creator_file_progress.setStyleSheet(
-            "QProgressBar { border: 1px solid #4A5B7A; border-radius: 5px; background: #2A3B5A; } QProgressBar::chunk { background: green; }"
-        )
-        self.creator_overall_progress.setStyleSheet(
-            "QProgressBar { border: 1px solid #4A5B7A; border-radius: 5px; background: #2A3B5A; } QProgressBar::chunk { background: green; }"
-        )
+        set_progress_state(self.creator_file_progress, "done")
+        set_progress_state(self.creator_overall_progress, "done")
         self.creator_file_progress_label.setText(translate("downloads_complete"))
         self.creator_overall_progress_label.setText(translate("downloads_complete"))
 
@@ -11886,7 +12483,7 @@ class CreatorDownloaderTab(QWidget):
         layout.setSpacing(5)
 
         check_box = QCheckBox()
-        check_box.setStyleSheet("color: white;")
+        check_box.setStyleSheet("color: #F2F3F5;")
         check_box.setChecked(is_checked)
         # The row's own post id is bound here rather than looked up from the
         # title on click: two posts with the same title and date share a key,
@@ -11906,7 +12503,7 @@ class CreatorDownloaderTab(QWidget):
             Qt.TextFormat.RichText if download_date else Qt.TextFormat.PlainText
         )
         label.setText(self._row_label_text(text, download_date))
-        label.setStyleSheet("color: white;")
+        label.setStyleSheet("color: #F2F3F5;")
         label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(label, stretch=1)
 
@@ -11930,7 +12527,7 @@ class CreatorDownloaderTab(QWidget):
         widget.contextMenuEvent = lambda event, row=item: self._on_row_context_menu(
             row, event
         )
-        widget.setStyleSheet("background-color: #2A3B5A; border-radius: 5px;")
+        widget.setStyleSheet("background-color: #2B2D31; border-radius: 5px;")
 
         # Cache the widget for O(1) lookups
         self.post_widget_cache[text] = (item, widget)
@@ -12234,7 +12831,7 @@ class CreatorDownloaderTab(QWidget):
         if hasattr(self, "previous_selected_widgets"):
             for w in self.previous_selected_widgets:
                 try:
-                    w.setStyleSheet("background-color: #2A3B5A; border-radius: 5px;")
+                    w.setStyleSheet("background-color: #2B2D31; border-radius: 5px;")
                 except RuntimeError:
                     pass
 
@@ -12243,7 +12840,7 @@ class CreatorDownloaderTab(QWidget):
         for item in selected_items:
             widget = self.creator_post_list.itemWidget(item)
             if widget:
-                widget.setStyleSheet("background-color: #4A5B7A; border-radius: 5px;")
+                widget.setStyleSheet("background-color: #45484F; border-radius: 5px;")
                 self.previous_selected_widgets.append(widget)
 
     # ------------------------------------------------------------------
@@ -12688,8 +13285,8 @@ class CreatorDownloaderTab(QWidget):
         determined.
         """
         if not self.all_detected_posts:
-            return "white"
-        return "#7BD88F" if total else "#E5C07B"
+            return TEXT
+        return "#6BCF7F" if total else "#FFD93D"
 
     def _failed_post_count(self):
         """How many distinct posts the run's failed files belong to."""
@@ -12737,11 +13334,11 @@ class CreatorDownloaderTab(QWidget):
         self.creator_download_summary_label.setText(
             " &nbsp; ".join(
                 [
-                    "<span style='color:#7BD88F'>{}</span>".format(
+                    "<span style='color:#6BCF7F'>{}</span>".format(
                         translate("summary_downloaded", completed)
                     ),
                     "<span style='color:{}'>{}</span>".format(
-                        "#E06C75" if failed else "#7BD88F", failed_text
+                        "#FF6B6B" if failed else "#6BCF7F", failed_text
                     ),
                 ]
             )

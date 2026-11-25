@@ -379,6 +379,65 @@ STRINGS = {
     "queued_post_hidden_by_filters": "{0} of the posts you queued are hidden by the current filters or search, so they will not be downloaded.",
     "reached_last_page": "Reached last page for creator {0}. Total posts fetched: {1}",
     "received_less_than_page_size": "Received {0} posts (less than page size {1}), indicating last page reached",
+    "recommended_keywords": "Recommended Keywords",
+    "recommended_keywords_add_skip": "Add to Skip Keywords",
+    "recommended_keywords_added": "Added to skip keywords: {0}",
+    "recommended_keywords_column_keyword": "Keyword",
+    "recommended_keywords_column_mentions": "Mentions",
+    "recommended_keywords_column_posts": "Posts",
+    "recommended_keywords_copy": "Copy",
+    "recommended_keywords_empty": "No keywords matched. Try lowering the minimum post count or selecting more scopes.",
+    "recommended_keywords_help_text": (
+        "<h2>Recommended Keywords</h2>"
+        "<p>This window scans the posts already loaded for the current creator. "
+        "It does not fetch anything, so it never adds requests to the API.</p>"
+        "<h3>How a phrase is built</h3>"
+        "<ul>"
+        "<li><b>Tags</b> are counted whole: <code>3D art</code> is one keyword.</li>"
+        "<li><b>Title</b>, <b>Description</b> and <b>Filenames</b> are split into "
+        "words, then 1 to 3 neighbouring words form a phrase. Words only join "
+        "when a space sits between them, so punctuation (a comma, a full stop, "
+        "a hyphen) ends a phrase and a suggested phrase can be used as a literal "
+        "search or skip keyword.</li>"
+        "<li>File names split on <code>_ - .</code> and camelCase "
+        "(<code>BlackCat_01</code> gives <code>BlackCat</code>). Extensions are "
+        "not counted; the filetype boxes own those.</li>"
+        "</ul>"
+        "<h3>Counting</h3>"
+        "<p>A keyword counts once per post, however often it occurs there. "
+        "<b>Posts</b> is the number of posts it appears in; <b>Mentions</b> is "
+        "the raw occurrence total. The minimum applies to Posts.</p>"
+        "<h3>Noise controls</h3>"
+        "<ul>"
+        "<li><b>In at least N posts</b> hides one-offs. Two is a good default; "
+        "raise it for a large library.</li>"
+        "<li><b>Ignore common words</b> drops English function words and "
+        "contractions such as <code>the</code> or <code>don't</code>.</li>"
+        "<li><b>Ignore accents</b> counts <code>café</code> and <code>cafe</code> "
+        "together; both spellings are added when the keyword is applied. It "
+        "never touches Japanese kana.</li>"
+        "</ul>"
+        "<h3>Using a keyword</h3>"
+        "<p><b>Search</b> puts the keyword in the search box and turns on the "
+        "scopes selected here. <b>Add to Skip Keywords</b> appends it to the skip "
+        "box and enables the matching Filter By scope, so a tag keyword actually "
+        "filters on tags.</p>"
+    ),
+    "recommended_keywords_help_title": "Recommended Keywords Help",
+    "recommended_keywords_ignore_accents": "Ignore accents",
+    "recommended_keywords_ignore_common": "Ignore common words",
+    "recommended_keywords_intro": "Scans the posts already loaded for this creator. Tags are counted whole; longer phrases are built from words that sit next to each other.",
+    "recommended_keywords_min_posts": "In at least",
+    "recommended_keywords_no_posts": "Load a creator first: there are no posts to scan.",
+    "recommended_keywords_phrase_length": "Phrase length:",
+    "recommended_keywords_posts_suffix": "posts",
+    "recommended_keywords_refresh": "Refresh",
+    "recommended_keywords_scopes": "Search in:",
+    "recommended_keywords_scanning": "Scanning posts...",
+    "recommended_keywords_search": "Search",
+    "recommended_keywords_summary": "{0} keyword(s) from {1} post(s)",
+    "recommended_keywords_title": "Recommended Keywords",
+    "recommended_keywords_tooltip": "Find words and tags that repeat across the loaded posts",
     "remove_thread": "Removed thread {0} from active threads",
     "reset_to_defaults": "Reset to Defaults",
     "response_content_first_500_chars": "Response content (first 500 chars): {0}",
@@ -440,7 +499,7 @@ STRINGS = {
     "skip_keyword_matched_after_rejoin": "[SKIP-KEYWORD] '{0}' matched the description after re-joining inline tags",
     "skip_keywords_scope": "Filter By",
     "skip_posts_keywords": "Skip Posts Containing",
-    "skip_posts_keywords_help_text": "<p>Skip whole posts whose title, file names, description or tags match any of these keywords.</p><p>Use the <b>Filter By</b> boxes to choose which fields are checked. A post is skipped when a keyword matches in any enabled field:</p><ul><li><b>Title</b> - the post title</li><li><b>Filenames</b> - the main file and attachment names (extension ignored)</li><li><b>Description</b> - the post body text</li><li><b>Tags</b> - the post tags</li></ul><p>Plain keywords are case-insensitive and whole-word, so <code>black</code> matches \"Black\" but not \"BlackCat\". Use <code>*black*</code> to match part of a word. Separate values with commas; quote a value that contains a comma; use <code>*</code> and <code>?</code> as wildcards. The full table is under Keyword syntax in Related.</p><p>Punctuation at their edges follows the Punctuation Matching Behavior setting.</p><p>Leave the box blank to disable.</p>",
+    "skip_posts_keywords_help_text": '<p>Skip whole posts whose title, file names, description or tags match any of these keywords.</p><p>Use the <b>Filter By</b> boxes to choose which fields are checked. A post is skipped when a keyword matches in any enabled field:</p><ul><li><b>Title</b> - the post title</li><li><b>Filenames</b> - the main file and attachment names (extension ignored)</li><li><b>Description</b> - the post body text</li><li><b>Tags</b> - the post tags</li></ul><p>Plain keywords are case-insensitive and whole-word, so <code>black</code> matches "Black" but not "BlackCat". Use <code>*black*</code> to match part of a word. Separate values with commas; quote a value that contains a comma; use <code>*</code> and <code>?</code> as wildcards. The full table is under Keyword syntax in Related.</p><p>Punctuation at their edges follows the Punctuation Matching Behavior setting.</p><p>Leave the box blank to disable.</p>',
     "skip_posts_keywords_help_title": "Skip Posts Help",
     "skip_posts_keywords_placeholder": "e.g. JP, EN (comma-separated)",
     "skip_scope_description_toggle": "Description",
@@ -469,18 +528,20 @@ STRINGS = {
     "sort_config_invalid_folder": "A sorting rule has no usable folder name.",
     "sort_config_missing_values": "A sorting rule has no usable values.",
     "sort_config_wildcard_only": "A sorting rule contains a value made only of * or ?.",
-    "sort_duplicate_folder": "Rule {0}: the folder \"{1}\" is already used by another rule.",
+    "sort_duplicate_folder": 'Rule {0}: the folder "{1}" is already used by another rule.',
     "sort_help_back": "Back",
-    "sort_help_text": "<h2>Sort posts by keyword</h2><p>Posts that match a rule go into <code>&lt;creator folder&gt;/&lt;rule folder&gt;</code>. Everything else about the download stays the same.</p><h3>Rules</h3><p>Rules are checked in order and the first match wins. A post that matches no rule goes to the creator folder.</p><h3>Values and Match</h3><p><b>Any value</b> (OR): the rule matches when at least one value matches in any selected <b>Look in</b> field.</p><p><b>All values</b> (AND): the rule matches only when every value matches somewhere in the selected fields. Different values can match different fields; they do not all have to appear in the same field.</p><p>Example: values <code>cat, dog</code> with <b>Tags</b> and <b>Title</b> selected:</p><ul><li><b>Any value</b> - a post with tag cat OR title dog matches.</li><li><b>All values</b> - a post needs both cat and dog somewhere in those fields.</li></ul><h3>Look in</h3><ul><li><b>Tags</b> - the whole tag must match by default; with Tag Matching Behavior: Lenient, a value can match any part of a tag. A tag such as <code>アイン(ブルーアーカイブ)</code> is not the same as <code>ブルーアーカイブ</code>; use <code>*ブルーアーカイブ*</code> in a rule value to match part of a tag.</li><li><b>Title</b>, <b>Filenames</b>, <b>Description</b> - the pattern must match a word.</li></ul><p><b>Filenames</b> covers main files and attachments only; content images are not checked.</p>" + _KEYWORD_SYNTAX_HTML + "<h3>Hardlinks</h3><p>With <b>Hardlink across matching folders</b>, every matching folder gets a hardlink. Hardlinks share the same bytes and cost no extra space, but some cloud-sync clients upload each name separately.</p><h3>Unsorted posts</h3><p>Posts that match no rule go to the creator folder. Turn off <b>Download Unsorted</b> to leave them out of the run, or select a rule and use <b>Set Unsorted</b> to put them in that rule's folder. With no rule selected, <b>Set Unsorted</b> creates an <b>Unsorted</b> rule that needs no values. The button changes to <b>Clear Unsorted</b>; clear it before choosing another rule.</p><h3>Preview</h3><p>The preview uses the details from the current fetch. A post with no details can still match on its title; other scopes need the details.</p><p>The Punctuation Matching Behavior setting applies to literal edges in sorting values too; a <code>*</code> edge is unrestricted.</p><p>Apply changes on this page; use Save Config or Save Creator Config to keep the rules.</p>",
+    "sort_help_text": "<h2>Sort posts by keyword</h2><p>Posts that match a rule go into <code>&lt;creator folder&gt;/&lt;rule folder&gt;</code>. Everything else about the download stays the same.</p><h3>Rules</h3><p>Rules are checked in order and the first match wins. A post that matches no rule goes to the creator folder.</p><h3>Values and Match</h3><p><b>Any value</b> (OR): the rule matches when at least one value matches in any selected <b>Look in</b> field.</p><p><b>All values</b> (AND): the rule matches only when every value matches somewhere in the selected fields. Different values can match different fields; they do not all have to appear in the same field.</p><p>Example: values <code>cat, dog</code> with <b>Tags</b> and <b>Title</b> selected:</p><ul><li><b>Any value</b> - a post with tag cat OR title dog matches.</li><li><b>All values</b> - a post needs both cat and dog somewhere in those fields.</li></ul><h3>Look in</h3><ul><li><b>Tags</b> - the whole tag must match by default; with Tag Matching Behavior: Lenient, a value can match any part of a tag. A tag such as <code>アイン(ブルーアーカイブ)</code> is not the same as <code>ブルーアーカイブ</code>; use <code>*ブルーアーカイブ*</code> in a rule value to match part of a tag.</li><li><b>Title</b>, <b>Filenames</b>, <b>Description</b> - the pattern must match a word.</li></ul><p><b>Filenames</b> covers main files and attachments only; content images are not checked.</p>"
+    + _KEYWORD_SYNTAX_HTML
+    + "<h3>Hardlinks</h3><p>With <b>Hardlink across matching folders</b>, every matching folder gets a hardlink. Hardlinks share the same bytes and cost no extra space, but some cloud-sync clients upload each name separately.</p><h3>Unsorted posts</h3><p>Posts that match no rule go to the creator folder. Turn off <b>Download Unsorted</b> to leave them out of the run, or select a rule and use <b>Set Unsorted</b> to put them in that rule's folder. With no rule selected, <b>Set Unsorted</b> creates an <b>Unsorted</b> rule that needs no values. The button changes to <b>Clear Unsorted</b>; clear it before choosing another rule.</p><h3>Preview</h3><p>The preview uses the details from the current fetch. A post with no details can still match on its title; other scopes need the details.</p><p>The Punctuation Matching Behavior setting applies to literal edges in sorting values too; a <code>*</code> edge is unrestricted.</p><p>Apply changes on this page; use Save Config or Save Creator Config to keep the rules.</p>",
     "sort_help_title": "Sort posts by keyword - Help",
     "sort_invalid_folder": "Rule {0}: the folder name is empty or unusable.",
     "sort_invalid_text": "Fix these before applying:\n{0}",
     "sort_invalid_title": "Sort rules",
-    "sort_keyword_rules": "Keyword Rules",
-    "sort_keyword_rules_tooltip": "Edit the keyword sorting rules",
+    "sort_keyword_rules": "Keyword Folder Sorting",
+    "sort_keyword_rules_tooltip": "Edit the keyword folder sorting rules",
     "sort_link_all": "Hardlink across matching folders",
     "sort_link_all_tooltip": "Hardlinks share the same bytes on disk, so they cost no extra space. Some cloud-sync clients upload each name as a separate file.",
-    "sort_link_failed": "Could not hardlink {0} into \"{1}\": {2}",
+    "sort_link_failed": 'Could not hardlink {0} into "{1}": {2}',
     "sort_links_summary": "Auto-sort: created {0} extra hardlink(s), {1} failed.",
     "sort_log_counts": "{0}: {1}",
     "sort_log_multi": "Auto-sort: {0} post(s) match more than one rule; link mode keeps every match.",
@@ -518,10 +579,10 @@ STRINGS = {
     "sort_scope_filenames": "Filenames",
     "sort_scope_tags": "Tags",
     "sort_scope_title": "Title",
-    "sort_status_off": "Sorting is Off - toggle it with \"Sort posts by keyword\" on the page.",
-    "sort_status_on": "Sorting is On - toggle it with \"Sort posts by keyword\" on the page.",
+    "sort_status_off": "Sorting is Off - toggle it with the switch on the page.",
+    "sort_status_on": "Sorting is On - toggle it with the switch on the page.",
     "sort_title": "Sort posts by keyword",
-    "sort_wildcard_only_value": "Rule {0}: \"{1}\" is only wildcards; add some text.",
+    "sort_wildcard_only_value": 'Rule {0}: "{1}" is only wildcards; add some text.',
     "wildcard_only_keyword_ignored": "A keyword made only of * or ? was ignored; add some text.",
     "start_tor": "Start Tor",
     "starting_cancellation_of_active_threads": "Starting cancellation of active threads",

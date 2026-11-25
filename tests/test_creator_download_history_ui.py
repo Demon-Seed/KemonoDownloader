@@ -436,11 +436,6 @@ def test_each_post_is_stamped_once_per_run(tmp_path, monkeypatch):
     assert [call[2] for call in calls] == ["1", "2"]
 
 
-
-
-
-
-
 def test_split_creator_url():
     assert cd.split_creator_url("https://kemono.cr/patreon/user/123") == (
         "patreon",
@@ -478,7 +473,7 @@ def test_creator_info_buttons_share_the_small_icon_style(qtbot, tmp_path):
         assert button.text() == "", "info buttons carry an icon, not text"
         assert not button.icon().isNull()
         assert (button.minimumWidth(), button.maximumWidth()) == (26, 26)
-        assert "border-radius: 5px" in button.styleSheet()
+        assert f"border-radius: {cd.RADIUS}px" in button.styleSheet()
         assert button.toolTip()
 
 

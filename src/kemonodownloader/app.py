@@ -10,8 +10,6 @@ from PyQt6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation, Qt, 
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontDatabase, QIcon, QPalette
 from PyQt6.QtWidgets import (
     QApplication,
-    QHBoxLayout,
-    QLabel,
     QMainWindow,
     QTabWidget,
     QToolTip,
@@ -23,12 +21,21 @@ from kemonodownloader import kd_paths
 from kemonodownloader.creator_downloader import CreatorDownloaderTab
 from kemonodownloader.kd_errors import install_exception_hook
 from kemonodownloader.kd_language import translate
-from kemonodownloader.kd_settings import GITHUB_REPO_URL, SettingsTab
-from kemonodownloader.kd_theme import MENU_STYLE, TOOLTIP_STYLE, WINDOW_BG
+from kemonodownloader.kd_settings import SettingsTab
+from kemonodownloader.kd_theme import (
+    BG,
+    CONTROL,
+    INFO,
+    SELECTION,
+    SURFACE,
+    SURFACE_ALT,
+    TEXT,
+    TEXT_DISABLED,
+    WINDOW_BG,
+    theme_stylesheet,
+)
 
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
-
-CURRENT_VERSION = "5.11.1"
 
 # Available Google Fonts bundled with the app
 BUNDLED_FONTS = {
@@ -94,15 +101,6 @@ class KemonoDownloader(QMainWindow):
         # Apply the saved font setting
         self.apply_font(self.settings_tab.get_font())
 
-    def _footer_text(self):
-        """Build the footer text with a clickable link to the main repository."""
-        return (
-            f"{translate('developed_by')} | "
-            f'<a href="{GITHUB_REPO_URL}" style="color: #A0C0FF; '
-            f'text-decoration: none;">GitHub: VoxDroid/KemonoDownloader</a> | '
-            f"{translate('current_version', CURRENT_VERSION)}"
-        )
-
     def apply_font(self, font_family: str):
         """Apply the selected font family to the entire application and all widgets."""
         app = QApplication.instance()
@@ -125,13 +123,20 @@ class KemonoDownloader(QMainWindow):
 
     def apply_palette(self):
         palette = QPalette()
-        palette.setColor(QPalette.ColorRole.Window, QColor("#1A2A44"))
-        palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
-        palette.setColor(QPalette.ColorRole.Base, QColor("#2A3B5A"))
-        palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#3A4B6A"))
-        palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
-        palette.setColor(QPalette.ColorRole.Button, QColor("#3A5B7A"))
-        palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white)
+        palette.setColor(QPalette.ColorRole.Window, QColor(BG))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(TEXT))
+        palette.setColor(QPalette.ColorRole.Base, QColor(SURFACE))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(SURFACE_ALT))
+        palette.setColor(QPalette.ColorRole.Text, QColor(TEXT))
+        palette.setColor(QPalette.ColorRole.Button, QColor(CONTROL))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor(TEXT))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(SELECTION))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(TEXT))
+        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(SURFACE))
+        palette.setColor(QPalette.ColorRole.ToolTipText, QColor(TEXT))
+        palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(TEXT_DISABLED))
+        palette.setColor(QPalette.ColorRole.Link, QColor(INFO))
+        palette.setColor(QPalette.ColorRole.LinkVisited, QColor(INFO))
         self.setPalette(palette)
 
     def ensure_folders_exist(self):
@@ -154,43 +159,14 @@ class KemonoDownloader(QMainWindow):
 
     def setup_main_ui(self):
         main_widget = QWidget()
+        main_widget.setObjectName("kdMain")
         main_layout = QVBoxLayout(main_widget)
         main_layout.setContentsMargins(15, 15, 15, 15)
         main_layout.setSpacing(15)
         main_widget.setStyleSheet(f"background: {WINDOW_BG};")
 
-        # Tab Widget
+        # Tab Widget. The application-wide theme styles the pane and tabs.
         self.tabs = QTabWidget()
-        self.tabs.setStyleSheet(
-            """
-            QTabWidget::pane {
-                border: none;
-                background: #1A2A44;
-            }
-            QTabBar::tab {
-                background: #3A4B6A;
-                color: white;
-                padding: 10px 20px;
-                margin-right: 2px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                min-width: 100px;
-            }
-            QTabBar::tab:selected {
-                background: #4A5B7A;
-                color: white;
-            }
-            QTabBar::tab:!selected {
-                margin-top: 2px;
-            }
-            QTabBar::tab:disabled {
-                color: gray;
-            }
-            * {
-                color: white;
-            }
-        """
-        )
         main_layout.addWidget(self.tabs)
 
         # Add Tabs. The Creator Downloader tab is placed first and selected by
@@ -198,34 +174,18 @@ class KemonoDownloader(QMainWindow):
         self.creator_tab = CreatorDownloaderTab(self)
         self.tabs.addTab(
             self.creator_tab,
-            qta.icon("fa5s.user-edit", color="white"),
+            qta.icon("fa5s.user-edit", color=TEXT),
             translate("creator_downloader_tab"),
         )
 
         self.tabs.addTab(
             self.settings_tab,
-            qta.icon("fa5s.cog", color="white"),
+            qta.icon("fa5s.cog", color=TEXT),
             translate("settings_tab"),
         )
 
         # Creator Downloader is the tab selected on launch.
         self.tabs.setCurrentIndex(0)
-
-        # Footer
-        footer = QWidget()
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(10, 5, 10, 5)
-        self.status_label = QLabel(translate("idle"))
-        self.status_label.setStyleSheet("color: white; font-size: 12px;")
-        footer_layout.addWidget(self.status_label)
-        footer_layout.addStretch()
-        self.dev_label = QLabel(self._footer_text())
-        self.dev_label.setTextFormat(Qt.TextFormat.RichText)
-        self.dev_label.setOpenExternalLinks(True)
-        self.dev_label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.dev_label.setStyleSheet("color: white; font-size: 12px;")
-        footer_layout.addWidget(self.dev_label)
-        main_layout.addWidget(footer)
 
         return main_widget
 
@@ -242,9 +202,6 @@ class KemonoDownloader(QMainWindow):
                 if index != -1:
                     self.tabs.setTabText(index, translate(key))
 
-            self.status_label.setText(translate("idle"))
-            self.dev_label.setText(self._footer_text())
-
             self.creator_tab.refresh_ui()
             self.settings_tab.update_ui_text()
 
@@ -258,9 +215,6 @@ class KemonoDownloader(QMainWindow):
         else:
             anim.setEndValue(rect.adjusted(3, 3, -3, -3))
         anim.start()
-
-    def log(self, message):
-        self.status_label.setText(message)
 
     def closeEvent(self, event):
         """Stop background helpers that are not part of a download run."""
@@ -485,7 +439,7 @@ def main():
     # popup(), so no per-widget code can style them. Application-wide rules
     # give every context menu the same dark surface and low-opacity hover
     # highlight, and every tooltip the same dark background.
-    app.setStyleSheet(MENU_STYLE + TOOLTIP_STYLE)
+    app.setStyleSheet(theme_stylesheet())
     disable_ui_effects()
     tooltip_filter = install_tooltip_lifetime(app)
     load_bundled_fonts()

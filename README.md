@@ -18,17 +18,14 @@
 # TODO:<br>
 
 ## Features<br>
-* 'Image' 'Video' bulk filetype presets.<br>
+* Customizable post count per page.
 
 ## Big Features<br>
-* A 'Recommended Keywords' feature that searches in a specific chosen scope (Tile, Tags etc.) and finds 'common tags' as in phrases or such that show up more than a set amount. of times?<br>
-  * Change Keyword Rules into Keyword Folder Sorting and move the toggle back into the menu.<br>
-  * Add a new button below it named 'Recommended Keywords'<br>
-* Remove status bar on bottom and turn settings tab into a button on top right.<br>
 * Some kind of alternate 'Post to Download' viewer with compact thumbnail + filename rows.<br>
 
 # Needs Fixing
 * Downloader must ignore unarchived posts.
+* 'Search in' for Recommended keywords window still displays posts with no values selected.
 
 # Support OG DEV:<br>
 **Developed by VoxDroid** | **Fork by Deepseek Flash lol**<br>

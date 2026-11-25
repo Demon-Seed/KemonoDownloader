@@ -39,7 +39,18 @@ from PyQt6.QtWidgets import (
 from kemonodownloader import kd_paths
 from kemonodownloader.kd_help import show_help
 from kemonodownloader.kd_language import language_manager, translate
-from kemonodownloader.kd_theme import scoped
+from kemonodownloader.kd_theme import (
+    ACCENT,
+    BORDER,
+    CONSOLE,
+    INFO,
+    RADIUS,
+    SURFACE,
+    TEXT,
+    button_states,
+    scoped,
+    style_progress_bar,
+)
 
 # Main repository (VoxDroid) used by the in-app update/repository links.
 GITHUB_REPO_URL = "https://github.com/VoxDroid/KemonoDownloader"
@@ -67,10 +78,13 @@ DEFAULT_API_REQUEST_RETRIES = 3
 # Look shared by every slider bar, so the Retry Settings rows match the
 # Download Settings one.
 BAR_STYLESHEET = (
-    "QSlider::groove:horizontal { border: 1px solid #4A5B7A; height: 8px; "
-    "background: #2A3B5A; margin: 2px 0; }"
-    "QSlider::handle:horizontal { background: #4A5B7A; width: 18px; "
-    "margin: -2px 0; border-radius: 9px; }"
+    f"QSlider::groove:horizontal {{ height: 6px; background: {SURFACE};"
+    f" border: 1px solid {BORDER}; border-radius: 3px; }}"
+    f"QSlider::sub-page:horizontal {{ background: {ACCENT};"
+    " border-radius: 3px; }"
+    f"QSlider::handle:horizontal {{ background: {TEXT};"
+    f" border: 2px solid {ACCENT}; width: 12px; height: 12px;"
+    " margin: -5px 0; border-radius: 8px; }"
 )
 
 
@@ -96,10 +110,11 @@ def make_info_button(parent=None):
     scoped to QPushButton so its size cannot leak into the tooltip label Qt
     parents to the button.
     """
-    button = QPushButton(qta.icon("fa5s.info-circle", color="#A0C0FF"), "", parent)
+    button = QPushButton(qta.icon("fa5s.info-circle", color=INFO), "", parent)
     button.setFixedSize(26, 26)
     button.setStyleSheet(
-        scoped("QPushButton", "background: #4A5B7A; border-radius: 5px;")
+        scoped("QPushButton", "background: #45484F; border-radius: 5px;")
+        + button_states()
     )
     return button
 
@@ -523,7 +538,7 @@ class SettingsTab(QWidget):
         # Folder Settings Group
         self.folder_group = QGroupBox()
         self.folder_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         folder_layout = QGridLayout()
 
@@ -543,9 +558,9 @@ class SettingsTab(QWidget):
         self.browse_button = QPushButton()
         self.browse_button.setStyleSheet(
             scoped(
-                "QPushButton",
-                "background: #4A5B7A; padding: 5px; border-radius: 5px;",
+                "QPushButton", "background: #45484F; padding: 5px; border-radius: 5px;"
             )
+            + button_states()
         )
         self.browse_button.clicked.connect(self.browse_directory)
         folder_layout.addWidget(self.browse_button, 0, 2)
@@ -561,7 +576,7 @@ class SettingsTab(QWidget):
         self.data_directory_input.setStyleSheet(
             scoped(
                 "QLineEdit",
-                "padding: 5px; border-radius: 5px; color: #C8D4E8;",
+                "padding: 5px; border-radius: 5px; color: #D4D6DA;",
             )
         )
         folder_layout.addWidget(self.data_directory_input, 1, 1)
@@ -569,9 +584,9 @@ class SettingsTab(QWidget):
         self.browse_data_button = QPushButton()
         self.browse_data_button.setStyleSheet(
             scoped(
-                "QPushButton",
-                "background: #4A5B7A; padding: 5px; border-radius: 5px;",
+                "QPushButton", "background: #45484F; padding: 5px; border-radius: 5px;"
             )
+            + button_states()
         )
         # It cannot choose the folder any more, so it opens it instead: that is
         # what people actually wanted (to back up or clear the databases).
@@ -584,7 +599,7 @@ class SettingsTab(QWidget):
         # Download Settings Group
         self.download_group = QGroupBox()
         self.download_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         download_layout = QGridLayout()
 
@@ -604,7 +619,7 @@ class SettingsTab(QWidget):
         # Retry Settings Group
         self.retry_group = QGroupBox()
         self.retry_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         retry_layout = QGridLayout()
 
@@ -666,7 +681,7 @@ class SettingsTab(QWidget):
         # Creator downloader customization group
         self.creator_custom_group = QGroupBox()
         self.creator_custom_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         creator_custom_layout = QGridLayout()
 
@@ -817,7 +832,7 @@ class SettingsTab(QWidget):
         # Limit the Creator tab extension boxes to the filetypes a creator
         # really has: off, on, or on with a per-type filecount beside each box.
         self.show_only_found_filetypes_label = QLabel()
-        self.show_only_found_filetypes_label.setStyleSheet("color: white;")
+        self.show_only_found_filetypes_label.setStyleSheet("color: #F2F3F5;")
         creator_custom_layout.addWidget(self.show_only_found_filetypes_label, 5, 0)
 
         self.show_only_found_filetypes_combo = QComboBox()
@@ -920,7 +935,7 @@ class SettingsTab(QWidget):
         # What the Creator Queue's input row does once a URL is committed.
         # Adding is identical in every mode; only the auto-loading differs.
         self.queue_input_behavior_label = QLabel()
-        self.queue_input_behavior_label.setStyleSheet("color: white;")
+        self.queue_input_behavior_label.setStyleSheet("color: #F2F3F5;")
         creator_custom_layout.addWidget(self.queue_input_behavior_label, 8, 0)
 
         self.queue_input_behavior_combo = QComboBox()
@@ -959,12 +974,13 @@ class SettingsTab(QWidget):
         # replaced the previous automatic update check.
         self.update_group = QGroupBox()
         self.update_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         update_layout = QGridLayout()
 
         self.github_repo_link = QLabel()
         self.github_repo_link.setTextFormat(Qt.TextFormat.RichText)
+        self.github_repo_link.setStyleSheet(f"color: {INFO};")
         self.github_repo_link.setOpenExternalLinks(True)
         self.github_repo_link.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         update_layout.addWidget(self.github_repo_link, 0, 0)
@@ -975,7 +991,7 @@ class SettingsTab(QWidget):
         # Font Settings Group
         self.font_group = QGroupBox()
         self.font_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         font_layout = QGridLayout()
 
@@ -1003,19 +1019,16 @@ class SettingsTab(QWidget):
         self.font_group.setLayout(font_layout)
         layout.addWidget(self.font_group)
 
-        # Enable proxy checkbox (outside the proxy group so it's always visible)
+        # Enable proxy checkbox (outside the proxy group so it's always visible).
+        # Its indicator, check mark and hover come from the app-wide theme, so
+        # every checkbox in the app shares one style.
         self.use_proxy_checkbox = QCheckBox()
-        self.use_proxy_checkbox.setStyleSheet(
-            "QCheckBox::indicator { width: 16px; height: 16px; }"
-            "QCheckBox::indicator:unchecked { background: #2A3B5A; border: 1px solid #4A5B7A; }"
-            "QCheckBox::indicator:checked { background: #4A6B9A; border: 1px solid #5A7BA9; }"
-        )
         self.use_proxy_checkbox.stateChanged.connect(self.on_use_proxy_changed)
 
         # Proxy Settings Group
         self.proxy_group = QGroupBox()
         self.proxy_group.setStyleSheet(
-            "QGroupBox { color: white; font-weight: bold; padding: 10px; }"
+            "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
         )
         self.proxy_group.setVisible(
             False
@@ -1051,11 +1064,6 @@ class SettingsTab(QWidget):
         # both are "when a run misbehaves" knobs. Off by default, so the log
         # keeps only events, warnings and errors.
         self.verbose_logging_checkbox = QCheckBox()
-        self.verbose_logging_checkbox.setStyleSheet(
-            "QCheckBox::indicator { width: 16px; height: 16px; } "
-            "QCheckBox::indicator:unchecked { background: #2A3B5A; } "
-            "QCheckBox::indicator:checked { background: #4A6B9A; }"
-        )
         self.verbose_logging_checkbox.setChecked(
             bool(self.temp_settings.get("verbose_logging", False))
         )
@@ -1088,7 +1096,10 @@ class SettingsTab(QWidget):
 
         self.test_custom_proxy_button = QPushButton()
         self.test_custom_proxy_button.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px;"
+            scoped(
+                "QPushButton", "background: #45484F; padding: 5px; border-radius: 5px;"
+            )
+            + button_states()
         )
         self.test_custom_proxy_button.clicked.connect(self.test_custom_proxy)
         self.custom_proxy_layout.addWidget(self.test_custom_proxy_button)
@@ -1111,21 +1122,30 @@ class SettingsTab(QWidget):
 
         self.browse_tor_button = QPushButton()
         self.browse_tor_button.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px;"
+            scoped(
+                "QPushButton", "background: #45484F; padding: 5px; border-radius: 5px;"
+            )
+            + button_states()
         )
         self.browse_tor_button.clicked.connect(self.browse_tor_executable)
         tor_path_layout.addWidget(self.browse_tor_button)
 
         self.start_tor_button = QPushButton()
         self.start_tor_button.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px;"
+            scoped(
+                "QPushButton", "background: #45484F; padding: 5px; border-radius: 5px;"
+            )
+            + button_states()
         )
         self.start_tor_button.clicked.connect(self.start_tor)
         tor_path_layout.addWidget(self.start_tor_button)
 
         self.stop_tor_button = QPushButton()
         self.stop_tor_button.setStyleSheet(
-            "background: #7A4A4A; padding: 5px; border-radius: 5px;"
+            scoped(
+                "QPushButton", "background: #B5474B; padding: 5px; border-radius: 5px;"
+            )
+            + button_states("#C75A5E", "#943A3D")
         )
         self.stop_tor_button.clicked.connect(self.stop_tor)
         tor_path_layout.addWidget(self.stop_tor_button)
@@ -1141,21 +1161,30 @@ class SettingsTab(QWidget):
 
         self.download_tor_button = QPushButton()
         self.download_tor_button.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px;"
+            scoped(
+                "QPushButton", "background: #45484F; padding: 5px; border-radius: 5px;"
+            )
+            + button_states()
         )
         self.download_tor_button.clicked.connect(self.download_tor)
         tor_path_layout.addWidget(self.download_tor_button)
 
         self.test_tor_button = QPushButton()
         self.test_tor_button.setStyleSheet(
-            "background: #4A5B7A; padding: 5px; border-radius: 5px;"
+            scoped(
+                "QPushButton", "background: #45484F; padding: 5px; border-radius: 5px;"
+            )
+            + button_states()
         )
         self.test_tor_button.clicked.connect(self.test_tor)
         tor_path_layout.addWidget(self.test_tor_button)
 
         self.help_tor_button = QPushButton("Help")
         self.help_tor_button.setStyleSheet(
-            "background: #5A6B8A; padding: 5px; border-radius: 5px;"
+            scoped(
+                "QPushButton", "background: #555861; padding: 5px; border-radius: 5px;"
+            )
+            + button_states("#666A73", "#45484F")
         )
         self.help_tor_button.clicked.connect(self.show_tor_help)
         tor_path_layout.addWidget(self.help_tor_button)
@@ -1164,9 +1193,8 @@ class SettingsTab(QWidget):
 
         # Tor download progress bar
         self.tor_progress_bar = QProgressBar()
-        self.tor_progress_bar.setStyleSheet(
-            "QProgressBar { border: 1px solid #4A5B7A; border-radius: 5px; } QProgressBar::chunk { background: #4A5B7A; }"
-        )
+        self.tor_progress_bar.setFormat("%p%")
+        style_progress_bar(self.tor_progress_bar)
         self.tor_progress_bar.setVisible(False)
         self.tor_layout.addWidget(self.tor_progress_bar)
 
@@ -1179,7 +1207,11 @@ class SettingsTab(QWidget):
         self.tor_output_text = QTextEdit()
         self.tor_output_text.setMaximumHeight(150)
         self.tor_output_text.setStyleSheet(
-            "QTextEdit { border: 1px solid #4A5B7A; border-radius: 5px; padding: 5px; background: #2A2A2A; color: #FFFFFF; font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 10px; }"
+            f"QTextEdit {{ border: 1px solid {BORDER};"
+            f" border-radius: {RADIUS}px; padding: 5px;"
+            f" background: {CONSOLE}; color: {TEXT};"
+            " font-family: 'JetBrains Mono', 'Courier New', monospace;"
+            " font-size: 10px; }"
         )
         self.tor_output_text.setReadOnly(True)
         self.tor_output_text.setVisible(False)
@@ -1213,14 +1245,20 @@ class SettingsTab(QWidget):
 
         self.apply_button = QPushButton()
         self.apply_button.setStyleSheet(
-            "background: #4A5B7A; padding: 8px; border-radius: 5px;"
+            scoped(
+                "QPushButton", "background: #45484F; padding: 8px; border-radius: 5px;"
+            )
+            + button_states()
         )
         self.apply_button.clicked.connect(self.confirm_and_apply_settings)
         buttons_layout.addWidget(self.apply_button)
 
         self.reset_button = QPushButton(translate("reset_to_defaults"))
         self.reset_button.setStyleSheet(
-            "background: #7A4A5B; padding: 8px; border-radius: 5px;"
+            scoped(
+                "QPushButton", "background: #B5474B; padding: 8px; border-radius: 5px;"
+            )
+            + button_states("#C75A5E", "#943A3D")
         )
         self.reset_button.clicked.connect(self.confirm_and_reset_settings)
         buttons_layout.addWidget(self.reset_button)
@@ -1354,7 +1392,6 @@ class SettingsTab(QWidget):
         self._show_help(
             "unique_filenames_help_title", "unique_filenames_help_text"
         )
-
 
     def browse_directory(self):
         directory = QFileDialog.getExistingDirectory(
@@ -1896,7 +1933,6 @@ class SettingsTab(QWidget):
         if language_changed:
             language_manager.set_language(self.settings["language"])
             self.language_changed.emit()
-            self.parent.log(translate("language_changed"))
             self.update_ui_text()
 
         if font_changed:
@@ -2102,7 +2138,8 @@ class SettingsTab(QWidget):
 
         self.update_group.setTitle(translate("update_settings"))
         self.github_repo_link.setText(
-            f'<a href="{GITHUB_REPO_URL}">{translate("check_updates_on_github")}</a>'
+            f'<a href="{GITHUB_REPO_URL}" style="color: {INFO}; '
+            f'text-decoration: none;">{translate("check_updates_on_github")}</a>'
         )
 
         # Creator downloader customization texts
@@ -2594,7 +2631,7 @@ GeoIPExcludeUnknown 1
         # Update UI
         self.tor_status_label.setText(translate("tor_status_starting"))
         self.tor_status_label.setStyleSheet(
-            "color: #FFA500; font-weight: bold; margin-left: 10px;"
+            "color: #FFD93D; font-weight: bold; margin-left: 10px;"
         )
         self.start_tor_button.setEnabled(False)
         self.stop_tor_button.setEnabled(True)
