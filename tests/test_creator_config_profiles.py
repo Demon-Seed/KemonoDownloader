@@ -105,6 +105,22 @@ def test_store_round_trips_both_profiles(tmp_path):
     assert store.get_creator_config("patreon", "99") is None
 
 
+def test_store_deletes_one_profile_without_touching_the_other(tmp_path):
+    store = CreatorConfigStore(str(tmp_path))
+    store.set_page_default({"options": {"main": True}})
+    store.set_creator_config("patreon", "42", {"options": {"main": False}})
+    store.set_creator_config("patreon", "99", {"options": {"main": True}})
+
+    store.delete_creator_config("patreon", "42")
+
+    assert store.get_creator_config("patreon", "42") is None
+    assert store.get_creator_config("patreon", "99") is not None
+    assert store.get_page_default() is not None
+
+    store.delete_page_default()
+    assert store.get_page_default() is None
+
+
 def test_store_ignores_other_versions_and_corrupt_payloads(tmp_path):
     store = CreatorConfigStore(str(tmp_path))
 
@@ -146,15 +162,19 @@ def test_snapshot_holds_options_and_filters_only(qtbot, tmp_path):
         "max_words": 3,
         "ignore_common_words": True,
         "ignore_accents": False,
+        "ignore_text_posts": True,
+        "ignore_filtered_keywords": False,
     }
     assert set(snapshot["sorting"]) == {
         "enabled",
         "link_all",
         "download_unsorted",
+        "ignore_text_posts",
         "unsorted_folder",
         "rules",
     }
     assert snapshot["sorting"]["download_unsorted"] is False
+    assert snapshot["sorting"]["ignore_text_posts"] is True
     assert snapshot["sorting"]["unsorted_folder"] == "Misc"
     assert snapshot["sorting"]["rules"] == []
     assert set(snapshot["options"]) == {
@@ -190,6 +210,8 @@ def test_recommended_options_round_trip_through_the_config(qtbot, tmp_path):
         "max_words": 1,
         "ignore_common_words": False,
         "ignore_accents": True,
+        "ignore_text_posts": False,
+        "ignore_filtered_keywords": True,
     }
 
     snapshot = tab._config_snapshot()
@@ -200,6 +222,8 @@ def test_recommended_options_round_trip_through_the_config(qtbot, tmp_path):
         "max_words": 1,
         "ignore_common_words": False,
         "ignore_accents": True,
+        "ignore_text_posts": False,
+        "ignore_filtered_keywords": True,
     }
 
     fresh = make_tab(qtbot, tmp_path)
@@ -210,7 +234,19 @@ def test_recommended_options_round_trip_through_the_config(qtbot, tmp_path):
         "max_words": 1,
         "ignore_common_words": False,
         "ignore_accents": True,
+        "ignore_text_posts": False,
+        "ignore_filtered_keywords": True,
     }
+
+
+def test_save_page_config_stores_the_recommended_filter_toggle(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+    tab._recommended_options["ignore_filtered_keywords"] = True
+
+    assert tab.save_page_config() is True
+
+    stored = tab._config_store().get_page_default()
+    assert stored["recommended"]["ignore_filtered_keywords"] is True
 
 
 def test_default_profile_restores_every_widget(qtbot, tmp_path):
@@ -414,6 +450,137 @@ def test_no_saved_profiles_means_the_builtin_page_state(qtbot, tmp_path):
     assert tab.skip_keywords_edit.text() == ""
 
 
+def test_clear_current_config_in_a_creator_returns_to_the_default(
+    qtbot, tmp_path, monkeypatch, no_blocking_dialogs
+):
+    tab = make_tab(qtbot, tmp_path)
+    tick(tab.creator_skip_folder_check)
+    assert tab.save_page_config() is True
+
+    tab.current_creator_url = CREATOR_URL
+    tab._load_config_for_creator()
+    tick(tab.creator_skip_folder_check, False)
+    assert tab.save_creator_config() is True
+    store = tab._config_store()
+    assert store.get_creator_config("patreon", "42") is not None
+
+    asked = []
+    monkeypatch.setattr(
+        cd.QMessageBox,
+        "question",
+        lambda *args, **kwargs: (
+            asked.append((args[1], args[2])) or cd.QMessageBox.StandardButton.Yes
+        ),
+    )
+
+    assert tab.clear_current_config() is True
+
+    assert asked == [
+        (
+            cd.translate("clear_creator_config_title"),
+            cd.translate("clear_creator_config_text"),
+        )
+    ]
+    assert store.get_creator_config("patreon", "42") is None
+    assert store.get_page_default() is not None
+    assert tab.creator_skip_folder_check.isChecked() is True
+    assert no_blocking_dialogs[-1] == (
+        "information",
+        cd.translate("config_cleared_title"),
+        cd.translate("clear_creator_config_done", "42"),
+    )
+
+
+def test_clear_current_config_on_the_default_returns_to_program_defaults(
+    qtbot, tmp_path, monkeypatch, no_blocking_dialogs
+):
+    tab = make_tab(qtbot, tmp_path)
+    tick(tab.creator_skip_folder_check)
+    assert tab.save_page_config() is True
+    tick(tab.creator_skip_folder_check, False)
+
+    monkeypatch.setattr(
+        cd.QMessageBox,
+        "question",
+        lambda *args, **kwargs: cd.QMessageBox.StandardButton.Yes,
+    )
+
+    assert tab.clear_current_config() is True
+
+    assert tab._config_store().get_page_default() is None
+    assert tab.creator_skip_folder_check.isChecked() is False
+    assert no_blocking_dialogs[-1] == (
+        "information",
+        cd.translate("config_cleared_title"),
+        cd.translate("clear_default_config_done"),
+    )
+
+
+def test_clear_current_config_can_be_cancelled(
+    qtbot, tmp_path, monkeypatch, no_blocking_dialogs
+):
+    tab = make_tab(qtbot, tmp_path)
+    assert tab.save_page_config() is True
+    before = len(no_blocking_dialogs)
+
+    monkeypatch.setattr(
+        cd.QMessageBox,
+        "question",
+        lambda *args, **kwargs: cd.QMessageBox.StandardButton.No,
+    )
+
+    assert tab.clear_current_config() is False
+
+    assert tab._config_store().get_page_default() is not None
+    assert len(no_blocking_dialogs) == before
+
+
+def test_save_confirmations_count_every_saved_setting(
+    qtbot, tmp_path, no_blocking_dialogs
+):
+    tab = make_tab(qtbot, tmp_path)
+    tab._sort_rules = [
+        cd.SortRule("Cats", ("cat",)),
+        cd.SortRule("Dogs", ("dog",)),
+    ]
+    snapshot = tab._config_snapshot()
+    count = tab._config_saved_count(snapshot)
+    assert count > len(snapshot["options"]) + len(snapshot["filters"])
+
+    assert tab.save_page_config() is True
+    assert no_blocking_dialogs[-1] == (
+        "information",
+        cd.translate("config_saved_title"),
+        cd.translate("config_saved_text", count),
+    )
+
+    tab.current_creator_url = CREATOR_URL
+    snapshot = tab._config_snapshot()
+    count = tab._config_saved_count(snapshot)
+    assert tab.save_creator_config() is True
+    assert no_blocking_dialogs[-1] == (
+        "information",
+        cd.translate("creator_config_saved_title"),
+        cd.translate("creator_config_saved_text", count, "42"),
+    )
+
+
+def test_config_saved_count_includes_search_recommended_and_sorting():
+    payload = {
+        "options": {"main": True, "attachments": True},
+        "filters": {"skip_keywords": "x"},
+        "search_scopes": ["tags", "title"],
+        "recommended": {"min_count": 2, "max_words": 3},
+        "sorting": {
+            "enabled": True,
+            "download_unsorted": False,
+            "rules": [{"folder": "Cats"}, {"folder": "Dogs"}],
+        },
+    }
+
+    assert cd.CreatorDownloaderTab._config_saved_count(payload) == 11
+
+
 def test_a_broken_filter_entry_refuses_the_save(qtbot, tmp_path, no_blocking_dialogs):
     tab = make_tab(qtbot, tmp_path)
     tab.date_from_edit.setText("2026-13-99")
@@ -430,16 +597,19 @@ def test_creator_button_needs_a_loaded_creator(qtbot, tmp_path):
 
     assert tab.creator_save_config_btn.isEnabled() is True
     assert tab.creator_save_creator_config_btn.isEnabled() is False
+    assert tab.creator_clear_config_btn.isEnabled() is True
 
     tab.current_creator_url = CREATOR_URL
     tab._load_config_for_creator()
     assert tab.creator_save_creator_config_btn.isEnabled() is True
 
-    # Both go quiet during a run: the download already snapshotted its options.
+    # All three go quiet during a run: the download already snapshotted its
+    # options, so a save or clear now would describe something nothing reads.
     tab.downloading = True
     tab._refresh_config_buttons()
     assert tab.creator_save_config_btn.isEnabled() is False
     assert tab.creator_save_creator_config_btn.isEnabled() is False
+    assert tab.creator_clear_config_btn.isEnabled() is False
 
 
 def test_creator_config_without_a_creator_is_refused(qtbot, tmp_path):
@@ -535,6 +705,7 @@ def test_config_buttons_unlock_when_a_run_ends(qtbot, tmp_path):
     tab.set_downloading_ui_state(True)
     assert tab.creator_save_config_btn.isEnabled() is False
     assert tab.creator_save_creator_config_btn.isEnabled() is False
+    assert tab.creator_clear_config_btn.isEnabled() is False
 
     tab.downloading = False
     tab._download_thread = None
@@ -542,6 +713,7 @@ def test_config_buttons_unlock_when_a_run_ends(qtbot, tmp_path):
 
     assert tab.creator_save_config_btn.isEnabled() is True
     assert tab.creator_save_creator_config_btn.isEnabled() is True
+    assert tab.creator_clear_config_btn.isEnabled() is True
 
 
 def test_cleanup_thread_unlocks_the_config_buttons(qtbot, tmp_path):

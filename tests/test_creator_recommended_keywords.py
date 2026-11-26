@@ -6,6 +6,7 @@ the scope rules and the UI wiring without touching the network or a real
 SettingsTab.
 """
 
+from PyQt6.QtCore import QItemSelectionModel
 from PyQt6.QtWidgets import QApplication, QGridLayout
 from tests.factories import Signal, make_tab_parent
 
@@ -522,14 +523,13 @@ def test_all_check_boxes_use_the_shared_theme_style(qtbot, tmp_path):
 
     assert "width: 16px" in style
     assert "height: 16px" in style
-    assert "border-radius: 4px" in style
     assert "QCheckBox::indicator:hover" in style
     assert "QCheckBox::indicator:checked" in style
     assert "QCheckBox::indicator:indeterminate" in style
     assert "QCheckBox::indicator:disabled" in style
     assert "image: url(" in style
-    assert "check_f2f3f5.png" in style
-    assert "minus_f2f3f5.png" in style
+    assert "checkbox_checked_4863b8.png" in style
+    assert "checkbox_minus_4863b8.png" in style
 
     tab = _make_tab(qtbot, tmp_path)
     # The formerly custom boxes no longer override the shared indicator; the
@@ -551,6 +551,148 @@ def test_dialog_matches_the_sort_editor_styling(qtbot, monkeypatch):
     assert "#2B2D31" in sort_dialog._rule_list.styleSheet()
 
 
+def test_post_is_text_only_requires_known_empty_file_facts():
+    assert cd.post_is_text_only({"file_count": 0, "filenames_list": []})
+    assert not cd.post_is_text_only({"file_count": 1, "filenames_list": []})
+    assert not cd.post_is_text_only({"file_count": 0, "filenames_list": ["page.jpg"]})
+    assert not cd.post_is_text_only({"file_count": 0, "extensions": [".jpg"]})
+    assert not cd.post_is_text_only({"tag_list": []})
+    assert not cd.post_is_text_only(None)
+
+
+def test_recommended_scan_ignores_text_posts_by_default(qtbot, monkeypatch):
+    _patch_thread(monkeypatch, [])
+    index = {
+        "1": {"tag_list": ["Sketch"], "file_count": 0, "filenames_list": []},
+        "2": {"tag_list": ["Sketch"], "file_count": 2, "filenames_list": ["a.jpg"]},
+    }
+    posts = [("Text post", ("1", None)), ("Art post", ("2", None))]
+    dialog = cd.RecommendedKeywordsDialog(posts, index)
+    qtbot.addWidget(dialog)
+
+    assert dialog._ignore_text_posts.isChecked()
+    assert FakeRecommendedThread.instances[-1].args[0] == [("2", "Art post")]
+
+    dialog._ignore_text_posts.setChecked(False)
+    dialog._start_scan()
+    assert FakeRecommendedThread.instances[-1].args[0] == [
+        ("1", "Text post"),
+        ("2", "Art post"),
+    ]
+    dialog.close()
+
+
+def test_recommended_scan_hides_keywords_covered_by_skip_filters(qtbot, monkeypatch):
+    _patch_thread(
+        monkeypatch,
+        [
+            _result(),
+            _result(
+                keyword="Sketch",
+                count=2,
+                mentions=3,
+                scopes=frozenset({"title"}),
+                match_key="sketch",
+                variants=("Sketch",),
+            ),
+        ],
+    )
+    filters = cd.PostFilters(
+        skip_keywords=("Alien*",),
+        skip_scopes=frozenset({"tags"}),
+    )
+    dialog = cd.RecommendedKeywordsDialog(
+        [], {}, options={"ignore_filtered_keywords": True}, filters=filters
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog._ignore_filtered_keywords.isChecked()
+    assert dialog._table.rowCount() == 1
+    assert dialog._table.item(0, 0).text() == "Sketch"
+    assert translate("recommended_keywords_ignored_filters", 1) in (
+        dialog._status_label.text()
+    )
+
+    dialog._ignore_filtered_keywords.setChecked(False)
+
+    assert dialog._table.rowCount() == 2
+    assert translate("recommended_keywords_ignored_filters", 1) not in (
+        dialog._status_label.text()
+    )
+    dialog.close()
+
+
+def test_recommended_scan_hides_file_filter_keywords_for_filename_results(
+    qtbot, monkeypatch
+):
+    _patch_thread(
+        monkeypatch,
+        [
+            _result(
+                keyword="BlackCat",
+                scopes=frozenset({"filenames"}),
+                match_key="black cat",
+                variants=("BlackCat",),
+            ),
+            _result(
+                keyword="AlienComic",
+                scopes=frozenset({"tags"}),
+            ),
+        ],
+    )
+    dialog = cd.RecommendedKeywordsDialog(
+        [],
+        {},
+        options={"ignore_filtered_keywords": True},
+        filters=cd.PostFilters(),
+        file_skip_keywords=("BlackCat",),
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog._table.rowCount() == 1
+    assert dialog._table.item(0, 0).text() == "AlienComic"
+    dialog.close()
+
+
+def test_recommended_filters_can_change_after_the_scan(qtbot, monkeypatch):
+    _patch_thread(monkeypatch, [_result()])
+    posts = [("Alien Comic", ("1", None))]
+    dialog = cd.RecommendedKeywordsDialog(
+        posts, {}, options={"ignore_filtered_keywords": True}
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog._table.rowCount() == 1
+
+    dialog.set_filters(
+        cd.PostFilters(
+            skip_keywords=("AlienComic",),
+            skip_scopes=frozenset({"tags"}),
+        )
+    )
+
+    assert dialog._table.rowCount() == 0
+    assert dialog._empty_label.text() == translate(
+        "recommended_keywords_empty_filtered"
+    )
+
+    dialog.set_filters(cd.PostFilters())
+
+    assert dialog._table.rowCount() == 1
+    dialog.close()
+
+
+def test_recommended_scan_deduplicates_post_ids():
+    results = rec.count_recommended_keywords(
+        [("1", "Alien Comic"), ("1", "Alien Comic")],
+        {"1": {"tag_list": ["AlienComic"]}},
+        scopes={"tags"},
+        min_count=1,
+    )
+
+    assert [(item.keyword, item.count) for item in results] == [("AlienComic", 1)]
+
+
 def test_dialog_defaults_to_title_and_tags_and_lists_results(qtbot, monkeypatch):
     _patch_thread(monkeypatch, [_result()])
     dialog = cd.RecommendedKeywordsDialog([], {})
@@ -564,6 +706,8 @@ def test_dialog_defaults_to_title_and_tags_and_lists_results(qtbot, monkeypatch)
     assert dialog._max_words.currentData() == 3
     assert dialog._ignore_common.isChecked()
     assert not dialog._ignore_accents.isChecked()
+    assert dialog._ignore_text_posts.isChecked()
+    assert not dialog._ignore_filtered_keywords.isChecked()
 
     assert dialog._table.rowCount() == 1
     assert dialog._table.item(0, 0).text() == "AlienComic"
@@ -584,6 +728,18 @@ def test_empty_scan_shows_the_hint_and_disables_actions(qtbot, monkeypatch):
     assert not dialog._search_btn.isEnabled()
     assert not dialog._add_skip_btn.isEnabled()
     assert not dialog._copy_btn.isEnabled()
+
+
+def test_all_text_posts_explain_the_scan_option(qtbot, monkeypatch):
+    _patch_thread(monkeypatch, [])
+    index = {"1": {"file_count": 0, "filenames_list": []}}
+    dialog = cd.RecommendedKeywordsDialog([("Text post", ("1", None))], index)
+    qtbot.addWidget(dialog)
+
+    assert dialog._empty_label.text() == translate(
+        "recommended_keywords_only_text_posts"
+    )
+    dialog.close()
 
 
 def test_no_matches_with_posts_loaded_explains_the_threshold(qtbot, monkeypatch):
@@ -665,9 +821,217 @@ def test_dialog_copy_puts_the_keyword_on_the_clipboard(qtbot, monkeypatch):
     assert QApplication.clipboard().text() == "AlienComic"
 
 
+def test_dialog_create_rule_uses_the_most_populated_selection_as_name(
+    qtbot, monkeypatch
+):
+    _patch_thread(
+        monkeypatch,
+        [
+            _result(
+                keyword="Sketch",
+                count=5,
+                mentions=8,
+                scopes=frozenset({"tags"}),
+                match_key="sketch",
+                variants=("Sketch", "sketch"),
+            ),
+            _result(
+                keyword="Fanart",
+                count=2,
+                mentions=3,
+                scopes=frozenset({"title"}),
+                match_key="fanart",
+                variants=("Fanart",),
+            ),
+        ],
+    )
+    dialog = cd.RecommendedKeywordsDialog([], {})
+    qtbot.addWidget(dialog)
+    model = dialog._table.model()
+    selection = dialog._table.selectionModel()
+    selection.clear()
+    for row in (0, 1):
+        selection.select(
+            model.index(row, 0),
+            QItemSelectionModel.SelectionFlag.Select
+            | QItemSelectionModel.SelectionFlag.Rows,
+        )
+    captured = []
+    dialog.create_rule_requested.connect(
+        lambda folder, values, scopes: captured.append((folder, values, scopes))
+    )
+
+    dialog._create_rule_btn.click()
+
+    assert captured == [
+        (
+            "Sketch",
+            ("Sketch", "Fanart"),
+            frozenset({"title", "tags"}),
+        )
+    ]
+    dialog.close()
+
+
+def test_dialog_multiple_selection_feeds_search_skip_and_copy(qtbot, monkeypatch):
+    _patch_thread(
+        monkeypatch,
+        [
+            _result(keyword="Sketch", count=5, variants=("Sketch",)),
+            _result(keyword="Fanart", count=2, variants=("Fanart",)),
+        ],
+    )
+    dialog = cd.RecommendedKeywordsDialog([], {})
+    qtbot.addWidget(dialog)
+    model = dialog._table.model()
+    selection = dialog._table.selectionModel()
+    selection.clear()
+    for row in (0, 1):
+        selection.select(
+            model.index(row, 0),
+            QItemSelectionModel.SelectionFlag.Select
+            | QItemSelectionModel.SelectionFlag.Rows,
+        )
+    skipped = []
+    dialog.skip_keywords_requested.connect(
+        lambda variants, scopes: skipped.append((variants, scopes))
+    )
+
+    dialog._add_skip_btn.click()
+    dialog._copy_btn.click()
+
+    assert skipped == [(("Sketch", "Fanart"), frozenset({"tags"}))]
+    assert QApplication.clipboard().text() == "Sketch\nFanart"
+    dialog.close()
+
+
 # ---------------------------------------------------------------------------
 # Wiring back into the Creator tab
 # ---------------------------------------------------------------------------
+
+
+def test_tab_create_rule_adds_or_merges_a_sorting_rule(qtbot, tmp_path):
+    tab = _make_tab(qtbot, tmp_path)
+
+    tab._create_rule_from_recommended("Sketch", ("Sketch", "sketch"), {"tags"})
+
+    assert len(tab._sort_rules) == 1
+    assert tab._sort_rules[0].folder == "Sketch"
+    assert tab._sort_rules[0].values == ("Sketch", "sketch")
+    assert tab._sort_rules[0].scopes == frozenset({"tags"})
+    tab.close()
+
+
+def test_tab_create_rule_keeps_an_open_sort_editor_in_sync(qtbot, tmp_path):
+    tab = _make_tab(qtbot, tmp_path)
+    tab._sort_rules = [cd.SortRule("Cats", ("cat",))]
+    tab._open_sort_rules_dialog()
+    dialog = tab._sort_rules_dialog
+    dialog._add_rule()
+    dialog._clear_rule_selection()
+
+    tab._create_rule_from_recommended("Sketch", ("Sketch",), {"tags"})
+
+    assert dialog.isVisible()
+    assert [rule.folder for rule in dialog.rules()] == [
+        "Cats",
+        "New Folder",
+        "Sketch",
+    ]
+    assert dialog._rule_list.currentRow() == 2
+    assert [rule.folder for rule in tab._sort_rules] == [
+        "Cats",
+        "New Folder",
+        "Sketch",
+    ]
+    tab._close_sort_rules_dialog()
+
+
+def test_create_rule_button_tracks_the_selected_sorting_rule(
+    qtbot, tmp_path, monkeypatch
+):
+    tab = _make_tab(qtbot, tmp_path)
+    tab._sort_rules = [cd.SortRule("Cats", ("cat",))]
+    _patch_thread(monkeypatch, [])
+
+    tab._open_sort_rules_dialog()
+    sort_dialog = tab._sort_rules_dialog
+    tab._open_recommended_keywords_dialog()
+    recommended = tab._recommended_keywords_dialog
+
+    assert recommended._create_rule_btn.text() == translate(
+        "recommended_keywords_add_to_rule"
+    )
+
+    sort_dialog._clear_rule_selection()
+    assert recommended._create_rule_btn.text() == translate(
+        "recommended_keywords_create_rule"
+    )
+
+    sort_dialog._rule_list.setCurrentRow(0)
+    assert recommended._create_rule_btn.text() == translate(
+        "recommended_keywords_add_to_rule"
+    )
+
+    tab._close_sort_rules_dialog()
+    assert recommended._create_rule_btn.text() == translate(
+        "recommended_keywords_create_rule"
+    )
+    tab._close_recommended_keywords_dialog()
+
+
+def test_open_sort_editor_after_recommendations_refreshes_the_rule_action(
+    qtbot, tmp_path, monkeypatch
+):
+    tab = _make_tab(qtbot, tmp_path)
+    tab._sort_rules = [cd.SortRule("Cats", ("cat",))]
+    _patch_thread(monkeypatch, [])
+
+    tab._open_recommended_keywords_dialog()
+    recommended = tab._recommended_keywords_dialog
+    assert recommended._create_rule_btn.text() == translate(
+        "recommended_keywords_create_rule"
+    )
+
+    tab._open_sort_rules_dialog()
+
+    assert recommended._create_rule_btn.text() == translate(
+        "recommended_keywords_add_to_rule"
+    )
+    tab._close_recommended_keywords_dialog()
+    tab._close_sort_rules_dialog()
+
+
+def test_tab_add_to_selected_rule_merges_instead_of_creating(qtbot, tmp_path):
+    tab = _make_tab(qtbot, tmp_path)
+    tab._sort_rules = [
+        cd.SortRule("Cats", ("cat",)),
+        cd.SortRule("Dogs", ("dog",)),
+    ]
+    tab._open_sort_rules_dialog()
+    dialog = tab._sort_rules_dialog
+    assert dialog.selected_rule_index() == 0
+
+    tab._create_rule_from_recommended("Sketch", ("sketch",), {"title"})
+
+    assert [rule.folder for rule in dialog.rules()] == ["Cats", "Dogs"]
+    assert dialog.rules()[0].values == ("cat", "sketch")
+    assert dialog.rules()[0].scopes == frozenset({"tags", "title"})
+    assert dialog.rules()[1].values == ("dog",)
+    assert dialog.selected_rule_index() == 0
+    tab._close_sort_rules_dialog()
+
+
+def test_tab_dialog_rows_follow_the_filtered_post_list(qtbot, tmp_path):
+    tab = _make_tab(qtbot, tmp_path)
+    tab.all_detected_posts = [("All", ("1", None))]
+    tab.filtered_posts = [("Visible", "2", "thumb", False)]
+    tab._filtered_rows_ready = True
+
+    assert tab._dialog_post_rows() == [("Visible", ("2", "thumb"))]
+
+    tab._filtered_rows_ready = False
+    assert tab._dialog_post_rows() == [("All", ("1", None))]
 
 
 def test_tab_search_applies_the_text_and_scopes(qtbot, tmp_path):
@@ -746,6 +1110,50 @@ def test_button_opens_the_window_with_the_loaded_posts(qtbot, tmp_path, monkeypa
     assert tab._recommended_keywords_dialog is None
 
 
+def test_button_passes_the_active_skip_filters_to_the_window(
+    qtbot, tmp_path, monkeypatch
+):
+    tab = _make_tab(qtbot, tmp_path)
+    _seed_posts(tab)
+    _patch_thread(monkeypatch, [_result()])
+    for widget, value in (
+        (tab.skip_keywords_edit, "AlienComic"),
+        (tab.file_skip_keywords_edit, "BlackCat"),
+    ):
+        widget.blockSignals(True)
+        widget.setText(value)
+        widget.blockSignals(False)
+    for scope, checked in (("title", False), ("tags", True)):
+        checkbox = tab.skip_scope_checkboxes[scope]
+        checkbox.blockSignals(True)
+        checkbox.setChecked(checked)
+        checkbox.blockSignals(False)
+
+    tab.creator_recommended_btn.click()
+
+    dialog = tab._recommended_keywords_dialog
+    assert dialog is not None
+    assert dialog._filters.skip_keywords == ("AlienComic",)
+    assert dialog._filters.skip_scopes == frozenset({"tags"})
+    assert dialog._file_skip_keywords == ("BlackCat",)
+    tab._close_recommended_keywords_dialog()
+
+
+def test_file_skip_edits_refresh_the_open_recommendation_window(
+    qtbot, tmp_path, monkeypatch
+):
+    tab = _make_tab(qtbot, tmp_path)
+    _seed_posts(tab)
+    _patch_thread(monkeypatch, [_result()])
+    tab.creator_recommended_btn.click()
+    dialog = tab._recommended_keywords_dialog
+
+    tab.file_skip_keywords_edit.setText("BlackCat")
+
+    assert dialog._file_skip_keywords == ("BlackCat",)
+    tab._close_recommended_keywords_dialog()
+
+
 def test_button_opens_even_with_no_posts_loaded(qtbot, tmp_path, monkeypatch):
     tab = _make_tab(qtbot, tmp_path)
     _patch_thread(monkeypatch, [])
@@ -781,6 +1189,8 @@ def test_dialog_options_round_trip_and_report_changes(qtbot, monkeypatch):
         "max_words": 1,
         "ignore_common_words": False,
         "ignore_accents": True,
+        "ignore_text_posts": False,
+        "ignore_filtered_keywords": False,
     }
     dialog = cd.RecommendedKeywordsDialog([], {}, options=options)
     qtbot.addWidget(dialog)
@@ -789,6 +1199,8 @@ def test_dialog_options_round_trip_and_report_changes(qtbot, monkeypatch):
     assert dialog._scope_checks["tags"].isChecked()
     assert dialog._ignore_common.isChecked() is False
     assert dialog._ignore_accents.isChecked() is True
+    assert dialog._ignore_text_posts.isChecked() is False
+    assert dialog._ignore_filtered_keywords.isChecked() is False
 
     reported = []
     dialog.options_changed.connect(reported.append)
@@ -822,18 +1234,31 @@ def test_recommended_translation_keys_exist():
         "recommended_keywords_phrase_length",
         "recommended_keywords_ignore_common",
         "recommended_keywords_ignore_accents",
+        "recommended_keywords_ignore_filters",
+        "recommended_keywords_ignore_filters_tooltip",
+        "recommended_keywords_ignore_text_posts",
+        "recommended_keywords_ignored_filters",
+        "recommended_keywords_ignored_text_posts",
         "recommended_keywords_refresh",
         "recommended_keywords_column_keyword",
         "recommended_keywords_column_posts",
         "recommended_keywords_column_mentions",
         "recommended_keywords_search",
         "recommended_keywords_add_skip",
+        "recommended_keywords_add_to_rule",
+        "recommended_keywords_add_to_rule_tooltip",
         "recommended_keywords_copy",
+        "recommended_keywords_create_rule",
+        "recommended_keywords_create_rule_tooltip",
+        "recommended_keywords_rule_added",
+        "recommended_keywords_rule_updated",
         "recommended_keywords_empty",
+        "recommended_keywords_empty_filtered",
         "recommended_keywords_scanning",
         "recommended_keywords_summary",
         "recommended_keywords_added",
         "recommended_keywords_no_posts",
+        "recommended_keywords_only_text_posts",
         "recommended_keywords_help_title",
         "recommended_keywords_help_text",
     ):

@@ -3,6 +3,8 @@
 import os
 from types import SimpleNamespace
 
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QValidator
 from tests.factories import make_tab_parent
 
 from kemonodownloader import creator_downloader as cd
@@ -297,6 +299,72 @@ def test_resolve_routes_unsorted_posts_to_the_configured_folder():
     assert routing.unsorted == 1
 
 
+def test_resolve_creates_one_subfolder_per_matched_value():
+    posts = [("One", ("1", "t"))]
+    facts = {"1": {"tag_list": ["Hu Tao", "Furina"]}}
+    rules = [
+        cd.SortRule(
+            "Genshin Impact",
+            ("Hu Tao", "Furina"),
+            subfolder_per_value=True,
+        )
+    ]
+
+    routing = cd.resolve_sort_folders(posts, facts, rules)
+
+    assert routing.folders == {"1": ("Genshin_Impact/Hu_Tao", "Genshin_Impact/Furina")}
+    assert routing.counts == {"Genshin_Impact/Hu_Tao": 1}
+    assert routing.multi_match == 0
+
+
+def test_resolve_per_value_uses_only_values_that_matched():
+    posts = [("One", ("1", "t"))]
+    facts = {"1": {"tag_list": ["Hu Tao"]}}
+    rules = [
+        cd.SortRule(
+            "Genshin Impact",
+            ("Hu Tao", "Furina"),
+            subfolder_per_value=True,
+        )
+    ]
+
+    routing = cd.resolve_sort_folders(posts, facts, rules)
+
+    assert routing.folders == {"1": ("Genshin_Impact/Hu_Tao",)}
+
+
+def test_resolve_per_value_all_requires_every_value():
+    posts = [("One", ("1", "t"))]
+    facts = {"1": {"tag_list": ["Hu Tao", "Furina"]}}
+    missing = [
+        cd.SortRule(
+            "Genshin Impact",
+            ("Hu Tao", "Furina", "Nahida"),
+            match_all=True,
+            subfolder_per_value=True,
+        )
+    ]
+
+    routing = cd.resolve_sort_folders(posts, facts, missing)
+
+    assert routing.folders == {}
+    assert routing.unsorted == 1
+
+
+def test_sort_rule_bad_value_folders_reports_patterns_and_windows_names():
+    rule = cd.SortRule(
+        "Property",
+        ("Hu*", "CON", "Furina"),
+        subfolder_per_value=True,
+    )
+
+    assert cd.sort_rule_bad_value_folders(rule) == [
+        ("Hu*", "wildcard"),
+        ("CON", "invalid"),
+    ]
+    assert cd.sort_rule_bad_value_folders(cd.SortRule("Property", ("Hu*",))) == []
+
+
 def test_resolve_skips_disabled_rules():
     posts = [("One", ("1", "t"))]
     facts = {"1": {"tag_list": ["cat"]}}
@@ -318,20 +386,42 @@ def test_resolve_does_not_repeat_the_same_folder():
     assert routing.multi_match == 0
 
 
-def test_normalize_sort_folder_rejects_unsafe_names():
+def test_normalize_sort_folder_accepts_safe_nested_paths():
     assert cd.normalize_sort_folder("Cats") == ("Cats", "")
     assert cd.normalize_sort_folder("  Cat Art  ")[0] == "Cat_Art"
+    assert cd.normalize_sort_folder("Art/Cats") == ("Art/Cats", "")
+    assert cd.normalize_sort_folder("Art\\Cats") == ("Art/Cats", "")
+    assert cd.normalize_sort_folder("Art/Cat Art") == ("Art/Cat_Art", "")
+
+
+def test_normalize_sort_folder_rejects_unsafe_names():
     for bad in (
         "",
         ".",
         "..",
-        "Art/Cats",
-        "Art\\Cats",
+        "Art//Cats",
+        "Art/",
+        "Art/Cats.",
         "C:/Cats",
         "../Cats",
+        "Art/../Cats",
+        "Art/Cat:Dogs",
+        "Art/Cat*",
+        "Art/Cat?",
+        "Art/Cat|Dogs",
         "CON",
+        "Art/CON",
+        "Art/\x00Cats",
     ):
         folder, problem = cd.normalize_sort_folder(bad)
+        assert folder == ""
+        assert problem
+
+
+def test_normalize_sort_folder_segment_rejects_windows_characters():
+    assert cd.normalize_sort_folder_segment("Cat Art") == ("Cat_Art", "")
+    for bad in ("Cat:Dog", "Cat*Dog", "Cat?Dog", "Cat|Dog", "CON", "Cat."):
+        folder, problem = cd.normalize_sort_folder_segment(bad)
         assert folder == ""
         assert problem
 
@@ -343,9 +433,11 @@ def test_rule_dict_round_trip_has_no_kind():
         match_all=True,
         scopes=frozenset({"title", "tags"}),
         enabled=False,
+        subfolder_per_value=True,
     )
     data = cd.sort_rule_to_dict(rule)
     assert "kind" not in data
+    assert data["subfolder_per_value"] is True
     restored = cd.sort_rule_from_dict(data)
     assert restored == rule
     assert cd.sort_rules_from_config({"rules": [data]}) == [rule]
@@ -415,6 +507,32 @@ def test_sorted_post_gets_a_keyword_folder_under_the_creator_folder(tmp_path):
     assert target.startswith(os.path.join(creator_folder(tmp_path), "Cats"))
     assert os.path.dirname(target) != creator_folder(tmp_path)
     assert thread._creator_folder == creator_folder(tmp_path)
+
+
+def test_nested_folder_path_lands_under_the_creator_folder(tmp_path):
+    thread = make_thread(
+        tmp_path,
+        post_sort_folders={"1": ("Genshin Impact/Hu Tao",)},
+        strategy="single_folder",
+    )
+
+    target, _filename = thread.generate_filename_and_folder(
+        FILE_URL, str(tmp_path), 0, 1, "1", "Post", 1
+    )
+
+    assert target == os.path.join(creator_folder(tmp_path), "Genshin Impact", "Hu Tao")
+
+
+def test_nested_folder_description_follows_the_path(tmp_path):
+    thread = make_thread(
+        tmp_path,
+        post_sort_folders={"1": ("Genshin Impact/Hu Tao",)},
+        strategy="single_folder",
+    )
+
+    assert thread.get_desc_folder_for_post(
+        creator_folder(tmp_path), "1", "Post"
+    ) == os.path.join(creator_folder(tmp_path), "Genshin Impact", "Hu Tao")
 
 
 def test_skip_folder_keeps_the_file_in_the_keyword_folder(tmp_path):
@@ -507,6 +625,21 @@ def test_link_mode_hardlinks_into_every_extra_folder(tmp_path):
     assert os.path.exists(linked)
     assert os.path.samefile(primary, linked)
     assert thread.linked_sort_files == 1
+
+
+def test_link_mode_creates_a_nested_extra_folder(tmp_path):
+    thread = make_thread(
+        tmp_path,
+        post_sort_folders={"1": ("Cats", "Property/Character")},
+        link_sort_matches=True,
+    )
+    primary = make_primary(tmp_path)
+
+    assert thread._link_extra_sort_copies("1", primary, "art.jpg", str(tmp_path)) == 1
+
+    linked = os.path.join(creator_folder(tmp_path), "Property", "Character", "art.jpg")
+    assert os.path.exists(linked)
+    assert os.path.samefile(primary, linked)
 
 
 def test_link_mode_off_creates_nothing(tmp_path):
@@ -645,6 +778,34 @@ def test_sorting_warnings_allow_an_unsorted_rule_without_values(qtbot, tmp_path)
     # Values the user does type still have to be usable.
     tab._sort_rules = [cd.SortRule("Unsorted", ("*",))]
     assert tab._sorting_warnings() == ["sort_config_wildcard_only"]
+
+
+def test_sorting_warnings_report_unusable_per_value_folders(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+    tab._sort_rules = [cd.SortRule("Property", ("Hu*",), subfolder_per_value=True)]
+    assert "sort_config_value_subfolder_wildcard" in tab._sorting_warnings()
+
+    tab._sort_rules = [cd.SortRule("Property", ("CON",), subfolder_per_value=True)]
+    assert "sort_config_invalid_value_folder" in tab._sorting_warnings()
+
+
+def test_config_restores_a_per_value_rule_and_nested_path(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+    rule = cd.SortRule(
+        "Property/Characters",
+        ("Hu Tao",),
+        subfolder_per_value=True,
+    )
+    tab._apply_config({"sorting": {"rules": [cd.sort_rule_to_dict(rule)]}})
+
+    assert tab._sort_rules == [rule]
+
+
+def test_config_warns_about_unusable_per_value_folders(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+    tab._sort_rules = [cd.SortRule("Property", ("Hu*",), subfolder_per_value=True)]
+
+    assert tab._config_warnings() == ["sort_config_value_subfolder_wildcard"]
 
 
 def test_config_restores_an_unsorted_rule_without_values(qtbot, tmp_path):
@@ -826,6 +987,169 @@ def test_dialog_is_modeless_and_shows_the_page_switch_status(qtbot):
     assert translate("sort_status_off") in off._status_label.text()
 
 
+def test_dialog_preview_aligns_with_rules_and_shares_the_height_splitter(qtbot):
+    dialog = make_dialog(
+        qtbot,
+        rules=[cd.SortRule("Genshin Impact/Hu Tao", ("Hu Tao",))],
+    )
+    dialog.show()
+    qtbot.wait(20)
+
+    assert dialog._preview_group.width() == dialog._rules_group.width()
+    assert dialog._run_settings_group.width() == dialog._editor_group.width()
+    assert dialog._body_splitter.count() == 2
+    assert dialog._body_splitter.widget(0) is dialog._rules_group
+    assert dialog._body_splitter.widget(1) is dialog._preview_group
+    assert dialog._body_splitter.handle(1).height() >= 10
+    sizes = dialog._body_splitter.sizes()
+    assert len(sizes) == 2
+    assert all(size > 0 for size in sizes)
+    assert sizes[1] > 65
+
+    dialog._body_splitter.setSizes([sizes[0] - 20, sizes[1] + 20])
+    assert dialog._body_splitter.sizes()[1] > sizes[1]
+
+
+def test_dialog_folder_input_rejects_windows_invalid_characters(qtbot):
+    dialog = make_dialog(qtbot)
+    validator = dialog._folder_edit.validator()
+    assert validator is not None
+
+    for text in ("Cat:Dog", "Cat*Dog", "Cat?Dog", "Cat|Dog", "<Cat>", '"Cat"'):
+        assert validator.validate(text, 0)[0] == QValidator.State.Invalid
+    assert validator.validate("Art/Cats", 0)[0] == QValidator.State.Acceptable
+
+
+def test_dialog_per_value_checkbox_is_saved_on_the_rule(qtbot):
+    dialog = make_dialog(qtbot, rules=[cd.SortRule("Property", ("Hu Tao",))])
+
+    dialog._subfolder_per_value_check.setChecked(True)
+    dialog._folder_edit.setText("Genshin Impact")
+    dialog._commit_editor()
+
+    rule = dialog.rules()[0]
+    assert rule.folder == "Genshin Impact"
+    assert rule.subfolder_per_value is True
+    assert "Genshin Impact/<value>" in dialog._rule_list.item(0).text()
+
+
+def test_dialog_rejects_unusable_per_value_folder_names(qtbot):
+    dialog = make_dialog(
+        qtbot,
+        rules=[
+            cd.SortRule(
+                "Property",
+                ("Hu*", "CON"),
+                subfolder_per_value=True,
+            )
+        ],
+    )
+
+    problems = dialog._validation_problems()
+
+    assert any("Hu*" in problem for problem in problems)
+    assert any("CON" in problem for problem in problems)
+
+
+def test_sort_dialog_preview_tracks_search_and_ticked_posts(qtbot, tmp_path):
+    tab = make_tab(qtbot, tmp_path)
+    tab.current_creator_url = "https://kemono.cr/patreon/user/123"
+    tab.checked_urls = {"1": True, "2": True}
+    tab.posts_to_download = ["1", "2"]
+    tab.all_detected_posts = [("One", ("1", "thumb")), ("Two", ("2", "thumb"))]
+    tab.post_search_index = {
+        "1": {"tag_list": ["cat"], "file_count": 1, "filenames_list": ["a.jpg"]},
+        "2": {"tag_list": ["cat"], "file_count": 1, "filenames_list": ["b.jpg"]},
+    }
+    tab._sort_rules = [cd.SortRule("Cats", ("cat",))]
+    tab._open_sort_rules_dialog()
+    dialog = tab._sort_rules_dialog
+
+    tab.filtered_posts = [("One", "1", "thumb", True)]
+    tab._filtered_rows_ready = True
+    tab.update_checked_posts(announce_hidden=False)
+
+    assert dialog._ticked_ids == {"1"}
+    assert [title for title, _post in dialog._preview_posts()] == ["One"]
+
+    tab.filtered_posts = [
+        ("One", "1", "thumb", True),
+        ("Two", "2", "thumb", True),
+    ]
+    tab.update_checked_posts(announce_hidden=False)
+
+    assert dialog._ticked_ids == {"1", "2"}
+    assert [title for title, _post in dialog._preview_posts()] == ["One", "Two"]
+    tab._close_sort_rules_dialog()
+
+
+def test_sort_dialog_preview_counts_only_ticked_posts(qtbot):
+    dialog = make_dialog(qtbot)
+
+    dialog.set_posts(
+        [("One", ("1", "thumb")), ("Two", ("2", "thumb"))],
+        ticked_ids={"2"},
+    )
+
+    preview = dialog._preview.toPlainText()
+    assert translate("sort_preview_line", "Unsorted", 1) in preview
+    assert translate("sort_preview_line", "Unsorted", 2) not in preview
+
+    dialog.set_posts(
+        [("One", ("1", "thumb")), ("Two", ("2", "thumb"))],
+        ticked_ids=set(),
+    )
+
+    assert dialog._preview_posts() == []
+    assert dialog._preview.toPlainText() == translate("sort_preview_none")
+
+
+def test_sort_dialog_ignores_text_posts_by_default(qtbot):
+    dialog = cd.SortRulesDialog(
+        rules=[cd.SortRule("Cats", ("cat",))],
+        sorting_enabled=True,
+        link_all=False,
+        posts=[("Text", ("1", None)), ("Art", ("2", None))],
+        post_search_index={
+            "1": {"file_count": 0, "filenames_list": []},
+            "2": {"file_count": 2, "filenames_list": ["art.jpg"]},
+        },
+        ticked_ids={"1", "2"},
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog._ignore_text_posts_check.isChecked()
+    assert [title for title, _post in dialog._preview_posts()] == ["Art"]
+
+    dialog._ignore_text_posts_check.setChecked(False)
+    assert [title for title, _post in dialog._preview_posts()] == ["Text", "Art"]
+
+
+def test_dialog_can_clear_selection_then_create_an_unsorted_rule(qtbot):
+    dialog = make_dialog(qtbot, rules=[cd.SortRule("Cats", ("cat",))])
+
+    assert dialog._rule_list.currentRow() == 0
+    dialog._deselect_btn.click()
+    assert dialog._rule_list.currentRow() == -1
+    assert dialog._editor_group.isEnabled()
+
+    dialog._unsorted_button.click()
+
+    assert dialog.unsorted_folder() == "Unsorted"
+    assert [rule.folder for rule in dialog.rules()] == ["Cats", "Unsorted"]
+    assert dialog._rule_list.currentRow() == 1
+
+
+def test_dialog_clears_selection_when_the_last_rule_is_removed(qtbot):
+    dialog = make_dialog(qtbot, rules=[cd.SortRule("Cats", ("cat",))])
+
+    dialog._remove_btn.click()
+
+    assert dialog.rules() == []
+    assert dialog._rule_list.currentRow() == -1
+    assert dialog._editor_group.isEnabled()
+
+
 def test_dialog_previews_the_loaded_posts(qtbot):
     dialog = make_dialog(qtbot)
 
@@ -837,7 +1161,7 @@ def test_dialog_previews_the_loaded_posts(qtbot):
 def test_dialog_add_creates_a_valid_unique_folder(qtbot):
     dialog = make_dialog(qtbot, rules=[])
 
-    assert dialog._editor_group.isEnabled() is False
+    assert dialog._editor_group.isEnabled() is True
     assert dialog._no_rules_label.isHidden() is False
 
     dialog._add_rule()
@@ -851,6 +1175,63 @@ def test_dialog_add_creates_a_valid_unique_folder(qtbot):
         "New Folder 2",
     ]
     assert "(no folder)" not in dialog._rule_list.item(0).text()
+
+
+def test_dialog_draft_settings_create_the_next_rule(qtbot):
+    dialog = make_dialog(qtbot, rules=[])
+
+    assert dialog.selected_rule() is None
+    assert dialog._editor_group.isEnabled() is True
+    dialog._folder_edit.setText("Dogs")
+    dialog._values_edit.setText("dog, puppy")
+    match_all = dialog._match_combo.findData("all")
+    dialog._match_combo.setCurrentIndex(match_all)
+    dialog._scope_checks["title"].setChecked(True)
+    dialog._subfolder_per_value_check.setChecked(True)
+
+    dialog._add_rule()
+
+    rule = dialog.rules()[0]
+    assert rule.folder == "Dogs"
+    assert rule.values == ("dog", "puppy")
+    assert rule.match_all is True
+    assert rule.scopes == frozenset({"tags", "title"})
+    assert rule.subfolder_per_value is True
+    # The new rule is selected and the same settings stay visible.
+    assert dialog.selected_rule_index() == 0
+    assert dialog._folder_edit.text() == "Dogs"
+    assert dialog._values_edit.text() == "dog, puppy"
+    # Deselecting returns to the same draft defaults rather than clearing them.
+    dialog._clear_rule_selection()
+    assert dialog._folder_edit.text() == "Dogs"
+    assert dialog._values_edit.text() == "dog, puppy"
+
+
+def test_dialog_draft_values_keep_a_generated_folder_when_blank(qtbot):
+    dialog = make_dialog(qtbot, rules=[])
+    dialog._values_edit.setText("dog")
+
+    dialog._add_rule()
+
+    assert dialog.rules()[0].folder == "New Folder"
+    assert dialog.rules()[0].values == ("dog",)
+    dialog._clear_rule_selection()
+    assert dialog._folder_edit.text() == "New Folder"
+    assert dialog._values_edit.text() == "dog"
+
+
+def test_dialog_selected_rule_signal_tracks_the_draft(qtbot):
+    dialog = make_dialog(qtbot, rules=[cd.SortRule("Cats", ("cat",))])
+    seen = []
+    dialog.selected_rule_changed.connect(seen.append)
+
+    dialog._clear_rule_selection()
+    assert seen[-1] == -1
+    assert dialog.selected_rule() is None
+
+    dialog._rule_list.setCurrentRow(0)
+    assert seen[-1] == 0
+    assert dialog.selected_rule().folder == "Cats"
 
 
 def test_dialog_preview_uses_lenient_tag_matching(qtbot):
@@ -1150,7 +1531,9 @@ def test_dialog_labels_and_placeholders(qtbot):
     assert dialog._unsorted_button.parent() is dialog._rules_group
     assert dialog._editor_group.title() == "Rule Settings"
     assert dialog._run_settings_group.title() == "Run Settings"
-    assert dialog._preview.height() == 65
+    assert dialog._preview.minimumHeight() >= 90
+    assert dialog._body_splitter.orientation() == Qt.Orientation.Vertical
+    assert dialog._folder_edit.placeholderText() == "e.g. Genshin Impact/Hu Tao"
     assert dialog._match_combo.itemText(0) == "Any value"
     assert dialog._match_combo.itemText(1) == "All values"
     assert (
@@ -1223,10 +1606,18 @@ def test_sorting_translation_keys_exist_and_old_ones_are_gone():
         "sort_no_sorted_posts",
         "sort_rules_label",
         "sort_rule_add",
+        "sort_rule_add_tooltip",
         "sort_rule_remove",
         "sort_rule_up",
         "sort_rule_down",
+        "sort_rule_deselect",
+        "sort_rule_deselect_tooltip",
         "sort_rule_folder",
+        "sort_rule_folder_tooltip",
+        "sort_splitter_tooltip",
+        "sort_rule_subfolder_per_value",
+        "sort_rule_subfolder_per_value_tooltip",
+        "sort_rule_value_subfolder",
         "sort_rule_values",
         "sort_rule_any",
         "sort_rule_all",
@@ -1244,9 +1635,13 @@ def test_sorting_translation_keys_exist_and_old_ones_are_gone():
         "sort_preview_multi",
         "sort_preview_extra_links",
         "sort_invalid_folder",
+        "sort_invalid_value_folder",
+        "sort_value_subfolder_wildcard",
         "sort_missing_values",
         "sort_wildcard_only_value",
         "sort_duplicate_folder",
+        "sort_ignore_text_posts",
+        "sort_ignore_text_posts_tooltip",
         "sort_log_summary",
         "sort_log_none",
         "sort_log_no_rules",

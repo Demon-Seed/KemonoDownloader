@@ -656,8 +656,9 @@ def test_post_list_context_menu_opens_the_post_in_the_browser(
     tab._show_post_context_menu(tab.creator_post_list.rect().center())
 
     menu = captured[0]
-    assert [action.text() for action in menu.actions()] == [
-        cd.translate("open_post_in_browser")
+    assert [action.text() for action in menu.actions() if not action.isSeparator()] == [
+        cd.translate("open_post_in_browser"),
+        cd.translate("mark_downloaded"),
     ]
     assert menu.styleSheet() == cd.MENU_STYLE
     assert item.isSelected() is True

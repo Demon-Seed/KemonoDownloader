@@ -2374,10 +2374,13 @@ class SettingsTab(QWidget):
             self.settings["use_proxy"] = enabled
             self.save_settings()
 
-        # Update the UI
+        # Update the UI. Do not adjustSize() here: this page lives in a scroll
+        # area inside a tab, and shrinking/expanding it to its content turns
+        # that content height into the tab widget's minimum height.  That kept
+        # the main window from being resized shorter until a tab switch
+        # recalculated the page's size.
         self.layout().update()
         self.repaint()
-        self.adjustSize()
 
     def on_proxy_type_changed(self, index):
         proxy_type = self.proxy_type_combo.itemData(index)
@@ -2463,10 +2466,11 @@ class SettingsTab(QWidget):
                 # Update button states after auto-detection
                 self.update_tor_button_states()
 
-        # Update the UI
+        # Update the UI. See on_use_proxy_changed(): resizing the page here
+        # would pin the tab widget (and the main window) to the content
+        # height until the next tab switch.
         self.layout().update()
         self.repaint()
-        self.adjustSize()
 
     def test_custom_proxy(self):
         proxy_url = self.temp_settings["custom_proxy_url"].strip()

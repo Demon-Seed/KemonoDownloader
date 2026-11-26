@@ -129,6 +129,32 @@ class CreatorConfigStore(SQLiteStore):
             finally:
                 conn.close()
 
+    def delete_page_default(self) -> None:
+        """Remove the default profile."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                conn.execute("DELETE FROM page_default WHERE scope = 'default'")
+                conn.commit()
+            finally:
+                conn.close()
+
+    def delete_creator_config(self, service: str, creator_id: str) -> None:
+        """Remove one creator's profile."""
+        if not service or not creator_id:
+            return
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                conn.execute(
+                    "DELETE FROM creator_config "
+                    "WHERE service = ? AND creator_id = ?",
+                    (str(service), str(creator_id)),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
     # ------------------------------------------------------------------
     # Reads
     # ------------------------------------------------------------------

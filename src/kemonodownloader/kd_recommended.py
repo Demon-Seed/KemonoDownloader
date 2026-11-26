@@ -276,10 +276,15 @@ def count_recommended_keywords(
     mention_counts = Counter()
     surfaces = {}
     hit_scopes = {}
+    seen_post_ids = set()
 
     for post_id, title in post_rows:
         if cancel is not None and cancel():
             return []
+        post_key = str(post_id)
+        if post_key in seen_post_ids:
+            continue
+        seen_post_ids.add(post_key)
         facts = index.get(str(post_id))
         if not isinstance(facts, dict):
             facts = index.get(post_id)

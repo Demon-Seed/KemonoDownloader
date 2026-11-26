@@ -111,6 +111,22 @@ class DownloadHistoryDB(SQLiteStore):
             finally:
                 conn.close()
 
+    def forget_post(self, service: str, creator_id: str, post_id: str) -> None:
+        """Remove one post's download record."""
+        if not service or not creator_id or not post_id:
+            return
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                conn.execute(
+                    "DELETE FROM post_downloads "
+                    "WHERE service = ? AND creator_id = ? AND post_id = ?",
+                    (str(service), str(creator_id), str(post_id)),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
     def clear(self) -> None:
         """Remove **all** records."""
         self._delete_all("post_downloads")

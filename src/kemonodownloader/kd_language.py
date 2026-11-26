@@ -105,13 +105,23 @@ STRINGS = {
     "confirm_reset_message": "Are you sure you want to reset all settings to their default values?",
     "confirm_settings_change": "Confirm Settings Change",
     "confirm_settings_message": "Are you sure you want to apply these settings?",
+    "clear_config_btn": "Clear Current Config",
+    "clear_config_btn_tooltip": "Discard the saved config for this context and return to the next fallback.",
+    "clear_creator_config_done": "Cleared the saved config for creator {0}.",
+    "clear_creator_config_text": "Clear this creator's saved config and return to the Default config? This cannot be undone.",
+    "clear_creator_config_title": "Clear Creator Config",
+    "clear_default_config_done": "Cleared the saved Default config.",
+    "clear_default_config_text": "Clear the saved Default config and return to the program defaults? This cannot be undone.",
+    "clear_default_config_title": "Clear Default Config",
+    "config_cleared_title": "Config Cleared",
     "config_load_failed": "Could not read a saved config: {0}",
     "config_no_creator_text": "Open a creator first: a creator config has to be attached to one.",
     "config_save_failed": "Could not save the config: {0}",
+    "config_clear_failed": "Could not clear the config: {0}",
     "config_save_invalid_text": "Fix these entries first:\n{0}",
     "config_save_invalid_title": "Config Not Saved",
     "config_saved_log": "Page config saved.",
-    "config_saved_text": "Saved {0} options and {1} filter field(s).",
+    "config_saved_text": "Saved {0} settings.",
     "config_saved_title": "Config Saved",
     "config_unavailable": "Saved configs are unavailable - check the Data Directory.",
     "content_images": "Content Images",
@@ -119,7 +129,7 @@ STRINGS = {
     "created_directory": "Created directory: {0}",
     "creator_config_loaded": "Using the saved config for creator {0}.",
     "creator_config_saved_log": "Config saved for creator {0}.",
-    "creator_config_saved_text": "Saved {0} options and {1} filter field(s) for creator {2}.",
+    "creator_config_saved_text": "Saved {0} settings for creator {1}.",
     "creator_config_saved_title": "Creator Config Saved",
     "creator_download_thread_started": "CreatorDownloadThread started for service: {0}, creator_id: {1}",
     "creator_downloader_settings": "Creator Downloader",
@@ -267,6 +277,8 @@ STRINGS = {
     "language": "Language:",
     "language_changed": "Language changed to English",
     "last_downloaded_creator": "Last Downloaded from Creator: {0}",
+    "mark_downloaded": "Mark Downloaded",
+    "mark_not_downloaded": "Mark Not Downloaded",
     "last_page_reached_with_counts": "Last page reached (received {0} posts, expected {1}). Total posts fetched: {2}",
     "link_copied": "Copied link: {0}",
     "link_removed": "Link ({0}) is removed from the queue.",
@@ -381,12 +393,24 @@ STRINGS = {
     "received_less_than_page_size": "Received {0} posts (less than page size {1}), indicating last page reached",
     "recommended_keywords": "Recommended Keywords",
     "recommended_keywords_add_skip": "Add to Skip Keywords",
+    "recommended_keywords_add_to_rule": "Add to Selected Rule",
+    "recommended_keywords_add_to_rule_tooltip": (
+        "Add the selected keywords as values to the rule currently selected "
+        "in Keyword Folder Sorting."
+    ),
     "recommended_keywords_added": "Added to skip keywords: {0}",
     "recommended_keywords_column_keyword": "Keyword",
     "recommended_keywords_column_mentions": "Mentions",
     "recommended_keywords_column_posts": "Posts",
     "recommended_keywords_copy": "Copy",
+    "recommended_keywords_create_rule": "Create Rule",
+    "recommended_keywords_create_rule_tooltip": (
+        "Create one Keyword Folder Sorting rule from the selected keywords. "
+        "The most populated selected keyword names the folder; all selected "
+        "values are added to the rule."
+    ),
     "recommended_keywords_empty": "No keywords matched. Try lowering the minimum post count or selecting more scopes.",
+    "recommended_keywords_empty_filtered": "No keywords are left after the active skip filters. Turn off Ignore filtered keywords to see them.",
     "recommended_keywords_help_text": (
         "<h2>Recommended Keywords</h2>"
         "<p>This window scans the posts already loaded for the current creator. "
@@ -416,24 +440,45 @@ STRINGS = {
         "<li><b>Ignore accents</b> counts <code>café</code> and <code>cafe</code> "
         "together; both spellings are added when the keyword is applied. It "
         "never touches Japanese kana.</li>"
+        "<li><b>Ignore Text Posts</b> leaves posts with no downloadable file "
+        "out of the scan. It is on by default; the summary reports how many "
+        "posts were ignored.</li>"
+        "<li><b>Ignore filtered keywords</b> hides suggestions that already "
+        "match the active Skip Posts or Skip Files keywords, so the list does "
+        "not repeat a filter you already use. It is off by default.</li>"
         "</ul>"
         "<h3>Using a keyword</h3>"
         "<p><b>Search</b> puts the keyword in the search box and turns on the "
         "scopes selected here. <b>Add to Skip Keywords</b> appends it to the skip "
         "box and enables the matching Filter By scope, so a tag keyword actually "
-        "filters on tags.</p>"
+        "filters on tags. <b>Create Rule</b> creates one Keyword Folder Sorting "
+        "rule from the selected rows; the most populated selected keyword names "
+        "the folder and every selected keyword becomes a value. If a rule is "
+        "selected in Keyword Folder Sorting, the button changes to <b>Add to "
+        "Selected Rule</b> and the selected keywords join that rule instead.</p>"
     ),
     "recommended_keywords_help_title": "Recommended Keywords Help",
     "recommended_keywords_ignore_accents": "Ignore accents",
     "recommended_keywords_ignore_common": "Ignore common words",
+    "recommended_keywords_ignore_filters": "Ignore filtered keywords",
+    "recommended_keywords_ignore_filters_tooltip": (
+        "Hide suggestions that already match the active Skip Posts or Skip "
+        "Files keywords."
+    ),
+    "recommended_keywords_ignore_text_posts": "Ignore Text Posts",
+    "recommended_keywords_ignored_filters": "{0} keyword(s) hidden by filters.",
+    "recommended_keywords_ignored_text_posts": "{0} text post(s) ignored.",
     "recommended_keywords_intro": "Scans the posts already loaded for this creator. Tags are counted whole; longer phrases are built from words that sit next to each other.",
     "recommended_keywords_min_posts": "In at least",
-    "recommended_keywords_no_posts": "Load a creator first: there are no posts to scan.",
+    "recommended_keywords_no_posts": "No posts are available to scan. Load a creator or clear the current filters.",
+    "recommended_keywords_only_text_posts": "No posts are left after ignoring text posts. Turn off Ignore Text Posts or clear the current filters.",
     "recommended_keywords_phrase_length": "Phrase length:",
     "recommended_keywords_posts_suffix": "posts",
     "recommended_keywords_refresh": "Refresh",
     "recommended_keywords_scopes": "Search in:",
     "recommended_keywords_scanning": "Scanning posts...",
+    "recommended_keywords_rule_added": 'Added sorting rule "{0}" with {1} value(s).',
+    "recommended_keywords_rule_updated": 'Added {1} value(s) to sorting rule "{0}".',
     "recommended_keywords_search": "Search",
     "recommended_keywords_summary": "{0} keyword(s) from {1} post(s)",
     "recommended_keywords_title": "Recommended Keywords",
@@ -449,9 +494,9 @@ STRINGS = {
     "retrying_failed_files": "Retrying {0} failed file(s)",
     "retrying_creator_name_fetch": "Could not read the creator name ({0}); retrying",
     "save_config_btn": "Save Config",
-    "save_config_btn_tooltip": "Save this page's options and filters as the default for every creator.",
+    "save_config_btn_tooltip": "Save this page's options, filters, recommendation controls and sorting rules as the default for every creator.",
     "save_creator_config_btn": "Save Creator Config",
-    "save_creator_config_btn_tooltip": "Save this page's options and filters for this creator only; it replaces the default whenever this creator is loaded.",
+    "save_creator_config_btn_tooltip": "Save this page's options, filters, recommendation controls and sorting rules for this creator only; it replaces the default whenever this creator is loaded.",
     "save_directory": "Save Directory:",
     "saved_post_description": "Saved description for post {0}",
     "search_posts": "Search posts...",
@@ -524,17 +569,28 @@ STRINGS = {
     "sort_run_settings": "Run Settings",
     "sort_by_keyword": "Sort posts by keyword",
     "sort_by_keyword_tooltip": "Put posts that match a rule into <creator folder>/<rule folder>",
-    "sort_config_duplicate_folder": "Two sorting rules use the same folder name.",
-    "sort_config_invalid_folder": "A sorting rule has no usable folder name.",
+    "sort_config_duplicate_folder": "Two sorting rules use the same folder path.",
+    "sort_config_invalid_folder": "A sorting rule has no usable folder path.",
+    "sort_config_invalid_value_folder": (
+        "A sorting rule has a value that cannot be used as a folder name."
+    ),
     "sort_config_missing_values": "A sorting rule has no usable values.",
+    "sort_config_value_subfolder_wildcard": (
+        "A sorting rule uses a wildcard value for per-value folders."
+    ),
     "sort_config_wildcard_only": "A sorting rule contains a value made only of * or ?.",
     "sort_duplicate_folder": 'Rule {0}: the folder "{1}" is already used by another rule.',
     "sort_help_back": "Back",
-    "sort_help_text": "<h2>Sort posts by keyword</h2><p>Posts that match a rule go into <code>&lt;creator folder&gt;/&lt;rule folder&gt;</code>. Everything else about the download stays the same.</p><h3>Rules</h3><p>Rules are checked in order and the first match wins. A post that matches no rule goes to the creator folder.</p><h3>Values and Match</h3><p><b>Any value</b> (OR): the rule matches when at least one value matches in any selected <b>Look in</b> field.</p><p><b>All values</b> (AND): the rule matches only when every value matches somewhere in the selected fields. Different values can match different fields; they do not all have to appear in the same field.</p><p>Example: values <code>cat, dog</code> with <b>Tags</b> and <b>Title</b> selected:</p><ul><li><b>Any value</b> - a post with tag cat OR title dog matches.</li><li><b>All values</b> - a post needs both cat and dog somewhere in those fields.</li></ul><h3>Look in</h3><ul><li><b>Tags</b> - the whole tag must match by default; with Tag Matching Behavior: Lenient, a value can match any part of a tag. A tag such as <code>アイン(ブルーアーカイブ)</code> is not the same as <code>ブルーアーカイブ</code>; use <code>*ブルーアーカイブ*</code> in a rule value to match part of a tag.</li><li><b>Title</b>, <b>Filenames</b>, <b>Description</b> - the pattern must match a word.</li></ul><p><b>Filenames</b> covers main files and attachments only; content images are not checked.</p>"
+    "sort_ignore_text_posts": "Ignore Text Posts",
+    "sort_ignore_text_posts_tooltip": (
+        "Leave posts with no downloadable files out of the preview and " "sorting."
+    ),
+    "sort_help_text": "<h2>Sort posts by keyword</h2><p>Posts that match a rule go into <code>&lt;creator folder&gt;/&lt;rule folder path&gt;</code>. Everything else about the download stays the same.</p><h3>Rules</h3><p>Rules are checked in order and the first match wins. A post that matches no rule goes to the creator folder. With nothing selected, Rule Settings edits a draft; <b>Add Rule</b> turns that draft into a rule. A blank folder gets the next available <b>New Folder</b> name.</p><h3>Folder paths</h3><p>Type <code>/</code> (or <code>\\</code>) to nest folders, for example <code>Genshin Impact/Hu Tao</code>. Each part must be a name Windows can store: <code>&lt; &gt; : &quot; | ? *</code>, control characters and reserved names such as <code>CON</code> are rejected. Absolute paths and <code>..</code> cannot be used.</p><p>With <b>Create subfolder for every matched value</b>, the rule's folder path is the parent and every matched value becomes a child folder. Example: folder <code>Genshin Impact</code>, values <code>Hu Tao, Furina</code> creates <code>.../Genshin Impact/Hu Tao</code> and <code>.../Genshin Impact/Furina</code>. Values used this way must be literal names, not wildcards.</p><p>Only the first matching destination receives the file. Enable <b>Hardlink across matching folders</b> to put the file in every extra destination too. <b>Ignore Text Posts</b> keeps posts with no downloadable files out of the preview and routing; it is on by default.</p><h3>Values and Match</h3><p><b>Any value</b> (OR): the rule matches when at least one value matches in any selected <b>Look in</b> field.</p><p><b>All values</b> (AND): the rule matches only when every value matches somewhere in the selected fields. Different values can match different fields; they do not all have to appear in the same field.</p><p>Example: values <code>cat, dog</code> with <b>Tags</b> and <b>Title</b> selected:</p><ul><li><b>Any value</b> - a post with tag cat OR title dog matches.</li><li><b>All values</b> - a post needs both cat and dog somewhere in those fields.</li></ul><h3>Look in</h3><ul><li><b>Tags</b> - the whole tag must match by default; with Tag Matching Behavior: Lenient, a value can match any part of a tag. A tag such as <code>アイン(ブルーアーカイブ)</code> is not the same as <code>ブルーアーカイブ</code>; use <code>*ブルーアーカイブ*</code> in a rule value to match part of a tag.</li><li><b>Title</b>, <b>Filenames</b>, <b>Description</b> - the pattern must match a word.</li></ul><p><b>Filenames</b> covers main files and attachments only; content images are not checked.</p>"
     + _KEYWORD_SYNTAX_HTML
     + "<h3>Hardlinks</h3><p>With <b>Hardlink across matching folders</b>, every matching folder gets a hardlink. Hardlinks share the same bytes and cost no extra space, but some cloud-sync clients upload each name separately.</p><h3>Unsorted posts</h3><p>Posts that match no rule go to the creator folder. Turn off <b>Download Unsorted</b> to leave them out of the run, or select a rule and use <b>Set Unsorted</b> to put them in that rule's folder. With no rule selected, <b>Set Unsorted</b> creates an <b>Unsorted</b> rule that needs no values. The button changes to <b>Clear Unsorted</b>; clear it before choosing another rule.</p><h3>Preview</h3><p>The preview uses the details from the current fetch. A post with no details can still match on its title; other scopes need the details.</p><p>The Punctuation Matching Behavior setting applies to literal edges in sorting values too; a <code>*</code> edge is unrestricted.</p><p>Apply changes on this page; use Save Config or Save Creator Config to keep the rules.</p>",
     "sort_help_title": "Sort posts by keyword - Help",
-    "sort_invalid_folder": "Rule {0}: the folder name is empty or unusable.",
+    "sort_invalid_folder": "Rule {0}: the folder path is empty or unusable.",
+    "sort_invalid_value_folder": 'Rule {0}: "{1}" cannot be used as a folder name.',
     "sort_invalid_text": "Fix these before applying:\n{0}",
     "sort_invalid_title": "Sort rules",
     "sort_keyword_rules": "Keyword Folder Sorting",
@@ -550,7 +606,7 @@ STRINGS = {
     "sort_log_summary": "Auto-sort: {0}; {1} unsorted, {2} with no details.",
     "sort_missing_values": "Rule {0}: add at least one value.",
     "sort_new_folder": "New Folder",
-    "sort_no_rules_hint": "Add a rule to start.",
+    "sort_no_rules_hint": "Set the fields on the right, then press Add Rule.",
     "sort_no_sorted_posts": "No selected posts matched a sorting rule; enable Download Unsorted or add a rule.",
     "sort_preview_extra_links": "Extra folders per file: {0}",
     "sort_preview_label": "Preview",
@@ -561,20 +617,37 @@ STRINGS = {
     "sort_preview_unsorted": "Unsorted: {0}",
     "sort_preview_unsorted_skipped": "Unsorted (not downloaded): {0}",
     "sort_rule_add": "Add Rule",
+    "sort_rule_add_tooltip": "Add the values and settings shown in Rule Settings as a new rule.",
     "sort_rule_all": "All values",
     "sort_rule_any": "Any value",
     "sort_rule_down": "Move Down",
-    "sort_rule_folder": "Folder:",
-    "sort_rule_folder_placeholder": "e.g. Ado",
+    "sort_rule_deselect": "Deselect",
+    "sort_rule_deselect_tooltip": (
+        "Clear the rule selection. With nothing selected, Set Unsorted "
+        "creates a new Unsorted rule."
+    ),
+    "sort_rule_folder": "Folder path:",
+    "sort_rule_folder_placeholder": "e.g. Genshin Impact/Hu Tao",
+    "sort_rule_folder_tooltip": (
+        "Use / (or \\) to create nested folders. Windows-invalid characters "
+        '(< > : " | ? *) and reserved names such as CON are rejected.'
+    ),
     "sort_rule_no_values": "(no values)",
     "sort_rule_remove": "Remove",
     "sort_rule_scopes": "Look in:",
+    "sort_rule_subfolder_per_value": "Create subfolder for every matched value",
+    "sort_rule_subfolder_per_value_tooltip": (
+        "Use every matched value as a child folder under the folder path. "
+        "Values used this way must be literal names, not wildcards."
+    ),
     "sort_rule_summary": "{0}. {1} - {2}",
     "sort_rule_up": "Move Up",
+    "sort_rule_value_subfolder": "<value>",
     "sort_rule_values": "Values:",
     "sort_rule_values_placeholder": "e.g. JP, EN (comma-separated)",
     "sort_rules_label": "Rules",
     "sort_rules_saved": "Keyword rules: {0} rule(s) configured.",
+    "sort_splitter_tooltip": "Drag to resize the Rules and Preview panels.",
     "sort_scope_description": "Description",
     "sort_scope_filenames": "Filenames",
     "sort_scope_tags": "Tags",
@@ -582,6 +655,9 @@ STRINGS = {
     "sort_status_off": "Sorting is Off - toggle it with the switch on the page.",
     "sort_status_on": "Sorting is On - toggle it with the switch on the page.",
     "sort_title": "Sort posts by keyword",
+    "sort_value_subfolder_wildcard": (
+        'Rule {0}: "{1}" is a wildcard, so it cannot name a per-value folder.'
+    ),
     "sort_wildcard_only_value": 'Rule {0}: "{1}" is only wildcards; add some text.',
     "wildcard_only_keyword_ignored": "A keyword made only of * or ? was ignored; add some text.",
     "start_tor": "Start Tor",

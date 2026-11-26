@@ -257,11 +257,13 @@ def test_config_buttons_sit_right_of_the_log_button(qtbot, tmp_path):
     assert row.indexOf(tab.creator_log_btn) == 0
     assert row.indexOf(tab.creator_save_config_btn) == 1
     assert row.indexOf(tab.creator_save_creator_config_btn) == 2
-    # Same styling, so the three buttons share one height.
+    assert row.indexOf(tab.creator_clear_config_btn) == 3
+    # Same styling, so the four buttons share one height.
     assert (
         tab.creator_save_config_btn.styleSheet()
         == tab.creator_log_btn.styleSheet()
         == tab.creator_save_creator_config_btn.styleSheet()
+        == tab.creator_clear_config_btn.styleSheet()
     )
     # They are not with the run controls any more.
     assert tab.creator_save_config_btn.parentWidget() is not (
@@ -278,6 +280,8 @@ def test_log_and_config_keys_are_translated():
         "save_config_btn_tooltip",
         "save_creator_config_btn",
         "save_creator_config_btn_tooltip",
+        "clear_config_btn",
+        "clear_config_btn_tooltip",
     )
     for key in keys:
         assert cd.translate(key, 1) not in ("", key)

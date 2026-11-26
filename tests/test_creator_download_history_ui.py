@@ -2,12 +2,12 @@
 
 from types import SimpleNamespace
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtCore import QPoint, QRect, Qt
+from PyQt6.QtWidgets import QMenu, QWidget
 
-from kemonodownloader import creator_downloader as cd
+from kemonodownloader import creator_downloader as cd, kd_help
 from kemonodownloader.download_history import DownloadHistoryDB, iso_to_local_date
-from kemonodownloader.kd_help import show_help
+from kemonodownloader.kd_help import HelpWindow, show_help
 from kemonodownloader.kd_language import language_manager, translate
 
 STAMP = "2026-01-02T03:04:05+00:00"
@@ -365,6 +365,62 @@ def test_checkbox_toggle_resolves_the_post_behind_a_dated_label(qtbot, tmp_path)
     assert widget.check_box.isChecked() is True
 
 
+def _show_post_menu(tab, item, monkeypatch):
+    captured = []
+    monkeypatch.setattr(QMenu, "exec", lambda menu, *a, **k: captured.append(menu))
+    tab._show_post_menu(item, QPoint(0, 0))
+    return captured[-1]
+
+
+def test_post_menu_offers_mark_downloaded_only_for_an_unmarked_post(
+    qtbot, tmp_path, monkeypatch
+):
+    tab, other_dir = make_tab(qtbot, tmp_path)
+    tab.current_creator_url = CREATOR_URL
+    widget = add_post_row(tab, "Title (2024-01-01)", "1")
+    item = tab.creator_post_list.item(0)
+
+    menu = _show_post_menu(tab, item, monkeypatch)
+    texts = [action.text() for action in menu.actions()]
+    assert translate("mark_downloaded") in texts
+    assert translate("mark_not_downloaded") not in texts
+
+    next(
+        action for action in menu.actions() if action.text() == translate("mark_downloaded")
+    ).trigger()
+
+    assert "1" in tab._post_history_cache
+    assert widget.label.textFormat() == Qt.TextFormat.RichText
+    assert DownloadHistoryDB(other_dir).get_post_times("patreon", "123")
+
+
+def test_post_menu_offers_mark_not_downloaded_only_for_a_marked_post(
+    qtbot, tmp_path, monkeypatch
+):
+    tab, other_dir = make_tab(qtbot, tmp_path)
+    tab.current_creator_url = CREATOR_URL
+    DownloadHistoryDB(other_dir).record_post("patreon", "123", "1", STAMP)
+    tab._load_post_history()
+    widget = add_post_row(tab, "Title (2024-01-01)", "1")
+    item = tab.creator_post_list.item(0)
+
+    menu = _show_post_menu(tab, item, monkeypatch)
+    texts = [action.text() for action in menu.actions()]
+    assert translate("mark_not_downloaded") in texts
+    assert translate("mark_downloaded") not in texts
+
+    next(
+        action
+        for action in menu.actions()
+        if action.text() == translate("mark_not_downloaded")
+    ).trigger()
+
+    assert "1" not in tab._post_history_cache
+    assert not DownloadHistoryDB(other_dir).get_post_times("patreon", "123")
+    assert widget.label.textFormat() == Qt.TextFormat.PlainText
+    assert widget.label.text() == "Title (2024-01-01)"
+
+
 def test_loading_post_history_is_scoped_to_the_viewed_creator(qtbot, tmp_path):
     tab, other_dir = make_tab(qtbot, tmp_path)
     db = DownloadHistoryDB(other_dir)
@@ -585,6 +641,40 @@ def test_help_window_fits_the_related_bar_and_its_text(qtbot):
     window.close()
 
 
+def test_help_window_opens_tall_topics_to_content_size(qtbot, monkeypatch):
+    fake_screen = SimpleNamespace(availableGeometry=lambda: QRect(0, 0, 1440, 1080))
+    monkeypatch.setattr(HelpWindow, "screen", lambda _window: fake_screen)
+    window = HelpWindow()
+    qtbot.addWidget(window)
+
+    window.show_topic(
+        translate("recommended_keywords_help_title"),
+        translate("recommended_keywords_help_text"),
+    )
+    qtbot.wait(10)
+
+    assert window.height() > 620
+    assert window._browser.verticalScrollBar().isVisible() is False
+    assert window._browser.viewport().height() >= int(
+        window._browser.document().size().height()
+    )
+    window.close()
+
+
+def test_help_window_still_caps_a_very_long_topic(qtbot, monkeypatch):
+    fake_screen = SimpleNamespace(availableGeometry=lambda: QRect(0, 0, 1440, 1080))
+    monkeypatch.setattr(HelpWindow, "screen", lambda _window: fake_screen)
+    window = HelpWindow()
+    qtbot.addWidget(window)
+
+    window.show_topic("Long Help", "\n".join(f"line {i}" for i in range(200)))
+    qtbot.wait(10)
+
+    assert window.height() <= kd_help.MAX_HEIGHT
+    assert window._browser.verticalScrollBar().isVisible() is True
+    window.close()
+
+
 def test_every_creator_info_button_opens_the_shared_help_topic(
     qtbot, tmp_path, monkeypatch
 ):
@@ -625,6 +715,8 @@ def test_new_translation_keys_exist_in_every_language():
             language_manager.set_language(language)
             for key in (
                 "last_downloaded_creator",
+                "mark_downloaded",
+                "mark_not_downloaded",
                 "never_downloaded",
                 "not_available",
                 "downloader_box_info_title",

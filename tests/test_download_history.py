@@ -92,6 +92,28 @@ def test_ids_are_coerced_to_text(tmp_path):
     assert db.get_post_times("patreon", "123") == {"456": EARLY}
 
 
+def test_forget_post_removes_only_that_record(tmp_path):
+    db = DownloadHistoryDB(str(tmp_path))
+    db.record_post("patreon", "123", "p1", EARLY)
+    db.record_post("patreon", "123", "p2", LATER)
+
+    db.forget_post("patreon", "123", "p1")
+
+    assert db.get_post_times("patreon", "123") == {"p2": LATER}
+    assert db.get_creator_time("patreon", "123") == LATER
+
+
+def test_forget_post_ignores_missing_identity(tmp_path):
+    db = DownloadHistoryDB(str(tmp_path))
+    db.record_post("patreon", "123", "p1", EARLY)
+
+    db.forget_post("", "123", "p1")
+    db.forget_post("patreon", "", "p1")
+    db.forget_post("patreon", "123", "")
+
+    assert db.count() == 1
+
+
 def test_clear_removes_every_record(tmp_path):
     db = DownloadHistoryDB(str(tmp_path))
     db.record_post("patreon", "123", "p1", EARLY)

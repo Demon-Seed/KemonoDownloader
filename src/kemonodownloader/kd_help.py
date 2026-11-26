@@ -8,6 +8,7 @@ new help button replace the content in place instead of stacking dialogs.
 
 from __future__ import annotations
 
+import math
 import re
 
 from PyQt6.QtCore import QPoint, QSize
@@ -33,8 +34,12 @@ MIN_WIDTH = 360
 MIN_HEIGHT = 140
 MIN_CONTENT_WIDTH = 340
 MAX_CONTENT_WIDTH = 720
-MAX_HEIGHT = 620
-SCREEN_MARGIN = 80
+# The screen itself is the real height limit; this only keeps a pathological
+# topic from asking for an absurd window on an unusually tall display.
+MAX_HEIGHT = 2000
+# Keep only a small gutter at the screen edge. The previous 80px cap, combined
+# with display scaling, could leave a tall topic a few pixels too short.
+SCREEN_MARGIN = 24
 # Space kept beside the content for the browser's vertical scrollbar, so the
 # text is measured at least as narrow as it will actually be rendered.
 SCROLLBAR_ALLOWANCE = 24
@@ -209,12 +214,22 @@ class HelpWindow(QDialog):
             )
         width = min(width, max_width)
 
-        # Measure at the width the browser really gets after every cap, and
-        # add the document margin the browser itself draws around the text.
-        viewport_width = max(1, width - margins.left() - margins.right())
+        # Measure at the width the browser really gets after every cap, less
+        # its frame and vertical scrollbar, then add the document margin the
+        # browser itself draws around the text. Measuring the full width made
+        # the height too short and clipped the final line once a scrollbar
+        # appeared.
+        scrollbar_width = max(
+            SCROLLBAR_ALLOWANCE,
+            self._browser.verticalScrollBar().sizeHint().width(),
+        )
+        chrome_width = 2 * self._browser.frameWidth() + scrollbar_width
+        viewport_width = max(1, width - margins.left() - margins.right() - chrome_width)
         document.setTextWidth(viewport_width)
-        content_height = int(document.size().height())
-        content_height += int(self._browser.document().documentMargin() * 2)
+        content_height = math.ceil(document.size().height())
+        content_height += math.ceil(self._browser.document().documentMargin() * 2)
+        # A pixel or two of layout rounding must not hide the final line.
+        content_height += 2
 
         # Only the widgets that are actually visible add a gap between them.
         gaps = 2 if related_visible else 1

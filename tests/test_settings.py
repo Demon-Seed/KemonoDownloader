@@ -65,6 +65,22 @@ class TestDefaultSettings:
             st.deleteLater()
 
 
+def test_settings_page_does_not_pin_the_tab_widget_height(qtbot):
+    """The Settings page must not turn its content height into a window minimum."""
+    from PyQt6.QtWidgets import QTabWidget, QWidget
+
+    tabs = QTabWidget()
+    qtbot.addWidget(tabs)
+    tabs.addTab(QWidget(), "Creator")
+    settings = SettingsTab(None)
+    tabs.addTab(settings, "Settings")
+    tabs.show()
+    qtbot.wait(10)
+
+    assert settings.minimumHeight() == 0
+    assert tabs.minimumSizeHint().height() < 700
+
+
 class TestBaseDirectoryLogic:
     """Tests for base directory path logic."""
 

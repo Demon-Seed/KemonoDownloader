@@ -25,6 +25,7 @@ from PyQt6.QtCore import (
     QByteArray,
     QIODevice,
     QObject,
+    QRegularExpression,
     QSize,
     Qt,
     QThread,
@@ -32,7 +33,14 @@ from PyQt6.QtCore import (
     QUrl,
     pyqtSignal,
 )
-from PyQt6.QtGui import QDesktopServices, QImageReader, QPixmap
+from PyQt6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QImageReader,
+    QPainter,
+    QPixmap,
+    QRegularExpressionValidator,
+)
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -56,6 +64,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QSplitter,
+    QSplitterHandle,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -115,6 +124,7 @@ from kemonodownloader.kd_theme import (
     RADIUS,
     SURFACE_ALT,
     TEXT,
+    TEXT_MUTED,
     WINDOW_BG,
     button_states,
     scoped,
@@ -902,6 +912,27 @@ def filetypes_out_of_scope(facts, filters):
             return False
         return not filters.download_post_text
     return not extensions & required
+
+
+def post_is_text_only(facts):
+    """True when the post index says the post has no downloadable files.
+
+    A text post has no main file, attachments or content images.  A missing
+    index entry is *not* treated as text: without facts the caller cannot
+    know, and dropping such a post would hide a real download.  A post with
+    file names or extension counts is likewise kept even when ``file_count``
+    is unavailable or inconsistent.
+    """
+    if not isinstance(facts, dict):
+        return False
+    if facts.get("filenames_list") or facts.get("extensions"):
+        return False
+    if "file_count" not in facts:
+        return False
+    try:
+        return int(facts.get("file_count") or 0) <= 0
+    except (TypeError, ValueError):
+        return False
 
 
 def post_skip_reason(post_title, facts, filters):
@@ -2573,6 +2604,9 @@ _RESERVED_WINDOWS_NAMES = frozenset(
     | {f"com{number}" for number in range(1, 10)}
     | {f"lpt{number}" for number in range(1, 10)}
 )
+# Windows rejects these characters in a path component. Slashes are handled
+# as path separators before each component is checked.
+_WINDOWS_INVALID_FOLDER_CHARS = frozenset('<>:"|?*')
 
 SORT_SCOPE_LABELS = {
     "title": "sort_scope_title",
@@ -2585,11 +2619,15 @@ SORT_SCOPE_LABELS = {
 class SortRule(NamedTuple):
     """One sorting rule: where a post goes and what sends it there.
 
-    ``folder`` is a single folder name created inside the creator's folder,
+    ``folder`` is a relative folder path created inside the creator's folder,
     so a sorted post keeps following every creator-folder rule (strategy,
-    skip-post-folder, templates) without a second code path. ``scopes`` names
-    the fields the values are checked against; no separate "tag vs keyword"
-    mode exists.
+    skip-post-folder, templates) without a second code path.  A path may use
+    ``/`` (or ``\\``) to create nested folders. ``scopes`` names the fields the
+    values are checked against; no separate "tag vs keyword" mode exists.
+
+    With ``subfolder_per_value`` the rule creates one child folder under
+    ``folder`` for every value that matched.  The value text is used as the
+    child name, so literal values are required for predictable paths.
     """
 
     folder: str
@@ -2597,34 +2635,39 @@ class SortRule(NamedTuple):
     match_all: bool = False
     scopes: frozenset = frozenset({"tags"})
     enabled: bool = True
+    subfolder_per_value: bool = False
 
 
 class SortRouting(NamedTuple):
     """The result of routing one run's posts through the sorting rules."""
 
-    # post id -> every matching folder name, in rule order (primary first).
+    # post id -> every matching relative folder path, in rule order
+    # (primary first).
     folders: dict
-    # primary folder -> number of posts routed there.
+    # primary folder path -> number of posts routed there.
     counts: dict
     multi_match: int
     missing_facts: int
     unsorted: int
 
 
-def normalize_sort_folder(name):
-    """Return ``(folder, problem_key)`` for a rule's folder name.
+def normalize_sort_folder_segment(name):
+    """Return ``(folder, problem_key)`` for one relative folder segment.
 
-    Only a single path segment is accepted: a rule may not escape the
-    creator folder with ``..``, an absolute path or a drive letter, and a
-    name Windows cannot store is reported instead of silently becoming a
-    different folder than the one the user typed.
+    A segment may not contain path separators, an invalid Windows filename
+    character, a control character, or a trailing dot.  These are rejected
+    instead of being turned into a different folder by sanitising.
     """
     raw = str(name or "").strip()
     if not raw or raw in (".", ".."):
         return "", "sort_config_invalid_folder"
-    if os.path.isabs(raw) or re.match(r"^[A-Za-z]:", raw):
-        return "", "sort_config_invalid_folder"
     if "/" in raw or "\\" in raw:
+        return "", "sort_config_invalid_folder"
+    if any(character in _WINDOWS_INVALID_FOLDER_CHARS for character in raw):
+        return "", "sort_config_invalid_folder"
+    if any(ord(character) < 32 or ord(character) == 127 for character in raw):
+        return "", "sort_config_invalid_folder"
+    if raw.endswith("."):
         return "", "sort_config_invalid_folder"
     cleaned = sanitize_filename(raw)
     if cleaned == "unnamed" or not cleaned.strip():
@@ -2632,6 +2675,29 @@ def normalize_sort_folder(name):
     if cleaned.split(".")[0].casefold() in _RESERVED_WINDOWS_NAMES:
         return "", "sort_config_invalid_folder"
     return cleaned, ""
+
+
+def normalize_sort_folder(name):
+    """Return ``(folder, problem_key)`` for a rule's relative folder path.
+
+    Nested paths use ``/`` (a typed ``\\`` is accepted and normalised).  Every
+    segment is validated separately, so a path can never escape the creator
+    folder with ``..``, an absolute path or a drive letter, and a name Windows
+    cannot store is reported instead of silently becoming a different folder
+    than the one the user typed.  The stored form always uses ``/``.
+    """
+    raw = str(name or "").strip().replace("\\", "/")
+    if not raw or raw in (".", ".."):
+        return "", "sort_config_invalid_folder"
+    if raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
+        return "", "sort_config_invalid_folder"
+    components = []
+    for part in raw.split("/"):
+        component, problem = normalize_sort_folder_segment(part)
+        if problem:
+            return "", problem
+        components.append(component)
+    return "/".join(components), ""
 
 
 def _scope_texts(post_title, facts, scope):
@@ -2655,27 +2721,19 @@ def _scope_texts(post_title, facts, scope):
     return []
 
 
-def sort_rule_matches(
+def _sort_rule_value_checks(
     post_title, facts, rule, lenient_punctuation=False, lenient_tags=False
 ):
-    """True when *rule* sends this post to its folder.
-
-    Every value is one wildcard pattern. Tags are matched against the whole
-    tag by default, or as a substring in Tag Matching Behavior: Lenient.
-    Title/Filenames/Description are matched word-wise. Literal edges follow
-    the Punctuation Matching Behavior setting, while a ``*`` edge matches
-    freely. A post with no facts can still match on its title; every other
-    scope needs the facts and is skipped when they are missing.
-    """
+    """Return ``[(value, matched), ...]`` for one rule, in value order."""
     if rule is None or not getattr(rule, "enabled", True):
-        return False
+        return []
     values = [
         str(value).strip()
         for value in (rule.values or ())
         if str(value).strip() and not wildcard_value_is_unusable(value)
     ]
     if not values:
-        return False
+        return []
     scopes = set(rule.scopes or ()) or {"tags"}
     checks = []
     for value in values:
@@ -2696,8 +2754,51 @@ def sort_rule_matches(
                     break
             if matched:
                 break
-        checks.append(matched)
-    return all(checks) if rule.match_all else any(checks)
+        checks.append((value, matched))
+    return checks
+
+
+def sort_rule_matches(
+    post_title, facts, rule, lenient_punctuation=False, lenient_tags=False
+):
+    """True when *rule* sends this post to its folder.
+
+    Every value is one wildcard pattern. Tags are matched against the whole
+    tag by default, or as a substring in Tag Matching Behavior: Lenient.
+    Title/Filenames/Description are matched word-wise. Literal edges follow
+    the Punctuation Matching Behavior setting, while a ``*`` edge matches
+    freely. A post with no facts can still match on its title; every other
+    scope needs the facts and is skipped when they are missing.
+    """
+    checks = _sort_rule_value_checks(
+        post_title, facts, rule, lenient_punctuation, lenient_tags
+    )
+    if not checks:
+        return False
+    if rule.match_all:
+        return all(matched for _value, matched in checks)
+    return any(matched for _value, matched in checks)
+
+
+def sort_rule_matched_values(
+    post_title, facts, rule, lenient_punctuation=False, lenient_tags=False
+):
+    """Return the rule values that matched, in value order.
+
+    An AND rule returns every value only when the whole rule matched; an OR
+    rule returns the values that actually matched.  The resolver uses this to
+    make one subfolder per matched value without running the matchers twice.
+    """
+    checks = _sort_rule_value_checks(
+        post_title, facts, rule, lenient_punctuation, lenient_tags
+    )
+    if not checks:
+        return ()
+    if rule.match_all:
+        if not all(matched for _value, matched in checks):
+            return ()
+        return tuple(value for value, _matched in checks)
+    return tuple(value for value, matched in checks if matched)
 
 
 def resolve_sort_folders(
@@ -2723,8 +2824,12 @@ def resolve_sort_folders(
     index = post_search_index or {}
     usable = [rule for rule in (rules or ()) if rule.enabled]
     unsorted_folder = str(unsorted_folder or "").strip()
+    seen_post_ids = set()
     for post_title, (post_id, _thumbnail) in posts or ():
         key = str(post_id)
+        if key in seen_post_ids:
+            continue
+        seen_post_ids.add(key)
         facts = index.get(post_id)
         if facts is None:
             facts = index.get(key)
@@ -2733,20 +2838,46 @@ def resolve_sort_folders(
             facts = {}
         matched = []
         seen_folders = set()
+        matched_rule_count = 0
         for rule in usable:
             if not has_facts and "title" not in (rule.scopes or ()):
                 continue
-            if not sort_rule_matches(
+            matched_values = sort_rule_matched_values(
                 post_title, facts, rule, lenient_punctuation, lenient_tags
-            ):
+            )
+            if not matched_values:
                 continue
+            base_folder, base_problem = normalize_sort_folder(rule.folder)
+            if base_problem:
+                base_folder = str(rule.folder or "").strip()
+            destinations = []
+            seen_destinations = set()
+            if rule.subfolder_per_value:
+                for value in matched_values:
+                    child, problem = normalize_sort_folder_segment(value)
+                    if problem:
+                        continue
+                    destination = f"{base_folder}/{child}" if base_folder else child
+                    destination_key = destination.casefold()
+                    if destination_key not in seen_destinations:
+                        seen_destinations.add(destination_key)
+                        destinations.append(destination)
+            if not destinations:
+                # A hand-edited profile with an invalid per-value name still
+                # has a usable parent folder; never lose the match entirely.
+                destinations = [base_folder or str(rule.folder or "").strip()]
             # A hand-edited profile can name the same folder twice; one link
             # per distinct folder is the only outcome that makes sense.
-            folder_key = rule.folder.casefold()
-            if folder_key in seen_folders:
-                continue
-            seen_folders.add(folder_key)
-            matched.append(rule.folder)
+            added = False
+            for destination in destinations:
+                folder_key = destination.casefold()
+                if not destination or folder_key in seen_folders:
+                    continue
+                seen_folders.add(folder_key)
+                matched.append(destination)
+                added = True
+            if added:
+                matched_rule_count += 1
         matched = tuple(matched)
         if not matched:
             if has_facts:
@@ -2759,9 +2890,32 @@ def resolve_sort_folders(
             continue
         folders[key] = matched
         counts[matched[0]] = counts.get(matched[0], 0) + 1
-        if len(matched) > 1:
+        if matched_rule_count > 1:
             multi_match += 1
     return SortRouting(folders, counts, multi_match, missing_facts, unsorted)
+
+
+def sort_rule_bad_value_folders(rule):
+    """Return ``[(value, reason), ...]`` for unusable per-value folders.
+
+    ``reason`` is ``"wildcard"`` when the value is a pattern rather than a
+    literal name, otherwise ``"invalid"`` for a value Windows cannot store as
+    one folder segment.  Only rules with ``subfolder_per_value`` are checked.
+    """
+    if rule is None or not getattr(rule, "subfolder_per_value", False):
+        return []
+    bad = []
+    for value in rule.values or ():
+        text = str(value).strip()
+        if not text or wildcard_value_is_unusable(text):
+            continue
+        if "*" in text or "?" in text:
+            bad.append((text, "wildcard"))
+            continue
+        _child, problem = normalize_sort_folder_segment(text)
+        if problem:
+            bad.append((text, "invalid"))
+    return bad
 
 
 def sort_rule_to_dict(rule):
@@ -2772,6 +2926,7 @@ def sort_rule_to_dict(rule):
         "match_all": bool(rule.match_all),
         "scopes": sorted(rule.scopes),
         "enabled": bool(rule.enabled),
+        "subfolder_per_value": bool(rule.subfolder_per_value),
     }
 
 
@@ -2813,6 +2968,7 @@ def sort_rule_from_dict(data):
         match_all=bool(data.get("match_all")),
         scopes=scopes,
         enabled=bool(data.get("enabled", True)),
+        subfolder_per_value=bool(data.get("subfolder_per_value", False)),
     )
 
 
@@ -5015,7 +5171,7 @@ class CreatorDownloadThread(_StoppableThread, QThread):
         )
         created = 0
         for folder_name in matches[1:]:
-            dest_dir = os.path.join(creator_folder, folder_name)
+            dest_dir = os.path.normpath(os.path.join(creator_folder, folder_name))
             existing = os.path.join(dest_dir, filename)
             try:
                 if os.path.exists(existing):
@@ -5139,7 +5295,9 @@ class CreatorDownloadThread(_StoppableThread, QThread):
             (getattr(self, "post_sort_folders", None) or {}).get(str(post_id)) or ()
         )
         base_folder = (
-            os.path.join(creator_folder, matches[0]) if matches else creator_folder
+            os.path.normpath(os.path.join(creator_folder, matches[0]))
+            if matches
+            else creator_folder
         )
 
         # ``post_folder_name`` stays None whenever the file lands in a folder
@@ -5219,7 +5377,9 @@ class CreatorDownloadThread(_StoppableThread, QThread):
             (getattr(self, "post_sort_folders", None) or {}).get(str(post_id)) or ()
         )
         base_folder = (
-            os.path.join(creator_folder, matches[0]) if matches else creator_folder
+            os.path.normpath(os.path.join(creator_folder, matches[0]))
+            if matches
+            else creator_folder
         )
 
         if strategy == "by_file_type":
@@ -6368,6 +6528,66 @@ class _CreatorQueueComposer(QLineEdit):
         menu.deleteLater()
 
 
+class _GripSplitterHandle(QSplitterHandle):
+    """A thin, rounded drag bar with one centered grab line."""
+
+    def __init__(self, orientation, parent):
+        super().__init__(orientation, parent)
+        self._hover = False
+        self.setCursor(Qt.CursorShape.SizeVerCursor)
+        self.setToolTip(translate("sort_splitter_tooltip"))
+
+    def enterEvent(self, event):
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        # Leave a transparent gutter above and below the visible bar so it
+        # does not touch the Rules or Preview boxes. The handle itself stays
+        # wider than the bar so the drag target remains easy to hit.
+        bar_margin = min(4, max(1, (self.height() - 3) // 2))
+        bar_height = max(1, self.height() - bar_margin * 2)
+        painter.setBrush(QColor(BORDER))
+        painter.drawRoundedRect(
+            6,
+            bar_margin,
+            max(1, self.width() - 12),
+            bar_height,
+            2,
+            2,
+        )
+
+        line_width = min(28, max(16, self.width() - 24))
+        line_height = 2
+        painter.setBrush(QColor(TEXT if self._hover else TEXT_MUTED))
+        painter.drawRoundedRect(
+            (self.width() - line_width) // 2,
+            (self.height() - line_height) // 2,
+            line_width,
+            line_height,
+            1,
+            1,
+        )
+        painter.end()
+
+
+class _GripSplitter(QSplitter):
+    """Vertical splitter whose handle advertises that it can be dragged."""
+
+    def createHandle(self):
+        return _GripSplitterHandle(self.orientation(), self)
+
+
 class SortRulesDialog(QDialog):
     """Editor for the Creator tab's keyword sorting rules.
 
@@ -6379,6 +6599,8 @@ class SortRulesDialog(QDialog):
     """
 
     applied = pyqtSignal()
+    # Row of the rule currently selected in the editor, or -1 for the draft.
+    selected_rule_changed = pyqtSignal(int)
 
     def __init__(
         self,
@@ -6392,16 +6614,25 @@ class SortRulesDialog(QDialog):
         unsorted_folder="",
         lenient_punctuation=False,
         lenient_tags=False,
+        ignore_text_posts=True,
         parent=None,
     ):
         super().__init__(parent)
         self._rules = [rule for rule in (rules or ()) if isinstance(rule, SortRule)]
-        self._posts = list(posts or ())
+        self._posts = []
+        seen_post_ids = set()
+        for title, (post_id, thumbnail) in posts or ():
+            post_id = str(post_id)
+            if post_id in seen_post_ids:
+                continue
+            seen_post_ids.add(post_id)
+            self._posts.append((title, (post_id, thumbnail)))
         self._post_search_index = post_search_index or {}
         self._ticked_ids = {str(post_id) for post_id in (ticked_ids or ())}
         self._lenient_punctuation = bool(lenient_punctuation)
         self._lenient_tags = bool(lenient_tags)
         self._download_unsorted = bool(download_unsorted)
+        self._ignore_text_posts_default = bool(ignore_text_posts)
         folder, _problem = normalize_sort_folder(unsorted_folder)
         rule_folders = {
             normalize_sort_folder(rule.folder)[0].casefold()
@@ -6412,10 +6643,13 @@ class SortRulesDialog(QDialog):
             folder if folder and folder.casefold() in rule_folders else ""
         )
         self._loading = False
+        # Editable settings used while no rule is selected. Add Rule turns
+        # this draft into a real rule.
+        self._draft_rule = self._default_draft_rule()
 
         self.setWindowTitle(translate("sort_title"))
         self.setModal(False)
-        self.resize(940, 700)
+        self.resize(940, 780)
         self.setStyleSheet(f"background: {WINDOW_BG}; color: #F2F3F5;")
         self._build_ui(sorting_enabled, link_all, download_unsorted, unsorted_folder)
         self._refresh_list()
@@ -6456,7 +6690,6 @@ class SortRulesDialog(QDialog):
         editor_layout = QVBoxLayout(self._editor_page)
         editor_layout.setContentsMargins(0, 0, 0, 0)
 
-        middle = QHBoxLayout()
         rules_group = QGroupBox(translate("sort_rules_label"))
         rules_group.setStyleSheet(
             "QGroupBox { color: #F2F3F5; font-weight: bold; padding: 10px; }"
@@ -6480,8 +6713,11 @@ class SortRulesDialog(QDialog):
         self._rule_list.itemChanged.connect(self._on_item_changed)
         left.addWidget(self._rule_list)
 
-        rule_buttons = QHBoxLayout()
+        rule_buttons = QGridLayout()
+        rule_buttons.setContentsMargins(0, 0, 0, 0)
+        rule_buttons.setHorizontalSpacing(6)
         self._add_btn = QPushButton(translate("sort_rule_add"))
+        self._add_btn.setToolTip(translate("sort_rule_add_tooltip"))
         self._add_btn.clicked.connect(self._add_rule)
         self._remove_btn = QPushButton(translate("sort_rule_remove"))
         self._remove_btn.clicked.connect(self._remove_rule)
@@ -6489,20 +6725,23 @@ class SortRulesDialog(QDialog):
         self._up_btn.clicked.connect(lambda: self._move_rule(-1))
         self._down_btn = QPushButton(translate("sort_rule_down"))
         self._down_btn.clicked.connect(lambda: self._move_rule(1))
+        self._deselect_btn = QPushButton(translate("sort_rule_deselect"))
+        self._deselect_btn.setToolTip(translate("sort_rule_deselect_tooltip"))
+        self._deselect_btn.clicked.connect(self._clear_rule_selection)
         self._unsorted_button = QPushButton(translate("sort_set_unsorted"))
         self._unsorted_button.clicked.connect(self._toggle_unsorted)
-        for button in (
-            self._add_btn,
-            self._remove_btn,
-            self._up_btn,
-            self._down_btn,
-            self._unsorted_button,
+        for button, row, column in (
+            (self._add_btn, 0, 0),
+            (self._remove_btn, 0, 1),
+            (self._unsorted_button, 0, 2),
+            (self._up_btn, 1, 0),
+            (self._down_btn, 1, 1),
+            (self._deselect_btn, 1, 2),
         ):
             button.setStyleSheet(_RUN_BUTTON_STYLE)
-            rule_buttons.addWidget(button)
-        rule_buttons.addStretch()
+            rule_buttons.addWidget(button, row, column)
+        rule_buttons.setColumnStretch(3, 1)
         left.addLayout(rule_buttons)
-        middle.addWidget(rules_group, stretch=3)
 
         self._editor_group = QGroupBox(translate("sort_rule_settings"))
         self._editor_group.setStyleSheet(
@@ -6512,6 +6751,16 @@ class SortRulesDialog(QDialog):
         form.addWidget(QLabel(translate("sort_rule_folder")), 0, 0)
         self._folder_edit = QLineEdit()
         self._folder_edit.setPlaceholderText(translate("sort_rule_folder_placeholder"))
+        self._folder_edit.setToolTip(translate("sort_rule_folder_tooltip"))
+        # Windows cannot store these characters in a folder component. The
+        # validator stops them at the keyboard/paste boundary; Apply still
+        # validates programmatic/restored values with the same rules.
+        self._folder_edit.setValidator(
+            QRegularExpressionValidator(
+                QRegularExpression(r'[^<>:"|?*\x00-\x1f\x7f]*'),
+                self._folder_edit,
+            )
+        )
         self._folder_edit.textChanged.connect(self._commit_editor)
         form.addWidget(self._folder_edit, 0, 1, 1, 3)
 
@@ -6545,9 +6794,18 @@ class SortRulesDialog(QDialog):
             scopes_layout.addWidget(box, index // 2, index % 2)
             self._scope_checks[scope] = box
         form.addLayout(scopes_layout, 2, 1, 1, 3)
+
+        self._subfolder_per_value_check = QCheckBox(
+            translate("sort_rule_subfolder_per_value")
+        )
+        self._subfolder_per_value_check.setStyleSheet("color: #F2F3F5;")
+        self._subfolder_per_value_check.setToolTip(
+            translate("sort_rule_subfolder_per_value_tooltip")
+        )
+        self._subfolder_per_value_check.stateChanged.connect(self._commit_editor)
+        form.addWidget(self._subfolder_per_value_check, 3, 0, 1, 4)
+
         self._editor_group.setLayout(form)
-        middle.addWidget(self._editor_group, stretch=4)
-        editor_layout.addLayout(middle, stretch=1)
 
         preview_group = QGroupBox(translate("sort_preview_label"))
         preview_group.setStyleSheet(
@@ -6557,7 +6815,10 @@ class SortRulesDialog(QDialog):
         self._preview = QTextEdit()
         self._preview.setReadOnly(True)
         self._preview.setStyleSheet("background: #2B2D31; border-radius: 5px;")
-        self._preview.setFixedHeight(65)
+        # The splitter gives the preview and Run Settings one shared height
+        # adjustment; the two columns keep the same widths as the row above.
+        self._preview.setMinimumHeight(90)
+        self._preview_group = preview_group
         preview_layout.addWidget(self._preview)
         preview_group.setLayout(preview_layout)
 
@@ -6587,10 +6848,59 @@ class SortRulesDialog(QDialog):
         self._download_unsorted_check.stateChanged.connect(self._update_preview)
         settings_layout.addWidget(self._download_unsorted_check)
 
-        bottom = QHBoxLayout()
-        bottom.addWidget(preview_group, stretch=3)
-        bottom.addWidget(self._run_settings_group, stretch=2)
-        editor_layout.addLayout(bottom)
+        self._ignore_text_posts_check = QCheckBox(translate("sort_ignore_text_posts"))
+        self._ignore_text_posts_check.setChecked(self._ignore_text_posts_default)
+        self._ignore_text_posts_check.setStyleSheet("color: #F2F3F5;")
+        self._ignore_text_posts_check.setToolTip(
+            translate("sort_ignore_text_posts_tooltip")
+        )
+        self._ignore_text_posts_check.stateChanged.connect(self._update_preview)
+        settings_layout.addWidget(self._ignore_text_posts_check)
+
+        # Let the 3:4 stretch factors decide the column widths even when a
+        # child's text makes its size hint wider. This keeps the preview's
+        # left edge aligned with the Rules box above it.
+        for widget in (
+            rules_group,
+            self._rule_list,
+            self._editor_group,
+            preview_group,
+            self._run_settings_group,
+        ):
+            widget.setMinimumWidth(0)
+            widget.setSizePolicy(
+                QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding
+            )
+
+        # The divider belongs to the left column only: dragging it changes
+        # Rules and Preview, while Rule Settings and Run Settings stay put.
+        left_column = QWidget()
+        left_column_layout = QVBoxLayout(left_column)
+        left_column_layout.setContentsMargins(0, 0, 0, 0)
+        left_column_layout.setSpacing(0)
+        self._body_splitter = _GripSplitter(Qt.Orientation.Vertical)
+        self._body_splitter.setChildrenCollapsible(False)
+        self._body_splitter.setHandleWidth(12)
+        self._body_splitter.setToolTip(translate("sort_splitter_tooltip"))
+        self._body_splitter.addWidget(rules_group)
+        self._body_splitter.addWidget(preview_group)
+        self._body_splitter.setStretchFactor(0, 3)
+        self._body_splitter.setStretchFactor(1, 1)
+        self._body_splitter.setSizes([470, 130])
+        left_column_layout.addWidget(self._body_splitter, stretch=1)
+
+        right_column = QWidget()
+        right_column_layout = QVBoxLayout(right_column)
+        right_column_layout.setContentsMargins(0, 0, 0, 0)
+        right_column_layout.setSpacing(10)
+        right_column_layout.addWidget(self._editor_group, stretch=1)
+        right_column_layout.addWidget(self._run_settings_group)
+
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.addWidget(left_column, stretch=3)
+        body.addWidget(right_column, stretch=4)
+        editor_layout.addLayout(body, stretch=1)
 
         buttons_row = QHBoxLayout()
         buttons_row.addStretch()
@@ -6626,15 +6936,57 @@ class SortRulesDialog(QDialog):
 
         layout.addWidget(self._pages)
 
+    def set_posts(self, posts, ticked_ids=None):
+        """Replace the preview's post and selection sets together."""
+        rows = []
+        seen = set()
+        for title, (post_id, thumbnail) in posts or ():
+            post_id = str(post_id)
+            if post_id in seen:
+                continue
+            seen.add(post_id)
+            rows.append((title, (post_id, thumbnail)))
+        self._posts = rows
+        if ticked_ids is not None:
+            self._ticked_ids = {str(post_id) for post_id in ticked_ids}
+        self._update_preview()
+
     def rules(self):
         """The edited rules, normalised when Apply was pressed."""
         return list(self._rules)
+
+    def selected_rule_index(self):
+        """Return the selected rule's row, or -1 when the draft is active."""
+        row = self._selected_index()
+        return row if 0 <= row < len(self._rules) else -1
+
+    def selected_rule(self):
+        """Return the selected rule, or None while the draft is active."""
+        row = self.selected_rule_index()
+        return self._rules[row] if row >= 0 else None
+
+    @staticmethod
+    def _default_draft_rule():
+        """Return a fresh, editable rule used when nothing is selected."""
+        return SortRule(folder="", scopes=frozenset({"tags"}))
+
+    def set_rules(self, rules, select=None):
+        """Replace the rules while another window adds or merges one."""
+        self._rules = [rule for rule in (rules or ()) if isinstance(rule, SortRule)]
+        if select is None:
+            select = self._rule_list.currentRow()
+        self._refresh_list(select=select)
+        self._load_editor()
+        self._update_unsorted_button()
 
     def link_all(self):
         return self._link_all_check.isChecked()
 
     def download_unsorted(self):
         return self._download_unsorted_check.isChecked()
+
+    def ignore_text_posts(self):
+        return self._ignore_text_posts_check.isChecked()
 
     def unsorted_folder(self):
         return self._unsorted_folder
@@ -6734,10 +7086,11 @@ class SortRulesDialog(QDialog):
         return ", ".join(rendered)
 
     def _rule_summary(self, index, rule):
-        values = self._format_values(rule.values) or translate(
-            "sort_rule_no_values"
-        )
-        summary = translate("sort_rule_summary", index + 1, rule.folder, values)
+        values = self._format_values(rule.values) or translate("sort_rule_no_values")
+        folder_label = rule.folder
+        if rule.subfolder_per_value:
+            folder_label = f"{folder_label}/{translate('sort_rule_value_subfolder')}"
+        summary = translate("sort_rule_summary", index + 1, folder_label, values)
         scope_labels = [
             translate(SORT_SCOPE_LABELS[scope])
             for scope in sorted(rule.scopes)
@@ -6782,18 +7135,25 @@ class SortRulesDialog(QDialog):
                 item = QListWidgetItem(self._rule_summary(index, rule))
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 item.setCheckState(
-                    Qt.CheckState.Checked
-                    if rule.enabled
-                    else Qt.CheckState.Unchecked
+                    Qt.CheckState.Checked if rule.enabled else Qt.CheckState.Unchecked
                 )
                 self._rule_list.addItem(item)
         finally:
             self._loading = False
-        if self._rules:
-            row = min(max(select, 0), len(self._rules) - 1)
-            self._rule_list.setCurrentRow(row)
+        if self._rules and select is not None and 0 <= select < len(self._rules):
+            self._rule_list.setCurrentRow(select)
+        else:
+            self._rule_list.clearSelection()
+            self._rule_list.setCurrentRow(-1)
         self._no_rules_label.setVisible(not self._rules)
         self._update_preview()
+
+    def _clear_rule_selection(self):
+        """Leave no rule selected so Set Unsorted can create the fallback."""
+        self._rule_list.clearSelection()
+        self._rule_list.setCurrentRow(-1)
+        self._load_editor()
+        self._update_unsorted_button()
 
     def _on_rule_selected(self, row):
         if self._loading:
@@ -6810,45 +7170,43 @@ class SortRulesDialog(QDialog):
             )
             self._update_preview()
 
-    def _set_editor_enabled(self, enabled):
-        self._editor_group.setEnabled(enabled)
-
     def _load_editor(self):
         row = self._selected_index()
         has_rule = 0 <= row < len(self._rules)
+        rule = self._rules[row] if has_rule else self._draft_rule
         self._loading = True
         try:
-            if has_rule:
-                rule = self._rules[row]
-                self._folder_edit.setText(rule.folder)
-                self._values_edit.setText(self._format_values(rule.values))
-                self._match_combo.setCurrentIndex(
-                    self._match_combo.findData("all" if rule.match_all else "any")
-                )
-                for scope, box in self._scope_checks.items():
-                    box.setChecked(scope in rule.scopes)
-            else:
-                self._folder_edit.clear()
-                self._values_edit.clear()
-                self._match_combo.setCurrentIndex(0)
-                for box in self._scope_checks.values():
-                    box.setChecked(False)
+            self._folder_edit.setText(rule.folder)
+            self._values_edit.setText(self._format_values(rule.values))
+            self._match_combo.setCurrentIndex(
+                self._match_combo.findData("all" if rule.match_all else "any")
+            )
+            self._subfolder_per_value_check.setChecked(bool(rule.subfolder_per_value))
+            for scope, box in self._scope_checks.items():
+                box.setChecked(scope in rule.scopes)
         finally:
             self._loading = False
-        self._set_editor_enabled(has_rule)
         self._no_rules_label.setVisible(not self._rules)
         self._update_unsorted_button()
+        self.selected_rule_changed.emit(row if has_rule else -1)
 
     def _commit_editor(self, *_args):
         if self._loading:
-            return
-        row = self._selected_index()
-        if not (0 <= row < len(self._rules)):
             return
         values = tuple(parse_keyword_values(self._values_edit.text()))
         scopes = frozenset(
             scope for scope, box in self._scope_checks.items() if box.isChecked()
         ) or frozenset({"tags"})
+        row = self._selected_index()
+        if not (0 <= row < len(self._rules)):
+            self._draft_rule = SortRule(
+                folder=self._folder_edit.text().strip(),
+                values=values,
+                match_all=self._match_combo.currentData() == "all",
+                scopes=scopes,
+                subfolder_per_value=self._subfolder_per_value_check.isChecked(),
+            )
+            return
         old_folder, _problem = normalize_sort_folder(self._rules[row].folder)
         self._rules[row] = SortRule(
             folder=self._folder_edit.text().strip(),
@@ -6856,6 +7214,7 @@ class SortRulesDialog(QDialog):
             match_all=self._match_combo.currentData() == "all",
             scopes=scopes,
             enabled=self._rules[row].enabled,
+            subfolder_per_value=self._subfolder_per_value_check.isChecked(),
         )
         if (
             self._unsorted_folder
@@ -6868,10 +7227,10 @@ class SortRulesDialog(QDialog):
         self._update_unsorted_button()
         self._update_preview()
 
-    def _add_rule(self):
+    def _next_default_folder(self):
+        """Return a folder name that no existing rule already uses."""
         existing = {
-            normalize_sort_folder(rule.folder)[0].casefold()
-            for rule in self._rules
+            normalize_sort_folder(rule.folder)[0].casefold() for rule in self._rules
         }
         base = translate("sort_new_folder")
         name = base
@@ -6879,7 +7238,29 @@ class SortRulesDialog(QDialog):
         while normalize_sort_folder(name)[0].casefold() in existing:
             name = f"{base} {number}"
             number += 1
-        self._rules.append(SortRule(folder=name))
+        return name
+
+    def _add_rule(self):
+        """Add a rule from the draft, or a blank rule while one is selected."""
+        if self.selected_rule_index() >= 0:
+            rule = SortRule(folder=self._next_default_folder())
+        else:
+            # The draft stays as the field defaults after the rule is added,
+            # so deselecting the new rule leaves the same settings ready.
+            draft = self._draft_rule
+            folder, problem = normalize_sort_folder(draft.folder)
+            if not folder or problem:
+                folder = self._next_default_folder()
+            rule = SortRule(
+                folder=folder,
+                values=tuple(draft.values),
+                match_all=draft.match_all,
+                scopes=draft.scopes or frozenset({"tags"}),
+                enabled=True,
+                subfolder_per_value=draft.subfolder_per_value,
+            )
+            self._draft_rule = draft._replace(folder=folder)
+        self._rules.append(rule)
         self._refresh_list(select=len(self._rules) - 1)
         self._load_editor()
         self._folder_edit.setFocus()
@@ -6917,13 +7298,29 @@ class SortRulesDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _preview_posts(self):
-        """Ticked posts when there are any, otherwise every loaded post."""
-        ticked = [
+        """Ticked posts only: the preview describes the run, not the page.
+
+        A post with no tick is not downloaded, so counting it here would make
+        the preview disagree with the run. Ignore Text Posts is a preview
+        filter too; a post without facts is always kept because its file count
+        is unknown.
+        """
+        posts = [
             (title, (post_id, thumbnail))
             for title, (post_id, thumbnail) in self._posts
             if str(post_id) in self._ticked_ids
         ]
-        return ticked or self._posts
+        if self._ignore_text_posts_check.isChecked():
+            filtered = []
+            for title, post in posts:
+                facts = self._post_search_index.get(str(post[0]))
+                if not isinstance(facts, dict):
+                    facts = self._post_search_index.get(post[0])
+                if post_is_text_only(facts):
+                    continue
+                filtered.append((title, post))
+            posts = filtered
+        return posts
 
     def _update_preview(self, *_args):
         if not hasattr(self, "_preview"):
@@ -7004,6 +7401,15 @@ class SortRulesDialog(QDialog):
                     problems.append(
                         translate("sort_wildcard_only_value", index + 1, value)
                     )
+            for value, reason in sort_rule_bad_value_folders(rule):
+                if reason == "wildcard":
+                    problems.append(
+                        translate("sort_value_subfolder_wildcard", index + 1, value)
+                    )
+                else:
+                    problems.append(
+                        translate("sort_invalid_value_folder", index + 1, value)
+                    )
             key = folder.casefold()
             if key in seen:
                 problems.append(
@@ -7060,17 +7466,33 @@ class RecommendedKeywordsDialog(QDialog):
 
     search_requested = pyqtSignal(str, object)
     skip_keywords_requested = pyqtSignal(object, object)
+    create_rule_requested = pyqtSignal(str, object, object)
     options_changed = pyqtSignal(dict)
 
-    def __init__(self, posts, post_search_index, options=None, parent=None):
+    def __init__(
+        self,
+        posts,
+        post_search_index,
+        options=None,
+        parent=None,
+        filters=None,
+        file_skip_keywords=None,
+    ):
         super().__init__(parent)
-        self._post_rows = [
-            (str(post_id), title) for title, (post_id, _thumb) in (posts or ())
-        ]
+        self._post_rows = self._normalise_posts(posts)
         self._post_search_index = post_search_index or {}
+        self._filters = filters if isinstance(filters, PostFilters) else PostFilters()
+        self._file_skip_keywords = tuple(file_skip_keywords or ())
+        self._all_results = []
         self._results = []
+        self._filtered_keyword_count = 0
         self._thread = None
         self._scan_pending = False
+        self._scan_post_count = 0
+        self._ignored_text_count = 0
+        # True while Keyword Folder Sorting has a rule selected; the create
+        # button then adds the selected keywords to that rule instead.
+        self._has_selected_rule = False
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(250)
@@ -7175,6 +7597,33 @@ class RecommendedKeywordsDialog(QDialog):
         options_row.addWidget(self._refresh_btn)
         editor_layout.addLayout(options_row)
 
+        noise_row = QHBoxLayout()
+        noise_row.setContentsMargins(0, 0, 0, 0)
+        self._ignore_text_posts = QCheckBox(
+            translate("recommended_keywords_ignore_text_posts")
+        )
+        self._ignore_text_posts.setChecked(bool(options.get("ignore_text_posts", True)))
+        self._ignore_text_posts.setStyleSheet("color: #F2F3F5;")
+        self._ignore_text_posts.stateChanged.connect(self._schedule_scan)
+        noise_row.addWidget(self._ignore_text_posts)
+        noise_row.addSpacing(14)
+        self._ignore_filtered_keywords = QCheckBox(
+            translate("recommended_keywords_ignore_filters")
+        )
+        self._ignore_filtered_keywords.setChecked(
+            bool(options.get("ignore_filtered_keywords", False))
+        )
+        self._ignore_filtered_keywords.setStyleSheet("color: #F2F3F5;")
+        self._ignore_filtered_keywords.setToolTip(
+            translate("recommended_keywords_ignore_filters_tooltip")
+        )
+        self._ignore_filtered_keywords.stateChanged.connect(
+            self._filter_options_changed
+        )
+        noise_row.addWidget(self._ignore_filtered_keywords)
+        noise_row.addStretch()
+        editor_layout.addLayout(noise_row)
+
         self._status_label = QLabel("")
         self._status_label.setStyleSheet("color: #A3A6AD;")
         editor_layout.addWidget(self._status_label)
@@ -7188,7 +7637,7 @@ class RecommendedKeywordsDialog(QDialog):
             ]
         )
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.verticalHeader().setVisible(False)
         self._table.setShowGrid(False)
@@ -7216,9 +7665,18 @@ class RecommendedKeywordsDialog(QDialog):
         buttons_row.addStretch()
         self._search_btn = QPushButton(translate("recommended_keywords_search"))
         self._add_skip_btn = QPushButton(translate("recommended_keywords_add_skip"))
+        self._create_rule_btn = QPushButton(
+            translate("recommended_keywords_create_rule")
+        )
         self._copy_btn = QPushButton(translate("recommended_keywords_copy"))
         close_btn = QPushButton(translate("close"))
-        for button in (self._search_btn, self._add_skip_btn, self._copy_btn, close_btn):
+        for button in (
+            self._search_btn,
+            self._add_skip_btn,
+            self._create_rule_btn,
+            self._copy_btn,
+            close_btn,
+        ):
             button.setStyleSheet(_RUN_BUTTON_STYLE)
             buttons_row.addWidget(button)
         editor_layout.addLayout(buttons_row)
@@ -7246,9 +7704,29 @@ class RecommendedKeywordsDialog(QDialog):
         layout.addWidget(self._pages)
         self._search_btn.clicked.connect(self._request_search)
         self._add_skip_btn.clicked.connect(self._request_skip_keywords)
+        self._create_rule_btn.clicked.connect(self._request_create_rule)
         self._copy_btn.clicked.connect(self._copy_keyword)
         close_btn.clicked.connect(self.close)
+        self._refresh_create_rule_button()
         self._update_actions()
+
+    @staticmethod
+    def _normalise_posts(posts):
+        """Return unique ``(post_id, title)`` rows, preserving their order."""
+        rows = []
+        seen = set()
+        for title, (post_id, _thumb) in posts or ():
+            post_id = str(post_id)
+            if post_id in seen:
+                continue
+            seen.add(post_id)
+            rows.append((post_id, title))
+        return rows
+
+    def set_posts(self, posts):
+        """Replace the scanned post rows after the page filters change."""
+        self._post_rows = self._normalise_posts(posts)
+        self._start_scan()
 
     def _selected_scopes(self):
         """Return the ticked scan scopes, defaulting to Title + Tags."""
@@ -7260,6 +7738,18 @@ class RecommendedKeywordsDialog(QDialog):
         self.options_changed.emit(self.options())
         self._debounce.start()
 
+    def _filter_options_changed(self):
+        """Update the result filter without rebuilding the whole scan."""
+        self.options_changed.emit(self.options())
+        self._apply_result_filter()
+
+    def set_filters(self, filters, file_skip_keywords=None):
+        """Apply the tab's current post and file filters to existing results."""
+        self._filters = filters if isinstance(filters, PostFilters) else PostFilters()
+        if file_skip_keywords is not None:
+            self._file_skip_keywords = tuple(file_skip_keywords)
+        self._apply_result_filter()
+
     def options(self):
         """Return the current scan controls as a config block."""
         return {
@@ -7268,7 +7758,35 @@ class RecommendedKeywordsDialog(QDialog):
             "max_words": int(self._max_words.currentData() or 3),
             "ignore_common_words": self._ignore_common.isChecked(),
             "ignore_accents": self._ignore_accents.isChecked(),
+            "ignore_text_posts": self._ignore_text_posts.isChecked(),
+            "ignore_filtered_keywords": self._ignore_filtered_keywords.isChecked(),
         }
+
+    def _post_facts(self, post_id):
+        """Return the index entry for *post_id*, tolerating int/string keys."""
+        facts = self._post_search_index.get(str(post_id))
+        if not isinstance(facts, dict):
+            facts = self._post_search_index.get(post_id)
+        return facts if isinstance(facts, dict) else None
+
+    def _active_post_rows(self):
+        """Rows scanned after the Ignore Text Posts choice.
+
+        Duplicate post ids are collapsed here as well: a linked-post view can
+        otherwise list one post more than once and inflate every keyword's
+        Post count.
+        """
+        ignore_text = self._ignore_text_posts.isChecked()
+        rows = []
+        seen = set()
+        for post_id, title in self._post_rows:
+            if post_id in seen:
+                continue
+            seen.add(post_id)
+            if ignore_text and post_is_text_only(self._post_facts(post_id)):
+                continue
+            rows.append((post_id, title))
+        return rows
 
     def _start_scan(self):
         """Run a scan, or queue one if the previous scan is still going."""
@@ -7278,8 +7796,12 @@ class RecommendedKeywordsDialog(QDialog):
         self._scan_pending = False
         self._refresh_btn.setEnabled(False)
         self._status_label.setText(translate("recommended_keywords_scanning"))
+        rows = self._active_post_rows()
+        self._scan_post_count = len(rows)
+        self._ignored_text_count = len(self._post_rows) - len(rows)
+
         self._thread = RecommendedKeywordsThread(
-            self._post_rows,
+            rows,
             self._post_search_index,
             self._selected_scopes(),
             min_count=self._min_posts.value(),
@@ -7292,9 +7814,62 @@ class RecommendedKeywordsDialog(QDialog):
         self._thread.finished.connect(self._forget_thread)
         self._thread.start()
 
+    def _result_matches_filters(self, result):
+        """True when an active skip filter already covers this suggestion."""
+        texts = []
+        for value in (result.keyword, result.match_key, *(result.variants or ())):
+            text = str(value or "").strip()
+            if text and text not in texts:
+                texts.append(text)
+        if not texts:
+            return False
+
+        post_scopes = {
+            str(scope) for scope in (getattr(self._filters, "skip_scopes", None) or ())
+        }
+        skip_keywords = tuple(getattr(self._filters, "skip_keywords", ()) or ())
+        lenient_punctuation = bool(getattr(self._filters, "lenient_punctuation", False))
+        lenient_tags = bool(getattr(self._filters, "lenient_tags", False))
+        result_scopes = {str(scope) for scope in (result.scopes or ())}
+        if post_scopes:
+            for keyword in skip_keywords:
+                if any(
+                    _keyword_or_wildcard_match((keyword,), text, lenient_punctuation)
+                    for text in texts
+                ):
+                    return True
+                if "tags" in result_scopes and any(
+                    _tag_matches(keyword, text, lenient_tags) for text in texts
+                ):
+                    return True
+
+        for keyword in self._file_skip_keywords:
+            if any(
+                _keyword_or_wildcard_match((keyword,), text, lenient_punctuation)
+                for text in texts
+            ):
+                return True
+        return False
+
     def _on_scan_finished(self, results):
-        """Paint a completed scan and keep the summary honest."""
-        self._results = list(results)
+        """Store the completed scan and show whatever passes the filters."""
+        self._all_results = list(results)
+        self._apply_result_filter()
+
+    def _apply_result_filter(self):
+        """Paint the scan results, leaving out keywords the filters cover."""
+        hidden = 0
+        if self._ignore_filtered_keywords.isChecked():
+            visible = []
+            for result in self._all_results:
+                if self._result_matches_filters(result):
+                    hidden += 1
+                else:
+                    visible.append(result)
+        else:
+            visible = list(self._all_results)
+        self._results = visible
+        self._filtered_keyword_count = hidden
         self._table.setRowCount(0)
         for row, result in enumerate(self._results):
             self._table.insertRow(row)
@@ -7311,21 +7886,34 @@ class RecommendedKeywordsDialog(QDialog):
         if self._results:
             self._table.selectRow(0)
         else:
-            self._empty_label.setText(
-                translate(
-                    "recommended_keywords_no_posts"
-                    if not self._post_rows
-                    else "recommended_keywords_empty"
+            if not self._scan_post_count:
+                key = (
+                    "recommended_keywords_only_text_posts"
+                    if self._ignored_text_count
+                    else "recommended_keywords_no_posts"
                 )
-            )
+            elif hidden:
+                key = "recommended_keywords_empty_filtered"
+            else:
+                key = "recommended_keywords_empty"
+            self._empty_label.setText(translate(key))
         self._empty_label.setVisible(not self._results)
-        self._status_label.setText(
-            translate(
-                "recommended_keywords_summary",
-                len(self._results),
-                len(self._post_rows),
-            )
+        summary = translate(
+            "recommended_keywords_summary",
+            len(self._results),
+            self._scan_post_count,
         )
+        if self._ignored_text_count:
+            summary += " " + translate(
+                "recommended_keywords_ignored_text_posts",
+                self._ignored_text_count,
+            )
+        if hidden:
+            summary += " " + translate(
+                "recommended_keywords_ignored_filters",
+                hidden,
+            )
+        self._status_label.setText(summary)
         self._update_actions()
 
     def _forget_thread(self):
@@ -7338,15 +7926,46 @@ class RecommendedKeywordsDialog(QDialog):
         if self._scan_pending and self.isVisible():
             self._start_scan()
 
+    def _selected_results(self):
+        """Return the selected rows in table order (duplicates removed)."""
+        selection = self._table.selectionModel()
+        rows = sorted(
+            {index.row() for index in selection.selectedRows()}
+            if selection is not None
+            else ()
+        )
+        return [self._results[row] for row in rows if 0 <= row < len(self._results)]
+
     def _selected_result(self):
-        row = self._table.currentRow()
-        if 0 <= row < len(self._results):
-            return self._results[row]
-        return None
+        selected = self._selected_results()
+        return selected[0] if selected else None
+
+    def set_has_selected_rule(self, selected):
+        """Switch the rule action between Create Rule and Add to Selected Rule."""
+        self._has_selected_rule = bool(selected)
+        self._refresh_create_rule_button()
+
+    def _refresh_create_rule_button(self):
+        if self._has_selected_rule:
+            self._create_rule_btn.setText(translate("recommended_keywords_add_to_rule"))
+            self._create_rule_btn.setToolTip(
+                translate("recommended_keywords_add_to_rule_tooltip")
+            )
+        else:
+            self._create_rule_btn.setText(translate("recommended_keywords_create_rule"))
+            self._create_rule_btn.setToolTip(
+                translate("recommended_keywords_create_rule_tooltip")
+            )
 
     def _update_actions(self):
-        enabled = self._selected_result() is not None
-        for button in (self._search_btn, self._add_skip_btn, self._copy_btn):
+        selected = self._selected_results()
+        enabled = bool(selected)
+        for button in (
+            self._search_btn,
+            self._add_skip_btn,
+            self._create_rule_btn,
+            self._copy_btn,
+        ):
             button.setEnabled(enabled)
 
     def _request_search(self):
@@ -7357,17 +7976,61 @@ class RecommendedKeywordsDialog(QDialog):
             )
 
     def _request_skip_keywords(self):
-        result = self._selected_result()
-        if result is not None:
-            variants = result.variants or (result.keyword,)
-            self.skip_keywords_requested.emit(
-                tuple(variants), frozenset(result.scopes or ())
-            )
+        selected = self._selected_results()
+        if not selected:
+            return
+        variants = []
+        seen = set()
+        scopes = set()
+        for result in selected:
+            scopes.update(result.scopes or ())
+            for variant in result.variants or (result.keyword,):
+                text = str(variant).strip()
+                key = text.casefold()
+                if text and key not in seen:
+                    seen.add(key)
+                    variants.append(text)
+        self.skip_keywords_requested.emit(
+            tuple(variants), frozenset(scopes or self._selected_scopes())
+        )
+
+    def _request_create_rule(self):
+        """Create a rule, or target the selected rule, from the suggestions.
+
+        Without a selection in Keyword Folder Sorting the rule is named after
+        the selected keyword with the highest Post count; every selected
+        spelling becomes one of its values.  With a rule selected there, the
+        tab merges these values into that rule instead.
+        """
+        selected = self._selected_results()
+        if not selected:
+            return
+        primary = max(
+            selected,
+            key=lambda result: (result.count, result.mentions, -len(result.keyword)),
+        )
+        values = []
+        seen = set()
+        for result in selected:
+            text = str(result.keyword).strip()
+            key = text.casefold()
+            if text and key not in seen:
+                seen.add(key)
+                values.append(text)
+        if not values:
+            return
+        self.create_rule_requested.emit(
+            primary.keyword,
+            tuple(values),
+            frozenset(self._selected_scopes()),
+        )
 
     def _copy_keyword(self):
-        result = self._selected_result()
-        if result is not None:
-            QApplication.clipboard().setText(result.keyword)
+        selected = self._selected_results()
+        if selected:
+            QApplication.clipboard().setText(
+                "\n".join(result.keyword for result in selected)
+            )
 
     def _toggle_help(self):
         if self._pages.currentWidget() is self._help_page:
@@ -7510,6 +8173,7 @@ class CreatorDownloaderTab(QWidget):
         self._sort_rules = []
         self._sort_link_all = False
         self._sort_download_unsorted = True
+        self._sort_ignore_text_posts = True
         self._sort_unsorted_folder = ""
         # The modeless rules editor, reused while it is open.
         self._sort_rules_dialog = None
@@ -7522,6 +8186,8 @@ class CreatorDownloaderTab(QWidget):
             "max_words": 3,
             "ignore_common_words": True,
             "ignore_accents": False,
+            "ignore_text_posts": True,
+            "ignore_filtered_keywords": False,
         }
         # The run's routing snapshot, reused by Retry Failed Downloads so a
         # rule edit between runs cannot move the files that failed.
@@ -7535,6 +8201,10 @@ class CreatorDownloaderTab(QWidget):
         self.current_page = 1
         self.total_pages = 1
         self.filtered_posts = []  # Cache of filtered posts for pagination
+        # True once a filter pass has produced the current filtered_posts.
+        # Dialogs use all_detected_posts before that first pass, then switch
+        # to the visible list so their counts match the post list.
+        self._filtered_rows_ready = False
         # Creator URL -> set of post ids requested via pasted post links. The
         # ids are shown as one aggregated post row, separate from the creator
         # row.
@@ -8501,6 +9171,13 @@ class CreatorDownloaderTab(QWidget):
         self.creator_save_creator_config_btn.setEnabled(False)
         log_config_layout.addWidget(self.creator_save_creator_config_btn)
 
+        self.creator_clear_config_btn = QPushButton(
+            qta.icon("fa5s.eraser", color=TEXT), ""
+        )
+        self.creator_clear_config_btn.clicked.connect(self.clear_current_config)
+        self.creator_clear_config_btn.setStyleSheet(_TOOL_BUTTON_STYLE)
+        log_config_layout.addWidget(self.creator_clear_config_btn)
+
         log_config_layout.addStretch()
 
         right_layout.addWidget(self.log_config_group)
@@ -8638,6 +9315,8 @@ class CreatorDownloaderTab(QWidget):
         self.creator_save_creator_config_btn.setToolTip(
             translate("save_creator_config_btn_tooltip")
         )
+        self.creator_clear_config_btn.setText(translate("clear_config_btn"))
+        self.creator_clear_config_btn.setToolTip(translate("clear_config_btn_tooltip"))
         self._refresh_retry_button()
         self._refresh_open_folder_button()
         self._refresh_config_buttons()
@@ -8808,15 +9487,48 @@ class CreatorDownloaderTab(QWidget):
                 "ignore_accents": bool(
                     self._recommended_options.get("ignore_accents", False)
                 ),
+                "ignore_text_posts": bool(
+                    self._recommended_options.get("ignore_text_posts", True)
+                ),
+                "ignore_filtered_keywords": bool(
+                    self._recommended_options.get("ignore_filtered_keywords", False)
+                ),
             },
             "sorting": {
                 "enabled": self.creator_sort_enabled_check.isChecked(),
                 "link_all": bool(self._sort_link_all),
                 "download_unsorted": bool(self._sort_download_unsorted),
+                "ignore_text_posts": bool(self._sort_ignore_text_posts),
                 "unsorted_folder": self._sort_unsorted_folder,
                 "rules": [sort_rule_to_dict(rule) for rule in self._sort_rules],
             },
         }
+
+    @staticmethod
+    def _config_saved_count(config):
+        """Count every saved setting in a config payload.
+
+        Options, filters and recommendation controls count once per field;
+        search and sorting scopes count once per choice; every sorting rule
+        counts once.  This is what the save confirmation reports, so it must
+        follow the payload rather than just its two largest sections.
+        """
+        config = config if isinstance(config, dict) else {}
+        total = 0
+        for section in ("options", "filters", "recommended"):
+            values = config.get(section)
+            if isinstance(values, dict):
+                total += len(values)
+        search_scopes = config.get("search_scopes")
+        if isinstance(search_scopes, (list, tuple, set, frozenset)):
+            total += len(search_scopes)
+        sorting = config.get("sorting")
+        if isinstance(sorting, dict):
+            total += sum(1 for key in sorting if key != "rules")
+            rules = sorting.get("rules")
+            if isinstance(rules, (list, tuple)):
+                total += len(rules)
+        return total
 
     @staticmethod
     def _set_config_checkbox(checkbox, value):
@@ -8932,6 +9644,7 @@ class CreatorDownloaderTab(QWidget):
             self._sort_download_unsorted = bool(
                 sorting.get("download_unsorted", True)
             )
+            self._sort_ignore_text_posts = bool(sorting.get("ignore_text_posts", True))
             unsorted_folder, _problem = normalize_sort_folder(
                 sorting.get("unsorted_folder", "")
             )
@@ -9024,11 +9737,14 @@ class CreatorDownloaderTab(QWidget):
         """
         default_btn = getattr(self, "creator_save_config_btn", None)
         creator_btn = getattr(self, "creator_save_creator_config_btn", None)
+        clear_btn = getattr(self, "creator_clear_config_btn", None)
         if default_btn is None or creator_btn is None:
             return
         busy = bool(getattr(self, "downloading", False)) or self._download_in_progress()
         default_btn.setEnabled(not busy)
         creator_btn.setEnabled(bool(self.current_creator_url) and not busy)
+        if clear_btn is not None:
+            clear_btn.setEnabled(not busy)
 
     def _config_warnings(self):
         """Return the translation keys of entries a save cannot store."""
@@ -9063,6 +9779,12 @@ class CreatorDownloaderTab(QWidget):
                 warnings.append("sort_config_missing_values")
             elif len(usable_values) != len(rule.values):
                 warnings.append("sort_config_wildcard_only")
+            for _value, reason in sort_rule_bad_value_folders(rule):
+                warnings.append(
+                    "sort_config_value_subfolder_wildcard"
+                    if reason == "wildcard"
+                    else "sort_config_invalid_value_folder"
+                )
             key = folder.casefold()
             if key in seen:
                 warnings.append("sort_config_duplicate_folder")
@@ -9101,6 +9823,7 @@ class CreatorDownloaderTab(QWidget):
             for title, (post_id, thumbnail) in self.all_detected_posts
             if str(post_id) in ticked
         ]
+        posts = self._filter_text_posts(posts)
         routing = resolve_sort_folders(
             posts,
             self.post_search_index,
@@ -9140,6 +9863,7 @@ class CreatorDownloaderTab(QWidget):
             for title, (post_id, thumbnail) in self.all_detected_posts
             if str(post_id) in ticked
         ]
+        posts = self._filter_text_posts(posts)
         routing = resolve_sort_folders(
             posts,
             self.post_search_index,
@@ -9178,6 +9902,34 @@ class CreatorDownloaderTab(QWidget):
             )
         return routing.folders, bool(self._sort_link_all)
 
+    def _filter_text_posts(self, posts):
+        """Drop text-only posts from a routing list when the option is on."""
+        if not self._sort_ignore_text_posts:
+            return list(posts or ())
+        filtered = []
+        for title, post in posts or ():
+            post_id = str(post[0])
+            facts = self.post_search_index.get(post_id)
+            if not isinstance(facts, dict):
+                facts = self.post_search_index.get(post[0])
+            if not post_is_text_only(facts):
+                filtered.append((title, post))
+        return filtered
+
+    def _dialog_post_rows(self):
+        """Rows the keyword dialogs should describe.
+
+        Once filtering has run, this is the visible post list (search, date,
+        file-count, filetypes, hidden posts), so dialog counts agree with the
+        Posts row. Before the first pass, it falls back to the detected set.
+        """
+        if self._filtered_rows_ready:
+            return [
+                (title, (post_id, thumbnail))
+                for title, post_id, thumbnail, _checked in self.filtered_posts
+            ]
+        return list(self.all_detected_posts)
+
     def _open_sort_rules_dialog(self):
         """Show the keyword-rules editor, reusing it when already open."""
         dialog = getattr(self, "_sort_rules_dialog", None)
@@ -9190,27 +9942,29 @@ class CreatorDownloaderTab(QWidget):
             sorting_enabled=self.creator_sort_enabled_check.isChecked(),
             link_all=self._sort_link_all,
             download_unsorted=self._sort_download_unsorted,
-            posts=list(self.all_detected_posts),
+            posts=self._dialog_post_rows(),
             post_search_index=self.post_search_index,
             ticked_ids=set(self.posts_to_download),
             lenient_punctuation=self._punctuation_matching_lenient(),
             lenient_tags=self._tag_matching_lenient(),
+            ignore_text_posts=self._sort_ignore_text_posts,
             unsorted_folder=self._sort_unsorted_folder,
             parent=self,
         )
         dialog.applied.connect(lambda: self._apply_sort_rules_from_dialog(dialog))
         dialog.finished.connect(lambda _result: self._forget_sort_rules_dialog(dialog))
-        self.creator_sort_enabled_check.toggled.connect(
-            dialog.set_sorting_enabled
-        )
+        dialog.selected_rule_changed.connect(self._sync_recommended_selected_rule)
+        self.creator_sort_enabled_check.toggled.connect(dialog.set_sorting_enabled)
         self._sort_rules_dialog = dialog
         dialog.show()
+        self._sync_recommended_selected_rule()
 
     def _apply_sort_rules_from_dialog(self, dialog):
         """Take the rules from an accepted modeless editor."""
         self._sort_rules = dialog.rules()
         self._sort_link_all = dialog.link_all()
         self._sort_download_unsorted = dialog.download_unsorted()
+        self._sort_ignore_text_posts = dialog.ignore_text_posts()
         self._sort_unsorted_folder = dialog.unsorted_folder()
         self.append_log_to_console(
             translate("log_info", translate("sort_rules_saved", len(self._sort_rules))),
@@ -9220,7 +9974,22 @@ class CreatorDownloaderTab(QWidget):
     def _forget_sort_rules_dialog(self, dialog):
         if getattr(self, "_sort_rules_dialog", None) is dialog:
             self._sort_rules_dialog = None
+        self._sync_recommended_selected_rule()
         dialog.deleteLater()
+
+    def _selected_sort_rule(self):
+        """Return the rule selected in the open sorting editor, if any."""
+        dialog = getattr(self, "_sort_rules_dialog", None)
+        if dialog is None or not dialog.isVisible():
+            return None
+        return dialog.selected_rule()
+
+    def _sync_recommended_selected_rule(self, *_args):
+        """Keep the recommendation button's Add/Create label current."""
+        dialog = getattr(self, "_recommended_keywords_dialog", None)
+        if dialog is None or not dialog.isVisible():
+            return
+        dialog.set_has_selected_rule(self._selected_sort_rule() is not None)
 
     def _close_sort_rules_dialog(self):
         """Close the editor when the page it describes is changing."""
@@ -9252,10 +10021,27 @@ class CreatorDownloaderTab(QWidget):
             "max_words": max(1, min(3, max_words)),
             "ignore_common_words": bool(options.get("ignore_common_words", True)),
             "ignore_accents": bool(options.get("ignore_accents", False)),
+            "ignore_text_posts": bool(options.get("ignore_text_posts", True)),
+            "ignore_filtered_keywords": bool(
+                options.get("ignore_filtered_keywords", False)
+            ),
         }
 
     def _store_recommended_options(self, options):
         self._recommended_options = self._normalize_recommended_options(options)
+
+    def _recommended_scan_filters(self):
+        """Return the current skip filters for the recommendation window."""
+        filters, _warnings = self._post_filters_from_widgets()
+        return filters, tuple(self._file_skip_keywords_from_widgets())
+
+    def _refresh_recommended_filters(self):
+        """Push skip-filter edits into the open recommendation window."""
+        dialog = getattr(self, "_recommended_keywords_dialog", None)
+        if dialog is None or not dialog.isVisible():
+            return
+        filters, file_skip_keywords = self._recommended_scan_filters()
+        dialog.set_filters(filters, file_skip_keywords)
 
     def _open_recommended_keywords_dialog(self):
         """Show the local keyword scan, reusing the window when it is open."""
@@ -9266,15 +10052,20 @@ class CreatorDownloaderTab(QWidget):
             return
         # It opens even with no posts loaded: the window then says there is
         # nothing to scan. The scan is local, so opening never fetches.
+        filters, file_skip_keywords = self._recommended_scan_filters()
         dialog = RecommendedKeywordsDialog(
-            list(self.all_detected_posts),
+            self._dialog_post_rows(),
             self.post_search_index,
             options=dict(self._recommended_options),
             parent=self,
+            filters=filters,
+            file_skip_keywords=file_skip_keywords,
         )
         dialog.search_requested.connect(self._apply_recommended_search)
         dialog.skip_keywords_requested.connect(self._add_recommended_skip_keywords)
+        dialog.create_rule_requested.connect(self._create_rule_from_recommended)
         dialog.options_changed.connect(self._store_recommended_options)
+        dialog.set_has_selected_rule(self._selected_sort_rule() is not None)
         dialog.finished.connect(
             lambda _result: self._forget_recommended_keywords_dialog(dialog)
         )
@@ -9329,6 +10120,93 @@ class CreatorDownloaderTab(QWidget):
                 ),
                 "INFO",
             )
+
+    def _create_rule_from_recommended(self, folder, values, scopes):
+        """Add suggestions to the selected rule, or create a new one."""
+        clean_values = tuple(
+            dict.fromkeys(
+                str(value).strip()
+                for value in (values or ())
+                if str(value).strip() and not wildcard_value_is_unusable(value)
+            )
+        )
+        if not clean_values:
+            return
+        clean_scopes = frozenset(scopes or ()) or frozenset({"tags"})
+
+        # If the sorting editor is open, its copy is authoritative: it may
+        # contain edits that have not reached the tab yet. Add or merge there
+        # and refresh it in place instead of closing the window.
+        sort_dialog = getattr(self, "_sort_rules_dialog", None)
+        dialog_open = sort_dialog is not None and sort_dialog.isVisible()
+        rules = list(sort_dialog.rules()) if dialog_open else list(self._sort_rules)
+        selected_index = (
+            sort_dialog.selected_rule_index()
+            if dialog_open and sort_dialog.selected_rule() is not None
+            else -1
+        )
+
+        if selected_index >= 0:
+            # The button says "Add to Selected Rule", so target that rule even
+            # when the suggested keyword would have named a different folder.
+            target = selected_index
+            existing = rules[target]
+            folder_name = existing.folder
+            rules[target] = existing._replace(
+                values=tuple(dict.fromkeys((*existing.values, *clean_values))),
+                scopes=frozenset(existing.scopes | clean_scopes),
+                enabled=True,
+            )
+        else:
+            folder_name, problem = normalize_sort_folder_segment(folder)
+            if problem:
+                folder_name = sanitize_filename(str(folder or ""))
+                if normalize_sort_folder_segment(folder_name)[1]:
+                    folder_name = translate("sort_new_folder")
+            if not folder_name or folder_name == "unnamed":
+                folder_name = translate("sort_new_folder")
+
+            existing_index = None
+            for index, rule in enumerate(rules):
+                existing_folder, _problem = normalize_sort_folder(rule.folder)
+                if existing_folder.casefold() == folder_name.casefold():
+                    existing_index = index
+                    break
+
+            if existing_index is None:
+                rules.append(
+                    SortRule(
+                        folder=folder_name,
+                        values=clean_values,
+                        scopes=clean_scopes,
+                        enabled=True,
+                    )
+                )
+                target = len(rules) - 1
+            else:
+                existing = rules[existing_index]
+                rules[existing_index] = existing._replace(
+                    values=tuple(dict.fromkeys((*existing.values, *clean_values))),
+                    scopes=frozenset(existing.scopes | clean_scopes),
+                    enabled=True,
+                )
+                target = existing_index
+
+        self._sort_rules = rules
+        if dialog_open:
+            sort_dialog.set_rules(rules, select=target)
+        log_key = (
+            "recommended_keywords_rule_updated"
+            if selected_index >= 0
+            else "recommended_keywords_rule_added"
+        )
+        self.append_log_to_console(
+            translate(
+                "log_info",
+                translate(log_key, folder_name, len(clean_values)),
+            ),
+            "INFO",
+        )
 
     def _forget_recommended_keywords_dialog(self, dialog):
         try:
@@ -9389,8 +10267,7 @@ class CreatorDownloaderTab(QWidget):
             )
             return False
 
-        options = len(payload.get("options") or {})
-        filters = len(payload.get("filters") or {})
+        saved_count = self._config_saved_count(payload)
         if for_creator:
             self.append_log_to_console(
                 translate(
@@ -9401,7 +10278,7 @@ class CreatorDownloaderTab(QWidget):
             QMessageBox.information(
                 self,
                 translate("creator_config_saved_title"),
-                translate("creator_config_saved_text", options, filters, creator_id),
+                translate("creator_config_saved_text", saved_count, creator_id),
             )
         else:
             self.append_log_to_console(
@@ -9410,7 +10287,7 @@ class CreatorDownloaderTab(QWidget):
             QMessageBox.information(
                 self,
                 translate("config_saved_title"),
-                translate("config_saved_text", options, filters),
+                translate("config_saved_text", saved_count),
             )
         return True
 
@@ -9428,6 +10305,63 @@ class CreatorDownloaderTab(QWidget):
             return False
         service, creator_id = self._current_creator_identity()
         return self._store_config(self._config_snapshot(), service, creator_id)
+
+    def clear_current_config(self):
+        """Delete the current profile and restore the next fallback layer.
+
+        With a creator loaded this clears that creator's profile and returns
+        to the saved Default profile.  Without a creator it clears the saved
+        Default and returns to the built-in program defaults.
+        """
+        if bool(getattr(self, "downloading", False)) or self._download_in_progress():
+            return False
+        store = self._config_store()
+        if store is None:
+            self.append_log_to_console(
+                translate("log_warning", translate("config_unavailable")), "WARNING"
+            )
+            return False
+
+        in_creator = bool(self.current_creator_url)
+        service, creator_id = self._current_creator_identity()
+        if in_creator:
+            title = translate("clear_creator_config_title")
+            question = translate("clear_creator_config_text")
+        else:
+            title = translate("clear_default_config_title")
+            question = translate("clear_default_config_text")
+        reply = QMessageBox.question(
+            self,
+            title,
+            question,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return False
+
+        try:
+            if in_creator:
+                store.delete_creator_config(service, creator_id)
+            else:
+                store.delete_page_default()
+        except Exception as e:
+            self.append_log_to_console(
+                translate("log_error", translate("config_clear_failed", e)), "ERROR"
+            )
+            return False
+
+        # This reapplies the built-in baseline, then the saved Default layer,
+        # and (for a creator) no longer finds the deleted creator profile.
+        self._load_config_for_creator()
+        message_key = (
+            "clear_creator_config_done" if in_creator else "clear_default_config_done"
+        )
+        message = (
+            translate(message_key, creator_id) if in_creator else translate(message_key)
+        )
+        self.append_log_to_console(translate("log_info", message), "INFO")
+        QMessageBox.information(self, translate("config_cleared_title"), message)
+        return True
 
     # ------------------------------------------------------------------
     # Download history ("last downloaded") tracking
@@ -9490,6 +10424,27 @@ class CreatorDownloaderTab(QWidget):
             date_text = iso_to_local_date(timestamp)
             if date_text:
                 self._post_history_cache[str(post_id)] = date_text
+
+    def _set_post_downloaded(self, post_id, downloaded):
+        """Add or remove one post in the download history."""
+        if not post_id or not self.current_creator_url:
+            return
+        db = self._history_db()
+        if db is None:
+            return
+        service, creator_id = self._current_creator_identity()
+        try:
+            if downloaded:
+                db.record_post(service, creator_id, str(post_id))
+            else:
+                db.forget_post(service, creator_id, str(post_id))
+        except Exception as e:
+            self.append_log_to_console(
+                translate("log_warning", f"Could not update download history: {e}"),
+                "WARNING",
+            )
+            return
+        self.refresh_download_history_ui()
 
     @staticmethod
     def _row_label_text(key, download_date):
@@ -10226,6 +11181,7 @@ class CreatorDownloaderTab(QWidget):
         self.posts_to_download = []
         self._post_link_selection_pending = False
         self.filtered_posts = []  # Clear filtered posts cache
+        self._filtered_rows_ready = False
         self.all_detected_posts = []  # Clear previous creator's posts
         self.post_url_map = {}  # Clear previous creator's post URL mapping
         self.post_dates_map = {}  # Clear previous creator's post dates
@@ -12220,6 +13176,11 @@ class CreatorDownloaderTab(QWidget):
             ),
             "DEBUG",
         )
+        sort_dialog = getattr(self, "_sort_rules_dialog", None)
+        if sort_dialog is not None and sort_dialog.isVisible():
+            sort_dialog.set_posts(
+                self._dialog_post_rows(), set(self.posts_to_download)
+            )
 
     def _on_search_text_changed(self):
         """Run a search from its first page, and put the reader back after.
@@ -12302,6 +13263,13 @@ class CreatorDownloaderTab(QWidget):
             return
         # Store filtered posts for pagination
         self.filtered_posts = filtered_items
+        self._filtered_rows_ready = True
+        dialog_rows = self._dialog_post_rows()
+        recommended_dialog = getattr(self, "_recommended_keywords_dialog", None)
+        if recommended_dialog is not None and recommended_dialog.isVisible():
+            filters, file_skip_keywords = self._recommended_scan_filters()
+            recommended_dialog.set_filters(filters, file_skip_keywords)
+            recommended_dialog.set_posts(dialog_rows)
         self.total_pages = max(
             1,
             (len(self.filtered_posts) + self.posts_per_page - 1) // self.posts_per_page,
@@ -12713,6 +13681,17 @@ class CreatorDownloaderTab(QWidget):
         open_action.triggered.connect(
             lambda _checked=False, pid=post_id: self._open_post_in_browser(pid)
         )
+        menu.addSeparator()
+        downloaded = str(post_id) in self._post_history_cache
+        if downloaded:
+            history_action = menu.addAction(translate("mark_not_downloaded"))
+        else:
+            history_action = menu.addAction(translate("mark_downloaded"))
+        history_action.triggered.connect(
+            lambda _checked=False, pid=post_id, state=not downloaded: (
+                self._set_post_downloaded(pid, state)
+            )
+        )
         menu.exec(global_pos)
         menu.deleteLater()
 
@@ -13018,9 +13997,16 @@ class CreatorDownloaderTab(QWidget):
             self.file_count_to_edit,
         ):
             editor.textChanged.connect(self._schedule_filter_refresh)
+        # Skip Files does not run a post-filter pass, but the recommendation
+        # window still needs the edited values for its own filter.
+        self.file_skip_keywords_edit.textChanged.connect(
+            self._refresh_recommended_filters
+        )
+        self.skip_keywords_edit.textChanged.connect(self._refresh_recommended_filters)
 
         for checkbox in self.skip_scope_checkboxes.values():
             checkbox.stateChanged.connect(self.filter_items)
+            checkbox.stateChanged.connect(self._refresh_recommended_filters)
         self.file_count_keep_compressed_check.stateChanged.connect(self.filter_items)
         self.filter_no_selected_filetypes_check.stateChanged.connect(self.filter_items)
         # Both feed the filetype rule, so they only re-filter while it is on.

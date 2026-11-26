@@ -10,7 +10,7 @@ declaration block on the widget it was written for.
 import os
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtGui import QColor, QPainter, QPalette, QPen, QPixmap
 
 WINDOW_BG = "#1E1F22"
 PANEL_BG = "#2B2D31"
@@ -90,6 +90,7 @@ def scoped(selector, declarations):
 # and minus glyphs from qtawesome once, so the boxes show a real mark instead
 # of a flat colour. Successes are cached; a failure is retried next time.
 _GLYPH_CACHE = {}
+_CHECKBOX_IMAGE_CACHE = {}
 
 
 def _glyph_path(icon_name, filename, color=TEXT, size=12):
@@ -118,6 +119,49 @@ def _glyph_path(icon_name, filename, color=TEXT, size=12):
     except Exception:
         return ""
     return _GLYPH_CACHE[filename]
+
+
+def _checkbox_image_path(filename, fill, border, icon_name=None, icon_color=TEXT):
+    """Render a complete checkbox indicator to a PNG and return its path.
+
+    The whole 16x16 box is drawn into the image, including its border.  A Qt
+    style sheet indicator made only of background/border can leave the native
+    Windows indicator visible underneath at some scale factors; an opaque
+    image covers it completely and gives every state one consistent shape.
+    """
+    cached = _CHECKBOX_IMAGE_CACHE.get(filename)
+    if cached and os.path.isfile(cached):
+        return cached
+    _CHECKBOX_IMAGE_CACHE.pop(filename, None)
+    try:
+        import qtawesome as qta
+
+        from kemonodownloader.kd_paths import data_directory, ensure_directory
+
+        directory = ensure_directory(
+            os.path.join(data_directory(), "theme"), "theme folder"
+        )
+        path = os.path.join(directory, filename)
+        if not os.path.exists(path):
+            pixmap = QPixmap(16, 16)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            try:
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                painter.setPen(QPen(QColor(border), 1))
+                painter.setBrush(QColor(fill))
+                painter.drawRoundedRect(0, 0, 15, 15, 4, 4)
+                if icon_name:
+                    icon = qta.icon(icon_name, color=icon_color).pixmap(12, 12)
+                    painter.drawPixmap(2, 2, icon)
+            finally:
+                painter.end()
+            if not pixmap.save(path, "PNG"):
+                return ""
+        _CHECKBOX_IMAGE_CACHE[filename] = path.replace(os.sep, "/")
+    except Exception:
+        return ""
+    return _CHECKBOX_IMAGE_CACHE[filename]
 
 
 def button_states(hover=None, pressed=None):
@@ -149,27 +193,60 @@ def button_states(hover=None, pressed=None):
 def checkbox_style():
     """The app-wide QCheckBox indicator style.
 
-    Copied from main: a 16 px rounded box, a real qtawesome check mark in the
-    checked state, a minus for the tri-state boxes, and hover/disabled states.
-    The glyphs are rendered lazily because a QPixmap needs a live QApplication.
+    Every state is one complete rendered image, not a native indicator with a
+    stylesheet border drawn over it.  This keeps a single box visible at every
+    Windows scale factor.
     """
-    check_image = _glyph_path("fa5s.check", "check_f2f3f5.png", TEXT)
-    minus_image = _glyph_path("fa5s.minus", "minus_f2f3f5.png", TEXT)
-    check_rule = f"image: url('{check_image}');" if check_image else ""
-    minus_rule = f"image: url('{minus_image}');" if minus_image else ""
+    unchecked = _checkbox_image_path(
+        "checkbox_unchecked_2b2d31.png", PANEL_BG, BUTTON_BG
+    )
+    unchecked_hover = _checkbox_image_path(
+        "checkbox_unchecked_hover_2b2d31.png", PANEL_BG, FOCUS
+    )
+    checked = _checkbox_image_path(
+        "checkbox_checked_4863b8.png", ACCENT, ACCENT_HOVER, "fa5s.check"
+    )
+    minus = _checkbox_image_path(
+        "checkbox_minus_4863b8.png", ACCENT, ACCENT_HOVER, "fa5s.minus"
+    )
+    disabled = _checkbox_image_path(
+        "checkbox_disabled_323439.png", DISABLED_BG, DISABLED_BG
+    )
+    disabled_checked = _checkbox_image_path(
+        "checkbox_disabled_checked_323439.png",
+        DISABLED_BG,
+        DISABLED_BG,
+        "fa5s.check",
+        TEXT_DISABLED,
+    )
+    disabled_minus = _checkbox_image_path(
+        "checkbox_disabled_minus_323439.png",
+        DISABLED_BG,
+        DISABLED_BG,
+        "fa5s.minus",
+        TEXT_DISABLED,
+    )
+
+    def image(path):
+        return f"image: url('{path}');" if path else "image: none;"
+
     return (
         f"QCheckBox {{ color: {TEXT}; spacing: 7px; background: transparent; }}"
         f"QCheckBox:disabled {{ color: {TEXT_DISABLED}; }}"
-        f"QCheckBox::indicator {{ width: 16px; height: 16px; "
-        f"border-radius: 4px; background: {PANEL_BG}; "
-        f"border: 1px solid {BUTTON_BG}; }}"
-        f"QCheckBox::indicator:hover {{ border-color: {FOCUS}; }}"
-        f"QCheckBox::indicator:checked {{ background: {ACCENT}; "
-        f"border-color: {ACCENT_HOVER}; {check_rule} }}"
-        f"QCheckBox::indicator:indeterminate {{ background: {ACCENT}; "
-        f"border-color: {ACCENT_HOVER}; {minus_rule} }}"
-        f"QCheckBox::indicator:disabled {{ background: {DISABLED_BG}; "
-        f"border-color: {DISABLED_BG}; }}"
+        "QCheckBox::indicator { width: 16px; height: 16px;"
+        f" border: none; background: transparent; {image(unchecked)} }}"
+        "QCheckBox::indicator:hover {"
+        f" {image(unchecked_hover)} }}"
+        "QCheckBox::indicator:checked {"
+        f" {image(checked)} }}"
+        "QCheckBox::indicator:indeterminate {"
+        f" {image(minus)} }}"
+        "QCheckBox::indicator:disabled {"
+        f" {image(disabled)} }}"
+        "QCheckBox::indicator:checked:disabled {"
+        f" {image(disabled_checked)} }}"
+        "QCheckBox::indicator:indeterminate:disabled {"
+        f" {image(disabled_minus)} }}"
     )
 
 
